@@ -40,8 +40,14 @@ const ProfilePage = lazy(() =>
   import('./pages/ProfilePage').then((m) => ({ default: m.ProfilePage })),
 )
 const StatsPage = lazy(() => import('./pages/StatsPage').then((m) => ({ default: m.StatsPage })))
+const DiscoverPage = lazy(() =>
+  import('./pages/DiscoverPage').then((m) => ({ default: m.DiscoverPage })),
+)
+const TasksPage = lazy(() => import('./pages/TasksPage').then((m) => ({ default: m.TasksPage })))
+const RecycleBinPage = lazy(() =>
+  import('./pages/RecycleBinPage').then((m) => ({ default: m.RecycleBinPage })),
+)
 
-// Fallback shown while a chunk is loading.
 const Loading = () => <p className="px-6 py-8 text-slate-500">加载中…</p>
 
 export default function App() {
@@ -59,6 +65,7 @@ export default function App() {
         >
           <Route index element={<HomePage />} />
           <Route path="library/:id" element={<LibraryPage />} />
+          <Route path="discover" element={<DiscoverPage />} />
           <Route path="search" element={<SearchPage />} />
           <Route path="favourites" element={<FavouritesPage />} />
           <Route path="playlists" element={<PlaylistsPage />} />
@@ -68,6 +75,22 @@ export default function App() {
           <Route path="downloads" element={<DownloadsPage />} />
           <Route path="subscriptions" element={<SubscriptionsPage />} />
           <Route path="profile" element={<ProfilePage />} />
+          <Route
+            path="tasks"
+            element={
+              <RequireAdmin>
+                <TasksPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="recycle"
+            element={
+              <RequireAdmin>
+                <RecycleBinPage />
+              </RequireAdmin>
+            }
+          />
           <Route
             path="stats"
             element={

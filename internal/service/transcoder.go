@@ -4,16 +4,22 @@
 // into HLS (.m3u8 + .ts). The output lives under cache.cache_dir/hls/<id>.
 // The HTTP layer serves these files directly with a normal http.FileServer.
 //
+// Encoder selection (read once at startup from the config):
+//
+//   transcoder.encoder = "" | "nvenc" | "qsv" | "vaapi"
+//
+//   ""      software libx264 (default; runs anywhere)
+//   nvenc   h264_nvenc      (NVIDIA GPU, requires --gpus all on Docker)
+//   qsv     h264_qsv        (Intel iGPU, requires /dev/dri:/dev/dri)
+//   vaapi   h264_vaapi      (Mesa/Intel VAAPI, requires /dev/dri:/dev/dri
+//                            plus the kernel module loaded)
+//
 // Concurrency model:
 //   - Each Media has at most one active ffmpeg job.
 //   - jobs[mediaID] tracks the running goroutine + cancel func.
 //   - Calling Start while a job already exists is a no-op.
 //   - When the playlist file appears on disk we consider the job "ready"
 //     and unblock the HTTP handler that was waiting on it.
-//
-// The transcode profile is intentionally conservative: a single 720p/1.5M
-// bitrate, AAC stereo audio, MPEG-TS segments. Hardware acceleration
-// (NVENC / QSV / VAAPI) is left as a future config-driven extension point.
 package service
 
 import (
@@ -34,8 +40,8 @@ import (
 
 // TranscoderService orchestrates background ffmpeg transcodes.
 type TranscoderService struct {
-	cfg  *config.Config
-	log  *zap.Logger
+	cfg *config.Config
+	log *zap.Logger
 	repo *repository.Container
 	hub  *Hub
 
@@ -50,6 +56,7 @@ type hlsJob struct {
 	cancel     context.CancelFunc
 	startedAt  time.Time
 	playlistOK bool
+	encoder    string
 }
 
 // NewTranscoderService is the constructor.
@@ -106,6 +113,7 @@ func (t *TranscoderService) EnsureJob(ctx context.Context, mediaID string) (stri
 		outputDir: outDir,
 		cancel:    cancel,
 		startedAt: time.Now(),
+		encoder:   t.cfg.Transcoder.Encoder,
 	}
 	t.jobs[mediaID] = job
 	t.mu.Unlock()
@@ -158,6 +166,30 @@ func (t *TranscoderService) StopAll() {
 	}
 }
 
+// ActiveJob is the JSON shape exposed to the React Tasks panel.
+type ActiveJob struct {
+	MediaID    string    `json:"media_id"`
+	Encoder    string    `json:"encoder"`
+	StartedAt  time.Time `json:"started_at"`
+	PlaylistOK bool      `json:"playlist_ok"`
+}
+
+// Active returns a snapshot of the currently running transcode jobs.
+func (t *TranscoderService) Active() []ActiveJob {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]ActiveJob, 0, len(t.jobs))
+	for _, j := range t.jobs {
+		out = append(out, ActiveJob{
+			MediaID:    j.mediaID,
+			Encoder:    j.encoder,
+			StartedAt:  j.startedAt,
+			PlaylistOK: j.playlistOK,
+		})
+	}
+	return out
+}
+
 func (t *TranscoderService) runFFmpeg(ctx context.Context, job *hlsJob, source string) {
 	bin := t.cfg.App.FFmpegPath
 	if bin == "" {
@@ -167,45 +199,19 @@ func (t *TranscoderService) runFFmpeg(ctx context.Context, job *hlsJob, source s
 	playlist := filepath.Join(job.outputDir, "index.m3u8")
 	segments := filepath.Join(job.outputDir, "seg_%05d.ts")
 
-	args := []string{
-		"-y",
-		"-fflags", "+genpts",
-		"-i", source,
-		// Single 720p H.264 video rendition.
-		"-map", "0:v:0?",
-		"-map", "0:a:0?",
-		"-vf", "scale=-2:min(720\\,ih)",
-		"-c:v", "libx264",
-		"-preset", "veryfast",
-		"-profile:v", "main",
-		"-level", "4.0",
-		"-pix_fmt", "yuv420p",
-		"-b:v", "1500k",
-		"-maxrate", "1800k",
-		"-bufsize", "3000k",
-		"-c:a", "aac",
-		"-ar", "48000",
-		"-b:a", "128k",
-		"-ac", "2",
-		"-force_key_frames", "expr:gte(t,n_forced*4)",
-		"-f", "hls",
-		"-hls_time", "4",
-		"-hls_list_size", "0",
-		"-hls_segment_type", "mpegts",
-		"-hls_flags", "independent_segments",
-		"-hls_segment_filename", segments,
-		playlist,
-	}
+	args := buildFFmpegArgs(t.cfg, source, playlist, segments)
 
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Stderr = os.Stderr
 
 	t.log.Info("transcode started",
 		zap.String("media_id", job.mediaID),
+		zap.String("encoder", job.encoder),
 		zap.String("source", source),
 	)
 	t.hub.Publish("transcode", map[string]any{
 		"media_id": job.mediaID,
+		"encoder":  job.encoder,
 		"status":   "started",
 	})
 
@@ -227,8 +233,126 @@ func (t *TranscoderService) runFFmpeg(ctx context.Context, job *hlsJob, source s
 	})
 }
 
+// buildFFmpegArgs assembles the ffmpeg command line for the configured
+// encoder. The function is package-level so the unit test can pin its
+// behaviour without spawning a real ffmpeg process.
+func buildFFmpegArgs(cfg *config.Config, source, playlist, segments string) []string {
+	enc := cfg.Transcoder.Encoder
+	bitrate := cfg.Transcoder.VideoBitrate
+	if bitrate == "" {
+		bitrate = "1500k"
+	}
+	maxrate := cfg.Transcoder.MaxRate
+	if maxrate == "" {
+		maxrate = "1800k"
+	}
+	bufsize := cfg.Transcoder.BufSize
+	if bufsize == "" {
+		bufsize = "3000k"
+	}
+	preset := cfg.Transcoder.Preset
+	if preset == "" {
+		preset = "veryfast"
+	}
+	height := cfg.Transcoder.MaxHeight
+	if height <= 0 {
+		height = 720
+	}
+	segDur := cfg.Transcoder.SegmentSeconds
+	if segDur <= 0 {
+		segDur = 4
+	}
+
+	// Hardware-accel arguments differ in three places:
+	//   - Optional input flags (-hwaccel + device init)
+	//   - Optional input pixel-format upload filter
+	//   - The actual -c:v encoder name + preset/quality flag
+	var pre, vf, vcodec, vpreset string
+	switch enc {
+	case "nvenc":
+		pre = "-hwaccel cuda -hwaccel_output_format cuda"
+		vf = fmt.Sprintf("scale_cuda=-2:min(%d\\,ih)", height)
+		vcodec = "h264_nvenc"
+		vpreset = "p4"
+	case "qsv":
+		pre = "-hwaccel qsv -hwaccel_output_format qsv"
+		vf = fmt.Sprintf("scale_qsv=-1:min(%d\\,ih)", height)
+		vcodec = "h264_qsv"
+		vpreset = preset
+	case "vaapi":
+		device := cfg.App.VAAPIDevice
+		if device == "" {
+			device = "/dev/dri/renderD128"
+		}
+		pre = fmt.Sprintf("-hwaccel vaapi -vaapi_device %s -hwaccel_output_format vaapi", device)
+		vf = fmt.Sprintf("scale_vaapi=-2:min(%d\\,ih),format=nv12|vaapi,hwupload", height)
+		vcodec = "h264_vaapi"
+		vpreset = ""
+	default:
+		// software
+		pre = ""
+		vf = fmt.Sprintf("scale=-2:min(%d\\,ih)", height)
+		vcodec = "libx264"
+		vpreset = preset
+	}
+
+	args := []string{"-y", "-fflags", "+genpts"}
+	for _, p := range splitNonEmptyArgs(pre) {
+		args = append(args, p)
+	}
+	args = append(args, "-i", source, "-map", "0:v:0?", "-map", "0:a:0?", "-vf", vf, "-c:v", vcodec)
+	if vpreset != "" {
+		args = append(args, "-preset", vpreset)
+	}
+	args = append(args,
+		"-pix_fmt", "yuv420p",
+		"-b:v", bitrate,
+		"-maxrate", maxrate,
+		"-bufsize", bufsize,
+		"-c:a", "aac",
+		"-ar", "48000",
+		"-b:a", "128k",
+		"-ac", "2",
+		"-force_key_frames", fmt.Sprintf("expr:gte(t,n_forced*%d)", segDur),
+		"-f", "hls",
+		"-hls_time", fmt.Sprintf("%d", segDur),
+		"-hls_list_size", "0",
+		"-hls_segment_type", "mpegts",
+		"-hls_flags", "independent_segments",
+		"-hls_segment_filename", segments,
+		playlist,
+	)
+	return args
+}
+
+// splitNonEmptyArgs is a tiny helper that mirrors strings.Fields for the
+// pre-input flag string without dragging the strings import into the hot
+// path of every call to buildFFmpegArgs.
+func splitNonEmptyArgs(s string) []string {
+	if s == "" {
+		return nil
+	}
+	out := make([]string, 0, 4)
+	field := make([]rune, 0, 16)
+	flush := func() {
+		if len(field) > 0 {
+			out = append(out, string(field))
+			field = field[:0]
+		}
+	}
+	for _, r := range s {
+		if r == ' ' || r == '\t' {
+			flush()
+			continue
+		}
+		field = append(field, r)
+	}
+	flush()
+	return out
+}
+
 // HumanFFmpegProfile is exposed for the admin UI / settings view.
 func (t *TranscoderService) HumanFFmpegProfile() string {
-	return fmt.Sprintf("ffmpeg=%s, output=%s",
-		t.cfg.App.FFmpegPath, filepath.Join(t.cfg.Cache.CacheDir, "hls"))
+	return fmt.Sprintf("ffmpeg=%s, encoder=%s, output=%s",
+		t.cfg.App.FFmpegPath, t.cfg.Transcoder.Encoder, filepath.Join(t.cfg.Cache.CacheDir, "hls"))
 }

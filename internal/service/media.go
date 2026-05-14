@@ -86,3 +86,34 @@ func (s *MediaService) SearchMedia(ctx context.Context, query string, limit int)
 func (s *MediaService) GetMedia(ctx context.Context, id string) (*model.Media, error) {
 	return s.repo.Media.FindByID(ctx, id)
 }
+
+// SoftDelete moves a media row to the recycle bin (gorm soft delete).
+// The on-disk file is kept; admins can purge it later.
+func (s *MediaService) SoftDelete(ctx context.Context, id string) error {
+	return s.repo.DB.Where("id = ?", id).Delete(&model.Media{}).Error
+}
+
+// RestoreDeleted unsets DeletedAt for a single media row.
+func (s *MediaService) RestoreDeleted(ctx context.Context, id string) error {
+	return s.repo.DB.Unscoped().Model(&model.Media{}).
+		Where("id = ?", id).Update("deleted_at", nil).Error
+}
+
+// ListRecycleBin returns every soft-deleted row, newest first.
+func (s *MediaService) ListRecycleBin(ctx context.Context, limit int) ([]model.Media, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	var rows []model.Media
+	err := s.repo.DB.Unscoped().
+		Where("deleted_at IS NOT NULL").
+		Order("deleted_at desc").
+		Limit(limit).
+		Find(&rows).Error
+	return rows, err
+}
+
+// PurgeDeleted permanently removes a soft-deleted row from the database.
+func (s *MediaService) PurgeDeleted(ctx context.Context, id string) error {
+	return s.repo.DB.Unscoped().Where("id = ?", id).Delete(&model.Media{}).Error
+}

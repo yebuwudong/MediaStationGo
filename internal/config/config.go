@@ -30,13 +30,25 @@ const EnvPrefix = "MEDIASTATION"
 
 // Config is the root config aggregate.
 type Config struct {
-	App      AppConfig      `mapstructure:"app"`
-	Database DatabaseConfig `mapstructure:"database"`
-	Secrets  SecretsConfig  `mapstructure:"secrets"`
-	Logging  LoggingConfig  `mapstructure:"logging"`
-	Cache    CacheConfig    `mapstructure:"cache"`
-	Media    MediaConfig    `mapstructure:"media"`
-	AI       AIConfig       `mapstructure:"ai"`
+	App        AppConfig        `mapstructure:"app"`
+	Database   DatabaseConfig   `mapstructure:"database"`
+	Secrets    SecretsConfig    `mapstructure:"secrets"`
+	Logging    LoggingConfig    `mapstructure:"logging"`
+	Cache      CacheConfig      `mapstructure:"cache"`
+	Media      MediaConfig      `mapstructure:"media"`
+	Transcoder TranscoderConfig `mapstructure:"transcoder"`
+	AI         AIConfig         `mapstructure:"ai"`
+}
+
+// TranscoderConfig controls the HLS / ffmpeg backend.
+type TranscoderConfig struct {
+	Encoder        string `mapstructure:"encoder"` // "" / nvenc / qsv / vaapi
+	Preset         string `mapstructure:"preset"`
+	VideoBitrate   string `mapstructure:"video_bitrate"`
+	MaxRate        string `mapstructure:"max_rate"`
+	BufSize        string `mapstructure:"buf_size"`
+	MaxHeight      int    `mapstructure:"max_height"`
+	SegmentSeconds int    `mapstructure:"segment_seconds"`
 }
 
 // AppConfig holds runtime app parameters.
@@ -195,6 +207,14 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("ai.model", "gpt-4o-mini")
 	v.SetDefault("ai.timeout", 30)
 	v.SetDefault("ai.max_concurrent", 3)
+
+	v.SetDefault("transcoder.encoder", "")
+	v.SetDefault("transcoder.preset", "veryfast")
+	v.SetDefault("transcoder.video_bitrate", "1500k")
+	v.SetDefault("transcoder.max_rate", "1800k")
+	v.SetDefault("transcoder.buf_size", "3000k")
+	v.SetDefault("transcoder.max_height", 720)
+	v.SetDefault("transcoder.segment_seconds", 4)
 }
 
 // normalize fills derived defaults and self-heals empty critical fields.
