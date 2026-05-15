@@ -47,6 +47,22 @@ const TasksPage = lazy(() => import('./pages/TasksPage').then((m) => ({ default:
 const RecycleBinPage = lazy(() =>
   import('./pages/RecycleBinPage').then((m) => ({ default: m.RecycleBinPage })),
 )
+const DlnaPage = lazy(() => import('./pages/DlnaPage').then((m) => ({ default: m.DlnaPage })))
+const FileManagerPage = lazy(() =>
+  import('./pages/FileManagerPage').then((m) => ({ default: m.FileManagerPage })),
+)
+const APIConfigsPage = lazy(() =>
+  import('./pages/APIConfigsPage').then((m) => ({ default: m.APIConfigsPage })),
+)
+const StoragePage = lazy(() =>
+  import('./pages/StoragePage').then((m) => ({ default: m.StoragePage })),
+)
+const DuplicatesPage = lazy(() =>
+  import('./pages/DuplicatesPage').then((m) => ({ default: m.DuplicatesPage })),
+)
+const SchedulerPage = lazy(() =>
+  import('./pages/SchedulerPage').then((m) => ({ default: m.SchedulerPage })),
+)
 
 const Loading = () => <p className="px-6 py-8 text-slate-500">加载中…</p>
 
@@ -75,6 +91,47 @@ export default function App() {
           <Route path="downloads" element={<DownloadsPage />} />
           <Route path="subscriptions" element={<SubscriptionsPage />} />
           <Route path="profile" element={<ProfilePage />} />
+          <Route path="dlna" element={<DlnaPage />} />
+          <Route
+            path="files"
+            element={
+              <RequireAdmin>
+                <FileManagerPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="storage"
+            element={
+              <RequireAdmin>
+                <StoragePage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="duplicates"
+            element={
+              <RequireAdmin>
+                <DuplicatesPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="scheduler"
+            element={
+              <RequireAdmin>
+                <SchedulerPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="api-configs"
+            element={
+              <RequireAdmin>
+                <APIConfigsPage />
+              </RequireAdmin>
+            }
+          />
           <Route
             path="tasks"
             element={

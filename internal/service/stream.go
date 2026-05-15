@@ -55,6 +55,10 @@ var ErrMediaNotFound = errors.New("media not found")
 
 // ServeFile streams the file backing the given media ID using
 // http.ServeContent so HEAD / Range / If-Modified-Since are handled for free.
+//
+// When the media row has a STRMURL set we redirect (302) to that URL
+// instead of opening a local file. This lets WebDAV / Alist / S3 / HTTP
+// direct links flow through the rest of the player UI unchanged.
 func (s *StreamService) ServeFile(w http.ResponseWriter, r *http.Request, mediaID string) error {
 	m, err := s.repo.Media.FindByID(r.Context(), mediaID)
 	if err != nil {
@@ -62,6 +66,10 @@ func (s *StreamService) ServeFile(w http.ResponseWriter, r *http.Request, mediaI
 	}
 	if m == nil {
 		return ErrMediaNotFound
+	}
+	if strings.TrimSpace(m.STRMURL) != "" {
+		http.Redirect(w, r, m.STRMURL, http.StatusFound)
+		return nil
 	}
 	f, err := os.Open(m.Path)
 	if err != nil {

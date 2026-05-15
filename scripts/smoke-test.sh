@@ -235,6 +235,78 @@ curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/" | grep -q 200 \
 curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/login" | grep -q 200 \
   && ok "SPA /login fallback" || fail "SPA /login"
 
+# --- 9b. New iter-6 surfaces ----------------------------------------------
+hdr "API config / Storage / Files / DLNA / Scheduler / Emby / STRM / Duplicates"
+
+# API config seeded with 6 providers
+N=$(curl -s -H "$H" "http://127.0.0.1:$PORT/api/admin/api-configs" \
+    | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["items"]))')
+[ "$N" -ge 6 ] && ok "api-configs seeded ($N)" || fail "api-configs count=$N"
+
+# Update + masked roundtrip
+RES=$(curl -s -X PUT -H "$H" -H 'Content-Type: application/json' \
+  -d '{"api_key":"sk-12345678abcdef"}' \
+  "http://127.0.0.1:$PORT/api/admin/api-configs/tmdb")
+echo "$RES" | grep -q '"masked_key"' && ok "api-config masked key returned" || fail "api-config masked"
+echo "$RES" | grep -q '"has_key":true' && ok "api-config has_key=true" || fail "api-config has_key"
+
+# DB stores ciphertext, not plaintext
+if command -v sqlite3 >/dev/null; then
+  CT=$(sqlite3 "$DATA/test.db" 'SELECT api_key FROM api_configs WHERE provider="tmdb";' 2>&1 || echo "")
+  echo "$CT" | grep -q '^enc:v1:' && ok "api-config encrypted in db" || fail "api-config not encrypted (got=$CT)"
+fi
+
+# Storage breakdown
+curl -s -H "$H" "http://127.0.0.1:$PORT/api/storage" \
+  | python3 -c 'import json,sys;assert "total_bytes" in json.load(sys.stdin)' \
+  && ok "storage breakdown" || fail "storage breakdown"
+
+# File browser (root listing must include the test library)
+curl -s -H "$H" "http://127.0.0.1:$PORT/api/files" \
+  | python3 -c 'import json,sys;d=json.load(sys.stdin);assert any("library:" in r["label"] for r in d["roots"])' \
+  && ok "file browser lists library root" || fail "file browser"
+
+# Path-traversal denied
+curl -s -o /dev/null -w "%{http_code}" -H "$H" "http://127.0.0.1:$PORT/api/files?path=/etc" \
+  | grep -q 403 && ok "file browser rejects /etc" || fail "file browser path-traversal"
+
+# DLNA discovery (no devices on container — must return empty array)
+curl -s -H "$H" "http://127.0.0.1:$PORT/api/dlna/devices" \
+  | python3 -c 'import json,sys;assert json.load(sys.stdin)["devices"] == [] or isinstance(json.load(sys.stdin)["devices"], list)' \
+  && ok "dlna devices endpoint" || fail "dlna devices"
+
+# Scheduler status
+JS=$(curl -s -H "$H" "http://127.0.0.1:$PORT/api/admin/scheduler" \
+     | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["jobs"]))')
+[ "$JS" -ge 3 ] && ok "scheduler exposes $JS jobs" || fail "scheduler jobs=$JS"
+
+# Run a scheduler job manually
+curl -s -o /dev/null -w "%{http_code}" -X POST -H "$H" \
+  "http://127.0.0.1:$PORT/api/admin/scheduler/library_scan/run" \
+  | grep -q 204 && ok "scheduler run library_scan" || fail "scheduler run"
+
+# Emby compat
+curl -s -H "$H" "http://127.0.0.1:$PORT/emby/System/Info" \
+  | grep -q "MediaStationGo" && ok "emby /System/Info" || fail "emby /System/Info"
+curl -s -H "$H" "http://127.0.0.1:$PORT/emby/Users/admin/Views" \
+  | grep -q "TotalRecordCount" && ok "emby /Users/{x}/Views" || fail "emby /Users/{x}/Views"
+
+# STRM set + 302 redirect
+curl -s -X PUT -H "$H" -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.com/test.mp4"}' \
+  -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/api/media/$ID/strm" \
+  | grep -q 200 && ok "strm set" || fail "strm set"
+curl -s -o /dev/null -w "%{http_code}" -H "$H" "http://127.0.0.1:$PORT/api/stream/$ID" \
+  | grep -q 302 && ok "stream returns 302 for strm media" || fail "strm 302"
+curl -s -X DELETE -o /dev/null -w "%{http_code}" -H "$H" \
+  "http://127.0.0.1:$PORT/api/media/$ID/strm" \
+  | grep -q 204 && ok "strm clear" || fail "strm clear"
+
+# Duplicate finder
+curl -s -X POST -o /dev/null -w "%{http_code}" -H "$H" \
+  "http://127.0.0.1:$PORT/api/duplicates/scan?library_id=$MOVIE" \
+  | grep -q 200 && ok "duplicate scan" || fail "duplicate scan"
+
 # --- 10. Graceful shutdown -------------------------------------------------
 hdr "Shutdown"
 kill -TERM "$PID"
