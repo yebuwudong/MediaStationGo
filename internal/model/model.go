@@ -79,6 +79,41 @@ type Media struct {
 	TMDbID       int     `json:"tmdb_id"`
 	BangumiID    int     `json:"bangumi_id"`
 	NSFW         bool    `gorm:"default:false" json:"nsfw"`
+
+	// STRMURL is the indirection target for .strm files: when present the
+	// stream handler redirects to it instead of opening the local file.
+	// Used to expose WebDAV / Alist / S3 / HTTP direct links as media items.
+	STRMURL string `gorm:"size:2048" json:"strm_url,omitempty"`
+
+	// FileHash is a sparse-sample MD5 used for duplicate detection.
+	// Computed on-demand by the duplicate finder; format: "<hex>-<size>".
+	FileHash string `gorm:"index;size:64" json:"file_hash,omitempty"`
+
+	// IsDuplicate flags this media as a duplicate of another media row.
+	IsDuplicate bool   `gorm:"default:false" json:"is_duplicate"`
+	DuplicateOf string `gorm:"size:36" json:"duplicate_of,omitempty"`
+}
+
+// APIConfig stores third-party data-source configuration. The api_key
+// column is encrypted with AES-GCM (see internal/service/crypto.go) so an
+// SQLite leak does not expose third-party credentials.
+//
+// Provider values mirror the original Python project:
+//
+//	tmdb        — themoviedb.org
+//	bangumi     — bgm.tv
+//	thetvdb     — thetvdb.com
+//	fanart      — fanart.tv
+//	douban      — douban.com (cookie)
+//	openai      — OpenAI / DeepSeek / Qwen / Ollama (compatible)
+type APIConfig struct {
+	Base
+	Provider    string `gorm:"uniqueIndex;size:32;not null" json:"provider"`
+	APIKey      string `gorm:"type:text" json:"-"`              // ciphertext (never serialised)
+	BaseURL     string `gorm:"size:512" json:"base_url,omitempty"`
+	Extra       string `gorm:"type:text" json:"extra,omitempty"` // free-form JSON
+	Enabled     bool   `gorm:"default:true" json:"enabled"`
+	Description string `gorm:"size:255" json:"description,omitempty"`
 }
 
 // Series groups episodes that belong to the same show.
@@ -185,5 +220,6 @@ func AllModels() []interface{} {
 		&Subscription{},
 		&Setting{},
 		&AccessLog{},
+		&APIConfig{},
 	}
 }

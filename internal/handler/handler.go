@@ -106,6 +106,25 @@ func Register(r *gin.Engine, cfg *config.Config, log *zap.Logger, svc *service.C
 			authed.POST("/ai/search", smartSearchHandler(svc))
 			authed.GET("/ai/recommend", aiRecommendHandler(svc))
 
+			// File browser (used by the library-path picker).
+			authed.GET("/files", browseFilesHandler(svc))
+
+			// Disk usage breakdown.
+			authed.GET("/storage", storageHandler(svc))
+
+			// DLNA discovery + cast.
+			authed.GET("/dlna/devices", dlnaListHandler(svc))
+			authed.POST("/dlna/cast", dlnaCastHandler(svc))
+
+			// STRM (URL-as-file).
+			authed.PUT("/media/:id/strm", middleware.AdminRequired(), setSTRMHandler(svc))
+			authed.DELETE("/media/:id/strm", middleware.AdminRequired(), clearSTRMHandler(svc))
+			authed.POST("/strm/import", middleware.AdminRequired(), importSTRMHandler(svc))
+
+			// Duplicate finder.
+			authed.POST("/duplicates/scan", middleware.AdminRequired(), detectDuplicatesHandler(svc))
+			authed.POST("/duplicates/unmark", middleware.AdminRequired(), unmarkDuplicatesHandler(svc))
+
 			// Recycle bin.
 			authed.GET("/recycle", middleware.AdminRequired(), listRecycleHandler(svc))
 
@@ -122,7 +141,30 @@ func Register(r *gin.Engine, cfg *config.Config, log *zap.Logger, svc *service.C
 			admin.GET("/settings", listSettingsHandler(svc))
 			admin.PUT("/settings", updateSettingHandler(svc))
 			admin.GET("/logs", recentLogsHandler(svc))
+
+			// API key management (encrypted at rest).
+			admin.GET("/api-configs", listAPIConfigsHandler(svc))
+			admin.GET("/api-configs/:provider", getAPIConfigHandler(svc))
+			admin.PUT("/api-configs/:provider", updateAPIConfigHandler(svc))
+			admin.DELETE("/api-configs/:provider", deleteAPIConfigHandler(svc))
+
+			// Scheduled jobs.
+			admin.GET("/scheduler", schedulerStatusHandler(svc))
+			admin.POST("/scheduler/:name/run", schedulerRunHandler(svc))
 		}
+
+		// Emby/Jellyfin compatibility shim (read-only).
+		// Mounted at /emby/* (NOT /api/*) to mirror the upstream surface.
+	}
+
+	emby := r.Group("/emby")
+	emby.Use(middleware.AuthRequired(cfg.Secrets.JWTSecret))
+	{
+		emby.GET("/System/Info", embySystemInfoHandler(svc))
+		emby.GET("/Users", embyListUsersHandler(svc))
+		emby.GET("/Users/:userId/Views", embyViewsHandler(svc))
+		emby.GET("/Users/:userId/Items", embyItemsHandler(svc))
+		emby.GET("/Items/:id/PlaybackInfo", embyPlaybackInfoHandler(svc))
 	}
 }
 

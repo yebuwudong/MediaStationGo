@@ -43,6 +43,14 @@ type Container struct {
 	Audit        *AuditService
 	NFO          *NFOService
 	AI           *AIService
+	APIConfig    *APIConfigService
+	Crypto       *CryptoService
+	Duplicate    *DuplicateService
+	FileManager  *FileManagerService
+	DLNA         *DLNAService
+	Scheduler    *SchedulerService
+	Storage      *StorageService
+	Emby         *EmbyService
 
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
@@ -67,6 +75,14 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 	watcher := NewWatcherService(log, repos, scanner)
 	nfo := NewNFOService(log, repos)
 	ai := NewAIService(cfg, log)
+	crypto := NewCryptoService(cfg.Secrets.JWTSecret, log)
+	apiConfig := NewAPIConfigService(log, repos, crypto)
+	duplicate := NewDuplicateService(log, repos, hub)
+	filemanager := NewFileManagerService(cfg, log, repos)
+	dlna := NewDLNAService(log)
+	storage := NewStorageService(log, repos)
+	emby := NewEmbyService(cfg, log, repos)
+	scheduler := NewSchedulerService(log, repos, scanner, transcoder, hub, cfg.Cache.CacheDir)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -98,6 +114,14 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 		Audit:        NewAuditService(log, repos),
 		NFO:          nfo,
 		AI:           ai,
+		APIConfig:    apiConfig,
+		Crypto:       crypto,
+		Duplicate:    duplicate,
+		FileManager:  filemanager,
+		DLNA:         dlna,
+		Scheduler:    scheduler,
+		Storage:      storage,
+		Emby:         emby,
 		stopCtx:      ctx,
 		stopCancel:   cancel,
 	}
@@ -111,6 +135,10 @@ func (c *Container) Boot() {
 	}
 	c.Downloads.Start(c.stopCtx)
 	c.Subscription.Start(c.stopCtx)
+	if err := c.APIConfig.SeedDefaults(c.stopCtx); err != nil {
+		c.Log.Warn("api config seed failed", zap.Error(err))
+	}
+	c.Scheduler.Start(c.stopCtx)
 }
 
 // Close releases any resources held by services (websocket hub, ffmpeg
@@ -118,6 +146,9 @@ func (c *Container) Boot() {
 func (c *Container) Close() {
 	if c.stopCancel != nil {
 		c.stopCancel()
+	}
+	if c.Scheduler != nil {
+		c.Scheduler.Stop()
 	}
 	if c.Watcher != nil {
 		c.Watcher.Stop()

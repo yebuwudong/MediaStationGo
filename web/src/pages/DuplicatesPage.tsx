@@ -1,0 +1,118 @@
+import { useEffect, useState } from 'react'
+import toast from 'react-hot-toast'
+import { Copy, Trash2 } from 'lucide-react'
+
+import { duplicatesAPI, type DuplicateReport } from '../api/duplicates'
+import { libraryAPI } from '../api/library'
+import type { Library } from '../types'
+
+function fmtBytes(n: number): string {
+  if (!n) return '0 B'
+  const u = ['B', 'KB', 'MB', 'GB', 'TB']
+  let v = n
+  let i = 0
+  while (v >= 1024 && i < u.length - 1) {
+    v /= 1024
+    i++
+  }
+  return `${v.toFixed(1)} ${u[i]}`
+}
+
+export function DuplicatesPage() {
+  const [libs, setLibs] = useState<Library[]>([])
+  const [libID, setLibID] = useState('')
+  const [report, setReport] = useState<DuplicateReport | null>(null)
+  const [scanning, setScanning] = useState(false)
+
+  useEffect(() => {
+    libraryAPI.list().then(setLibs)
+  }, [])
+
+  const scan = async () => {
+    setScanning(true)
+    try {
+      const r = await duplicatesAPI.scan(libID)
+      setReport(r)
+      toast.success(`扫描完成: ${r.groups_found} 组重复, ${r.items_marked} 项标记`)
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+        '扫描失败'
+      toast.error(msg)
+    } finally {
+      setScanning(false)
+    }
+  }
+
+  const unmark = async () => {
+    if (!confirm('清除所有重复标记?(磁盘文件不会被删除)')) return
+    const r = await duplicatesAPI.unmark(libID)
+    toast.success(`已清除 ${r.unmarked} 项`)
+    setReport(null)
+  }
+
+  return (
+    <div className="space-y-6">
+      <header className="flex items-center gap-3">
+        <Copy className="h-6 w-6 text-primary-400" />
+        <div>
+          <h1 className="font-display text-3xl font-bold text-white">重复文件</h1>
+          <p className="text-sm text-slate-400">
+            通过稀疏采样 MD5(头部 / 中部 / 尾部各 1 MiB + 文件大小)检测重复媒体,
+            同一组中保留刮削过的较大文件作为主条目,其余标记为重复。
+          </p>
+        </div>
+      </header>
+
+      <div className="glass-panel grid gap-3 md:grid-cols-[1fr_auto_auto]">
+        <select
+          className="input-base"
+          value={libID}
+          onChange={(e) => setLibID(e.target.value)}
+        >
+          <option value="">所有媒体库</option>
+          {libs.map((l) => (
+            <option key={l.id} value={l.id}>
+              {l.name}
+            </option>
+          ))}
+        </select>
+        <button onClick={scan} disabled={scanning} className="neon-button">
+          {scanning ? '扫描中…' : '开始扫描'}
+        </button>
+        <button onClick={unmark} className="neon-button !border-red-400/40 !text-red-400">
+          <Trash2 size={14} /> 清除标记
+        </button>
+      </div>
+
+      {report && report.groups_found === 0 && (
+        <p className="text-slate-400">扫描了 {report.total_scanned} 项,未发现重复。</p>
+      )}
+
+      {report && report.groups.map((g) => (
+        <section key={g.hash} className="glass-panel space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="font-mono text-xs text-slate-500">{g.hash}</p>
+            <span className="rounded border border-emerald-400/40 px-2 py-0.5 text-xs text-emerald-400">
+              主条目
+            </span>
+          </div>
+          <p className="font-medium text-white">{g.primary.title}</p>
+          <p className="font-mono text-xs text-slate-400">
+            {g.primary.path} · {fmtBytes(g.primary.size_bytes)}
+          </p>
+          <div className="space-y-1 border-t border-white/5 pt-2">
+            <p className="text-xs uppercase tracking-wider text-red-400">
+              重复 ({g.duplicates.length})
+            </p>
+            {g.duplicates.map((d) => (
+              <div key={d.id} className="text-xs text-slate-400">
+                <span className="text-white">{d.title}</span> · {d.path} · {fmtBytes(d.size_bytes)}
+              </div>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  )
+}

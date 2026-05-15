@@ -2,6 +2,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -43,7 +44,7 @@ func createLibraryHandler(svc *service.Container) gin.HandlerFunc {
 		uid, _ := c.Get("ctx_user_id")
 		svc.Audit.Record(c.Request.Context(), toString(uid), "library.create", l.ID, c.ClientIP(), l.Path)
 		// Refresh fsnotify watcher to pick up the new library root.
-		go func() { _ = svc.Watcher.Refresh(c.Request.Context()) }()
+		go func() { _ = svc.Watcher.Refresh(context.Background()) }()
 		c.JSON(http.StatusOK, l)
 	}
 }
@@ -57,7 +58,7 @@ func deleteLibraryHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		uid, _ := c.Get("ctx_user_id")
 		svc.Audit.Record(c.Request.Context(), toString(uid), "library.delete", id, c.ClientIP(), "")
-		go func() { _ = svc.Watcher.Refresh(c.Request.Context()) }()
+		go func() { _ = svc.Watcher.Refresh(context.Background()) }()
 		c.Status(http.StatusNoContent)
 	}
 }
