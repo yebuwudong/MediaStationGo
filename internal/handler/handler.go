@@ -50,8 +50,13 @@ func Register(r *gin.Engine, cfg *config.Config, log *zap.Logger, svc *service.C
 			authed.GET("/media", searchMediaHandler(svc))
 			authed.POST("/media/:id/scrape", middleware.AdminRequired(), scrapeOneHandler(svc))
 			authed.POST("/media/:id/probe", middleware.AdminRequired(), reprobeHandler(svc))
+			authed.DELETE("/media/:id", middleware.AdminRequired(), deleteMediaHandler(svc))
+			authed.POST("/media/:id/restore", middleware.AdminRequired(), restoreMediaHandler(svc))
+			authed.DELETE("/media/:id/purge", middleware.AdminRequired(), purgeMediaHandler(svc))
 			authed.GET("/media/:id/subtitles", listSubtitlesHandler(svc))
 			authed.GET("/subtitles/:id", serveSubtitleHandler(svc))
+			authed.POST("/media/:id/nfo", middleware.AdminRequired(), exportNFOHandler(svc))
+			authed.POST("/libraries/:id/nfo", middleware.AdminRequired(), exportLibraryNFOHandler(svc))
 
 			// Streaming.
 			authed.GET("/stream/:id", streamHandler(svc))
@@ -90,6 +95,19 @@ func Register(r *gin.Engine, cfg *config.Config, log *zap.Logger, svc *service.C
 
 			// Stats / dashboard.
 			authed.GET("/stats", statsHandler(svc))
+			authed.GET("/tasks", tasksHandler(svc))
+
+			// Discover (TMDb trending / popular).
+			authed.GET("/discover/trending", trendingHandler(svc))
+			authed.GET("/discover/popular", popularHandler(svc))
+
+			// AI.
+			authed.GET("/ai/status", aiStatusHandler(svc))
+			authed.POST("/ai/search", smartSearchHandler(svc))
+			authed.GET("/ai/recommend", aiRecommendHandler(svc))
+
+			// Recycle bin.
+			authed.GET("/recycle", middleware.AdminRequired(), listRecycleHandler(svc))
 
 			authed.GET("/ws", wsHandler(svc))
 		}

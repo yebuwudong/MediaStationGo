@@ -3,14 +3,17 @@ import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   Activity,
   CloudDownload,
+  Compass,
   Film,
   Heart,
   Home,
+  ListChecks,
   ListMusic,
   LogOut,
   Rss,
   Search,
   Settings,
+  Trash2,
   Library as LibraryIcon,
   User as UserIcon,
 } from 'lucide-react'
@@ -48,6 +51,7 @@ export function Layout() {
 
         <nav className="flex-1 space-y-1 overflow-y-auto pr-1">
           <SidebarLink to="/" icon={<Home size={18} />} label="首页" end />
+          <SidebarLink to="/discover" icon={<Compass size={18} />} label="发现" />
           <SidebarLink to="/search" icon={<Search size={18} />} label="搜索" />
           <SidebarLink to="/favourites" icon={<Heart size={18} />} label="收藏" />
           <SidebarLink to="/playlists" icon={<ListMusic size={18} />} label="播放列表" />
@@ -83,7 +87,9 @@ export function Layout() {
               <div className="mt-6 px-2 text-xs uppercase tracking-wider text-slate-500">
                 管理
               </div>
+              <SidebarLink to="/tasks" icon={<ListChecks size={18} />} label="实时任务" />
               <SidebarLink to="/stats" icon={<Activity size={18} />} label="运行状态" />
+              <SidebarLink to="/recycle" icon={<Trash2 size={18} />} label="回收站" />
               <SidebarLink to="/admin" icon={<Settings size={18} />} label="管理后台" />
             </>
           )}

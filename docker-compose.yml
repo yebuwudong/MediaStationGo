@@ -34,15 +34,27 @@ services:
       MEDIASTATION_DATABASE_DB_PATH: /data/mediastation.db
       MEDIASTATION_CACHE_CACHE_DIR: /cache
       MEDIASTATION_LOGGING_LEVEL: info
+      # MEDIASTATION_TRANSCODER_ENCODER: vaapi    # qsv | vaapi | nvenc | (empty=software)
+      # MEDIASTATION_TRANSCODER_MAX_HEIGHT: 1080
       # MEDIASTATION_SECRETS_JWT_SECRET: change-me-to-a-strong-random-string
       # MEDIASTATION_APP_CORS_ORIGINS: '["https://media.example.com"]'
       PUID: "1000"
       PGID: "1000"
       TZ: Asia/Shanghai
 
-    # Hardware-accelerated transcoding (uncomment when you have an Intel iGPU).
+    # Hardware-accelerated transcoding.
+    #   * Intel iGPU (QSV / VAAPI): mount /dev/dri.
+    #   * NVIDIA NVENC: switch the runtime to nvidia and add `gpus: all`.
     # devices:
     #   - /dev/dri:/dev/dri
+    # group_add:
+    #   - "989"   # match render GID on host
+    # runtime: nvidia
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - capabilities: [gpu]
 
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/health || exit 1"]

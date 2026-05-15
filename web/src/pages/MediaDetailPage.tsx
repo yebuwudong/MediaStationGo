@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { Heart, Play, RefreshCw, Sparkles } from 'lucide-react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { FileText, Heart, Play, RefreshCw, Sparkles, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 import { mediaAPI } from '../api/library'
 import { playbackAPI } from '../api/playback'
+import { recycleAPI } from '../api/recycle'
 import { imageURL } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 import { api } from '../api/client'
@@ -39,6 +40,7 @@ function fmtSize(bytes: number): string {
 //   - Re-probe     (admin only, refreshes ffprobe metadata)
 export function MediaDetailPage() {
   const { id = '' } = useParams()
+  const navigate = useNavigate()
   const role = useAuthStore((s) => s.user?.role)
   const [media, setMedia] = useState<Media | null>(null)
   const [favourite, setFavourite] = useState(false)
@@ -79,6 +81,27 @@ export function MediaDetailPage() {
     await api.post(`/media/${media.id}/probe`)
     toast.success('已重新探测')
     await refresh()
+  }
+
+  const exportNFO = async () => {
+    if (!media) return
+    try {
+      const r = await recycleAPI.exportNFO(media.id)
+      toast.success(`NFO 已写入 ${r.path}`)
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+        '导出失败'
+      toast.error(msg)
+    }
+  }
+
+  const softDelete = async () => {
+    if (!media) return
+    if (!confirm(`将「${media.title}」移至回收站? (磁盘文件保留)`)) return
+    await recycleAPI.softDelete(media.id)
+    toast.success('已移至回收站')
+    navigate(-1)
   }
 
   if (loading) return <p className="text-slate-500">加载中…</p>
@@ -148,6 +171,15 @@ export function MediaDetailPage() {
                 </button>
                 <button onClick={reprobe} className="neon-button">
                   <RefreshCw size={16} /> 重新探测
+                </button>
+                <button onClick={exportNFO} className="neon-button">
+                  <FileText size={16} /> 导出 NFO
+                </button>
+                <button
+                  onClick={softDelete}
+                  className="neon-button !border-red-400/40 !bg-red-400/10 !text-red-400"
+                >
+                  <Trash2 size={16} /> 移至回收站
                 </button>
               </>
             )}

@@ -4,12 +4,11 @@
 // from one or more providers. Selection is driven by the library type:
 //
 //   library.type == "anime"   -> Bangumi  (fallback: TMDb)
-//   library.type == "tv"      -> TMDb (movies) — TV episodes inherit
-//                                series metadata; episode-level scraping
-//                                is left as a future step
+//   library.type == "tv"      -> TheTVDB  (fallback: TMDb)
 //   default                   -> TMDb
 //
-// The orchestrator publishes scrape progress events on the WS hub.
+// After the primary match we optionally upgrade poster / backdrop with
+// Fanart.tv when an API key is configured.
 package service
 
 import (
@@ -34,6 +33,8 @@ type ScraperService struct {
 	repo    *repository.Container
 	tmdb    *TMDbProvider
 	bangumi *BangumiProvider
+	thetvdb *TheTVDBProvider
+	fanart  *FanartProvider
 	hub     *Hub
 }
 
@@ -44,11 +45,13 @@ func NewScraperService(
 	repo *repository.Container,
 	tmdb *TMDbProvider,
 	bangumi *BangumiProvider,
+	thetvdb *TheTVDBProvider,
+	fanart *FanartProvider,
 	hub *Hub,
 ) *ScraperService {
 	return &ScraperService{
 		cfg: cfg, log: log, repo: repo,
-		tmdb: tmdb, bangumi: bangumi, hub: hub,
+		tmdb: tmdb, bangumi: bangumi, thetvdb: thetvdb, fanart: fanart, hub: hub,
 	}
 }
 
@@ -74,7 +77,6 @@ func CleanQuery(raw string) (title string, year int) {
 	name := strings.TrimSuffix(filepath.Base(raw), filepath.Ext(raw))
 	lower := strings.ToLower(name)
 
-	// 1. Year first — bracketed years (1999) must survive the next step.
 	if m := yearPattern.FindStringSubmatch(lower); len(m) >= 2 {
 		if v, err := strconv.Atoi(m[1]); err == nil {
 			year = v
@@ -82,10 +84,8 @@ func CleanQuery(raw string) (title string, year int) {
 		}
 	}
 
-	// 2. Drop everything inside brackets.
 	lower = bracketedTag.ReplaceAllString(lower, " ")
 
-	// 3. Drop episode markers (S01E02 / 1x02 / EP05 / 第03集).
 	lower = patSEnE.ReplaceAllString(lower, " ")
 	lower = patNxE.ReplaceAllString(lower, " ")
 	lower = patEP.ReplaceAllString(lower, " ")
@@ -102,9 +102,7 @@ func CleanQuery(raw string) (title string, year int) {
 	return strings.TrimSpace(title), year
 }
 
-// EnrichOne runs the provider chain for a single media row. The library's
-// type decides which provider goes first; a fallback runs when the primary
-// returns nothing.
+// EnrichOne runs the provider chain for a single media row.
 func (s *ScraperService) EnrichOne(ctx context.Context, m *model.Media) error {
 	lib, err := s.repo.Library.FindByID(ctx, m.LibraryID)
 	if err != nil {
@@ -124,10 +122,21 @@ func (s *ScraperService) EnrichOne(ctx context.Context, m *model.Media) error {
 
 	match := s.lookup(ctx, lib, query, year)
 	if match == nil {
-		// Mark explicitly so we don't retry forever.
 		_ = s.repo.DB.Model(&model.Media{}).Where("id = ?", m.ID).
 			Update("scrape_status", "no_match").Error
 		return nil
+	}
+
+	// Optional Fanart upgrade.
+	if s.fanart != nil && s.fanart.Enabled() && match.TMDbID > 0 {
+		if a, err := s.fanart.MovieArtwork(ctx, match.TMDbID); err == nil && a != nil {
+			if a.Poster != "" {
+				match.PosterURL = a.Poster
+			}
+			if a.Backdrop != "" {
+				match.BackdropURL = a.Backdrop
+			}
+		}
 	}
 
 	updates := map[string]any{
@@ -165,11 +174,19 @@ func (s *ScraperService) lookup(ctx context.Context, lib *model.Library, query s
 	if lib != nil {
 		kind = lib.Type
 	}
-	if kind == "anime" && s.bangumi != nil {
-		if m, err := s.bangumi.Search(ctx, query); err == nil && m != nil {
-			return m
+	switch kind {
+	case "anime":
+		if s.bangumi != nil {
+			if m, err := s.bangumi.Search(ctx, query); err == nil && m != nil {
+				return m
+			}
 		}
-		s.log.Debug("bangumi miss, falling back to tmdb", zap.String("query", query))
+	case "tv":
+		if s.thetvdb != nil && s.thetvdb.Enabled() {
+			if m, err := s.thetvdb.SearchSeries(ctx, query); err == nil && m != nil {
+				return m
+			}
+		}
 	}
 	if s.tmdb != nil && s.tmdb.Enabled() {
 		if m, err := s.tmdb.SearchMovie(ctx, query, year); err == nil && m != nil {
@@ -218,6 +235,9 @@ func (s *ScraperService) AnyEnabled() bool {
 		return true
 	}
 	if s.bangumi != nil && s.bangumi.Enabled() {
+		return true
+	}
+	if s.thetvdb != nil && s.thetvdb.Enabled() {
 		return true
 	}
 	return false

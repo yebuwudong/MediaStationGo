@@ -64,6 +64,20 @@ media:
   tv_dir: ""
   anime_dir: ""
 
+transcoder:
+  # Hardware encoder for HLS transcodes.
+  #   ""        software libx264 (default; runs anywhere)
+  #   nvenc     h264_nvenc      (NVIDIA GPU, requires --gpus all)
+  #   qsv       h264_qsv        (Intel iGPU, requires /dev/dri)
+  #   vaapi     h264_vaapi      (Intel/AMD VAAPI, requires /dev/dri)
+  encoder: ""
+  preset: veryfast
+  video_bitrate: 1500k
+  max_rate: 1800k
+  buf_size: 3000k
+  max_height: 720
+  segment_seconds: 4
+
 ai:
   enabled: false
   provider: openai           # openai | deepseek | qwen | ollama

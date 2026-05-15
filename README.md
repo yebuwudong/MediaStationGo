@@ -42,7 +42,10 @@ making deployment painless on NAS hardware.
 - ✅ Library CRUD + recursive filesystem scan
 - ✅ ffprobe metadata extraction (duration / resolution / codecs / container)
 - ✅ Scene-noise filename cleaner with year + season/episode parsing
-- ✅ TMDb scraper (movies) + Bangumi scraper (anime), provider chain by library type
+- ✅ Multi-provider scrape chain by library type:
+  - movie → TMDb (with optional Fanart.tv high-res poster upgrade)
+  - tv → TheTVDB (fallback TMDb)
+  - anime → Bangumi (fallback TMDb)
 - ✅ Image proxy with disk cache for TMDb / Bangumi / Douban / Fanart / TheTVDB
 - ✅ TV / anime libraries grouped by season with episode listing
 - ✅ fsnotify-based filesystem watcher with 5 s coalescing debouncer
@@ -61,7 +64,16 @@ making deployment painless on NAS hardware.
 ### Operations
 - ✅ Real-time scan / scrape / transcode / download / subscription events over WebSocket
 - ✅ Operator dashboard at `/stats` (CPU / memory / disk / library counts / Goroutines)
+- ✅ Real-time tasks panel at `/tasks` (active ffmpeg jobs + qBittorrent torrents)
+- ✅ Recycle bin at `/recycle` (soft delete + restore + purge)
+- ✅ NFO export (Kodi / Jellyfin compatibility) — single media or whole library
+- ✅ Hardware-accel encoder profiles: software / NVENC / Intel QSV / VAAPI
 - ✅ Single-binary build, multi-arch Docker image, GitHub Actions CI + GHCR publish
+
+### Discovery & AI
+- ✅ TMDb Discover — Trending (today) + Popular rails on `/discover`
+- ✅ AI smart search (OpenAI-compatible) — natural-language queries → structured intent
+- ✅ AI recommendations seeded from your watch history (`GET /api/ai/recommend`)
 
 ### Frontend
 - ✅ React SPA with code-splitting: Login / Home / Library / Search / Favourites /
@@ -74,12 +86,10 @@ making deployment painless on NAS hardware.
 
 | Area | Status |
 |------|--------|
-| Hardware-accelerated transcoding (NVENC / QSV / VAAPI) profiles | ⏳ |
-| Douban / Fanart / TheTVDB providers | ⏳ |
-| Subtitle search (online providers) | ⏳ |
-| Emby/Jellyfin compatibility layer | ⏳ |
+| Bidirectional Jellyfin / Emby compatibility layer | ⏳ |
 | DLNA / Chromecast | ⏳ |
-| AI metadata enhancement & smart search | ⏳ |
+| Online subtitle search providers | ⏳ |
+| Multi-bitrate ABR transcode profiles | ⏳ |
 
 ---
 

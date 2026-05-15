@@ -28,7 +28,10 @@ type Container struct {
 	FFprobe      *FFprobeService
 	TMDb         *TMDbProvider
 	Bangumi      *BangumiProvider
+	TheTVDB      *TheTVDBProvider
+	Fanart       *FanartProvider
 	Scraper      *ScraperService
+	Discover     *DiscoverService
 	Playback     *PlaybackService
 	ImageProxy   *ImageProxy
 	Watcher      *WatcherService
@@ -38,6 +41,8 @@ type Container struct {
 	Stats        *StatsService
 	Profile      *ProfileService
 	Audit        *AuditService
+	NFO          *NFOService
+	AI           *AIService
 
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
@@ -51,12 +56,17 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 	probe := NewFFprobeService(cfg, log)
 	tmdb := NewTMDbProvider(cfg, log)
 	bangumi := NewBangumiProvider(cfg, log)
-	scraper := NewScraperService(cfg, log, repos, tmdb, bangumi, hub)
+	thetvdb := NewTheTVDBProvider(cfg, log)
+	fanart := NewFanartProvider(cfg, log)
+	scraper := NewScraperService(cfg, log, repos, tmdb, bangumi, thetvdb, fanart, hub)
+	discover := NewDiscoverService(log, tmdb)
 	transcoder := NewTranscoderService(cfg, log, repos, hub)
 	scanner := NewScannerService(cfg, log, repos, hub, probe, scraper)
 	downloads := NewDownloadService(log, repos, hub)
 	subscription := NewSubscriptionService(log, repos, downloads, hub)
 	watcher := NewWatcherService(log, repos, scanner)
+	nfo := NewNFOService(log, repos)
+	ai := NewAIService(cfg, log)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -73,7 +83,10 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 		FFprobe:      probe,
 		TMDb:         tmdb,
 		Bangumi:      bangumi,
+		TheTVDB:      thetvdb,
+		Fanart:       fanart,
 		Scraper:      scraper,
+		Discover:     discover,
 		Playback:     NewPlaybackService(log, repos),
 		ImageProxy:   NewImageProxy(cfg, log),
 		Watcher:      watcher,
@@ -83,6 +96,8 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 		Stats:        NewStatsService(log, repos),
 		Profile:      NewProfileService(log, repos),
 		Audit:        NewAuditService(log, repos),
+		NFO:          nfo,
+		AI:           ai,
 		stopCtx:      ctx,
 		stopCancel:   cancel,
 	}
