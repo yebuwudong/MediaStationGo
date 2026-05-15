@@ -2,6 +2,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -82,7 +83,7 @@ func scrapeLibraryHandler(svc *service.Container) gin.HandlerFunc {
 		// Run in the background so HTTP returns instantly; the WS hub
 		// pushes per-item progress on the "scrape" topic.
 		go func(libID string) {
-			_, _ = svc.Scraper.EnrichLibrary(c.Copy().Request.Context(), libID)
+			_, _ = svc.Scraper.EnrichLibrary(context.Background(), libID)
 		}(c.Param("id"))
 		c.JSON(http.StatusAccepted, gin.H{"status": "scraping"})
 	}

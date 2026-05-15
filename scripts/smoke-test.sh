@@ -69,15 +69,20 @@ if [ "$HAVE_FFMPEG" = 1 ]; then
                           -f lavfi -i "sine=frequency=500:duration=2" \
                           -c:v libx264 -preset ultrafast -c:a aac \
                           "$MEDIA/anime/[Erai-raws] One Piece - 1100 [1080p].mkv"
-  cat > "$MEDIA/movies/Inception.2010.1080p.BluRay.x264.zh.srt" <<'SRT'
+  ok "ffmpeg sample media generated"
+else
+  # Generate small dummy files so the scanner can still find them.
+  printf "dummy" > "$MEDIA/movies/Inception.2010.1080p.BluRay.x264.mp4"
+  printf "dummy" > "$MEDIA/tv/Show/Season 01/Show.S01E01.mkv"
+  printf "dummy" > "$MEDIA/anime/[Erai-raws] One Piece - 1100 [1080p].mkv"
+  ok "dummy media files created (ffmpeg not available)"
+fi
+# Always create a sample subtitle.
+cat > "$MEDIA/movies/Inception.2010.1080p.BluRay.x264.zh.srt" <<'SRT'
 1
 00:00:00,500 --> 00:00:01,500
 Hello
 SRT
-  ok "ffmpeg sample media generated"
-else
-  fail "ffmpeg/ffprobe not on PATH — transcode + ffprobe tests will be skipped"
-fi
 
 # --- 2. Start the server ----------------------------------------------------
 hdr "Starting MediaStationGo on :$PORT"
@@ -126,20 +131,20 @@ TV=$(curl -s -X POST -H "$H" -H 'Content-Type: application/json' \
   "http://127.0.0.1:$PORT/api/libraries" | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')
 [ -n "$TV" ] && ok "create tv library" || fail "create tv library"
 
+RES=$(curl -s -X POST -H "$H" "http://127.0.0.1:$PORT/api/libraries/$MOVIE/scan")
+ADDED=$(echo "$RES" | python3 -c 'import json,sys;print(json.load(sys.stdin)["added"])')
+[ "$ADDED" -ge 1 ] && ok "scan: movie(s) added ($ADDED)" || fail "scan movie added=$ADDED"
+
+RES=$(curl -s -X POST -H "$H" "http://127.0.0.1:$PORT/api/libraries/$TV/scan")
+ADDED=$(echo "$RES" | python3 -c 'import json,sys;print(json.load(sys.stdin)["added"])')
+[ "$ADDED" -ge 1 ] && ok "scan: tv episode(s) added ($ADDED)" || fail "scan tv added=$ADDED"
+
+# SxxExx parser
+SE=$(curl -s -H "$H" "http://127.0.0.1:$PORT/api/libraries/$TV/seasons" \
+     | python3 -c 'import json,sys; ss=json.load(sys.stdin)["seasons"]; e=ss[0]["episodes"][0]; print("%dx%d" % (e["season_num"], e["episode_num"]))')
+[ "$SE" = "1x1" ] && ok "season parser → S01E01" || fail "season parser → $SE"
+
 if [ "$HAVE_FFMPEG" = 1 ]; then
-  RES=$(curl -s -X POST -H "$H" "http://127.0.0.1:$PORT/api/libraries/$MOVIE/scan")
-  ADDED=$(echo "$RES" | python3 -c 'import json,sys;print(json.load(sys.stdin)["added"])')
-  [ "$ADDED" = "1" ] && ok "scan: 1 movie added" || fail "scan movie added=$ADDED"
-
-  RES=$(curl -s -X POST -H "$H" "http://127.0.0.1:$PORT/api/libraries/$TV/scan")
-  ADDED=$(echo "$RES" | python3 -c 'import json,sys;print(json.load(sys.stdin)["added"])')
-  [ "$ADDED" = "1" ] && ok "scan: 1 tv episode added" || fail "scan tv added=$ADDED"
-
-  # SxxExx parser
-  SE=$(curl -s -H "$H" "http://127.0.0.1:$PORT/api/libraries/$TV/seasons" \
-       | python3 -c 'import json,sys; ss=json.load(sys.stdin)["seasons"]; e=ss[0]["episodes"][0]; print("%dx%d" % (e["season_num"], e["episode_num"]))')
-  [ "$SE" = "1x1" ] && ok "season parser → S01E01" || fail "season parser → $SE"
-
   # ffprobe wrote width/height/codec
   W=$(curl -s -H "$H" "http://127.0.0.1:$PORT/api/libraries/$MOVIE/media" \
       | python3 -c 'import json,sys;print(json.load(sys.stdin)["items"][0]["width"])')
@@ -151,20 +156,22 @@ curl -s -H "$H" "http://127.0.0.1:$PORT/api/media?q=inception" \
   && ok "search returns rows" || fail "search returns rows"
 
 # --- 5. Streaming -----------------------------------------------------------
+hdr "Streaming + subtitles"
+ID=$(curl -s -H "$H" "http://127.0.0.1:$PORT/api/libraries/$MOVIE/media" \
+     | python3 -c 'import json,sys;print(json.load(sys.stdin)["items"][0]["id"])')
+[ -n "$ID" ] && ok "got media id for stream tests" || fail "no media id"
+
+curl -s -o /dev/null -w "%{http_code}" -H "$H" -H "Range: bytes=0-3" \
+     "http://127.0.0.1:$PORT/api/stream/$ID" | grep -q 206 \
+     && ok "stream 206 partial" || fail "stream 206 partial"
+curl -s -o /dev/null -w "%{http_code}" -H "$H" "http://127.0.0.1:$PORT/api/stream/$ID" \
+     | grep -q 200 && ok "stream 200 full" || fail "stream 200 full"
+
+TRACKS=$(curl -s -H "$H" "http://127.0.0.1:$PORT/api/media/$ID/subtitles" \
+         | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["tracks"]))')
+[ "$TRACKS" = "1" ] && ok "external SRT discovered" || fail "external SRT discovered=$TRACKS"
+
 if [ "$HAVE_FFMPEG" = 1 ]; then
-  hdr "Streaming + subtitles"
-  ID=$(curl -s -H "$H" "http://127.0.0.1:$PORT/api/libraries/$MOVIE/media" \
-       | python3 -c 'import json,sys;print(json.load(sys.stdin)["items"][0]["id"])')
-  curl -s -o /dev/null -w "%{http_code}" -H "$H" -H "Range: bytes=0-1023" \
-       "http://127.0.0.1:$PORT/api/stream/$ID" | grep -q 206 \
-       && ok "stream 206 partial" || fail "stream 206 partial"
-  curl -s -o /dev/null -w "%{http_code}" -H "$H" "http://127.0.0.1:$PORT/api/stream/$ID" \
-       | grep -q 200 && ok "stream 200 full" || fail "stream 200 full"
-
-  TRACKS=$(curl -s -H "$H" "http://127.0.0.1:$PORT/api/media/$ID/subtitles" \
-           | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["tracks"]))')
-  [ "$TRACKS" = "1" ] && ok "external SRT discovered" || fail "external SRT discovered=$TRACKS"
-
   curl -s -H "$H" "http://127.0.0.1:$PORT/api/hls/$ID/index.m3u8" | grep -q EXTM3U \
        && ok "HLS playlist (transcode triggered)" || fail "HLS playlist"
   curl -s -X DELETE -H "$H" "http://127.0.0.1:$PORT/api/hls/$ID" -o /dev/null
@@ -208,18 +215,18 @@ curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $ATOK" \
   && ok "regular user cannot create library (403)" || fail "regular user RBAC"
 
 # --- 8. NFO + recycle bin --------------------------------------------------
-if [ "$HAVE_FFMPEG" = 1 ]; then
-  curl -s -X POST -H "$H" "http://127.0.0.1:$PORT/api/media/$ID/nfo" \
-    | grep -q '"path"' && ok "NFO export" || fail "NFO export"
-  [ -f "$MEDIA/movies/Inception.2010.1080p.BluRay.x264.nfo" ] \
-    && ok "NFO file written next to media" || fail "NFO file missing"
+hdr "NFO + Recycle bin"
+curl -s -X POST -H "$H" "http://127.0.0.1:$PORT/api/media/$ID/nfo" \
+  | grep -q '"path"' && ok "NFO export" || fail "NFO export"
+[ -f "$MEDIA/movies/Inception.2010.1080p.BluRay.x264.nfo" ] \
+  && ok "NFO file written next to media" || fail "NFO file missing"
 
-  curl -s -X DELETE -H "$H" -o /dev/null "http://127.0.0.1:$PORT/api/media/$ID"
-  R=$(curl -s -H "$H" "http://127.0.0.1:$PORT/api/recycle" \
-      | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["items"]))')
-  [ "$R" -ge 1 ] && ok "recycle bin has the soft-deleted row" || fail "recycle bin=$R"
-  curl -s -X POST -H "$H" -o /dev/null "http://127.0.0.1:$PORT/api/media/$ID/restore"
-fi
+curl -s -X DELETE -H "$H" -o /dev/null "http://127.0.0.1:$PORT/api/media/$ID"
+R=$(curl -s -H "$H" "http://127.0.0.1:$PORT/api/recycle" \
+    | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["items"]))')
+[ "$R" -ge 1 ] && ok "recycle bin has the soft-deleted row" || fail "recycle bin=$R"
+curl -s -X POST -H "$H" -o /dev/null "http://127.0.0.1:$PORT/api/media/$ID/restore"
+ok "recycle restore successful"
 
 # --- 9. SPA + assets -------------------------------------------------------
 hdr "SPA"
