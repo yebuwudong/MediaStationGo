@@ -15,13 +15,16 @@ import {
   Heart,
   Home,
   KeyRound,
+  Link2,
   ListChecks,
   ListMusic,
   LogOut,
   Rss,
   Search,
   Settings,
+  Sparkles,
   Trash2,
+  Wrench,
   Library as LibraryIcon,
   User as UserIcon,
 } from 'lucide-react'
@@ -61,6 +64,7 @@ export function Layout() {
           <SidebarLink to="/" icon={<Home size={18} />} label="首页" end />
           <SidebarLink to="/discover" icon={<Compass size={18} />} label="发现" />
           <SidebarLink to="/search" icon={<Search size={18} />} label="搜索" />
+          <SidebarLink to="/ai" icon={<Sparkles size={18} />} label="AI 助手" />
           <SidebarLink to="/favourites" icon={<Heart size={18} />} label="收藏" />
           <SidebarLink to="/playlists" icon={<ListMusic size={18} />} label="播放列表" />
           <SidebarLink to="/history" icon={<Clock size={18} />} label="观看历史" />
@@ -107,6 +111,8 @@ export function Layout() {
               <SidebarLink to="/duplicates" icon={<Copy size={18} />} label="重复文件" />
               <SidebarLink to="/scheduler" icon={<Clock size={18} />} label="定时任务" />
               <SidebarLink to="/api-configs" icon={<KeyRound size={18} />} label="API 配置" />
+              <SidebarLink to="/strm" icon={<Link2 size={18} />} label="STRM 管理" />
+              <SidebarLink to="/tools" icon={<Wrench size={18} />} label="运维工具" />
               <SidebarLink to="/recycle" icon={<Trash2 size={18} />} label="回收站" />
               <SidebarLink to="/admin" icon={<Settings size={18} />} label="管理后台" />
             </>

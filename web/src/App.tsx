@@ -75,6 +75,15 @@ const SitesPage = lazy(() =>
 const SiteSearchPage = lazy(() =>
   import('./pages/SiteSearchPage').then((m) => ({ default: m.SiteSearchPage })),
 )
+const AIAssistantPage = lazy(() =>
+  import('./pages/AIAssistantPage').then((m) => ({ default: m.AIAssistantPage })),
+)
+const StrmPage = lazy(() =>
+  import('./pages/StrmPage').then((m) => ({ default: m.StrmPage })),
+)
+const ToolsPage = lazy(() =>
+  import('./pages/ToolsPage').then((m) => ({ default: m.ToolsPage })),
+)
 
 const Loading = () => <p className="px-6 py-8 text-slate-500">加载中…</p>
 
@@ -108,6 +117,7 @@ export default function App() {
           <Route path="poster-wall" element={<PosterWallPage />} />
           <Route path="sites" element={<SitesPage />} />
           <Route path="site-search" element={<SiteSearchPage />} />
+          <Route path="ai" element={<AIAssistantPage />} />
           <Route
             path="files"
             element={
@@ -161,6 +171,22 @@ export default function App() {
             element={
               <RequireAdmin>
                 <RecycleBinPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="strm"
+            element={
+              <RequireAdmin>
+                <StrmPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="tools"
+            element={
+              <RequireAdmin>
+                <ToolsPage />
               </RequireAdmin>
             }
           />
