@@ -141,3 +141,79 @@ func (p *ImageProxy) Serve(ctx context.Context, w http.ResponseWriter, raw strin
 	http.ServeContent(w, &http.Request{}, key, stat.ModTime(), f)
 	return nil
 }
+
+// Fetch 拉取远程图片并返回字节和 Content-Type（带缓存）。
+func (p *ImageProxy) Fetch(ctx context.Context, raw string) ([]byte, string, error) {
+	if raw == "" {
+		return nil, "", errors.New("missing url")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return nil, "", errors.New("invalid url")
+	}
+	if _, ok := p.allowHost[strings.ToLower(u.Host)]; !ok {
+		return nil, "", errors.New("host not allowed")
+	}
+
+	// Cache lookup
+	sum := sha1.Sum([]byte(raw))
+	key := hex.EncodeToString(sum[:])
+	cachePath := filepath.Join(p.cacheDir, key)
+
+	if data, err := os.ReadFile(cachePath); err == nil {
+		// Content-Type from file extension or upstream headers — use a simple detect
+		ctype := detectContentType(data)
+		return data, ctype, nil
+	}
+
+	// Fetch upstream
+	if err := os.MkdirAll(p.cacheDir, 0o755); err != nil {
+		return nil, "", err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("User-Agent", "MediaStationGo/0.1")
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, "", errors.New("upstream returned " + resp.Status)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Write to cache
+	tmp, err := os.CreateTemp(p.cacheDir, "img-*.tmp")
+	if err == nil {
+		if _, err := tmp.Write(data); err == nil {
+			tmp.Close()
+			os.Rename(tmp.Name(), cachePath)
+		} else {
+			tmp.Close()
+			os.Remove(tmp.Name())
+		}
+	}
+
+	ctype := resp.Header.Get("Content-Type")
+	if ctype == "" {
+		ctype = detectContentType(data)
+	}
+	return data, ctype, nil
+}
+
+// detectContentType 通过前 512 字节检测 MIME 类型。
+func detectContentType(data []byte) string {
+	if len(data) > 512 {
+		return http.DetectContentType(data[:512])
+	}
+	return http.DetectContentType(data)
+}

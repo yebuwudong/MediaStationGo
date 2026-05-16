@@ -9,11 +9,11 @@ import {
   Copy,
   Film,
   FolderTree,
+  Globe,
   HardDrive,
   Heart,
   Home,
   GalleryHorizontalEnd,
-  KeyRound,
   ListChecks,
   ListMusic,
   LogOut,
@@ -94,18 +94,18 @@ export function Layout() {
 
           {user?.role === 'admin' && (
             <>
-              <div className="mt-6 px-2 text-xs uppercase tracking-wider text-slate-500">
-                管理
-              </div>
-              <SidebarLink to="/tasks" icon={<ListChecks size={18} />} label="实时任务" />
-              <SidebarLink to="/stats" icon={<Activity size={18} />} label="运行状态" />
-              <SidebarLink to="/storage" icon={<HardDrive size={18} />} label="存储" />
-              <SidebarLink to="/files" icon={<FolderTree size={18} />} label="文件浏览" />
-              <SidebarLink to="/duplicates" icon={<Copy size={18} />} label="重复文件" />
-              <SidebarLink to="/scheduler" icon={<Clock size={18} />} label="定时任务" />
-              <SidebarLink to="/api-configs" icon={<KeyRound size={18} />} label="API 配置" />
-              <SidebarLink to="/recycle" icon={<Trash2 size={18} />} label="回收站" />
-              <SidebarLink to="/admin" icon={<Settings size={18} />} label="管理后台" />
+          <div className="mt-6 px-2 text-xs uppercase tracking-wider text-slate-500">
+            管理
+          </div>
+          <SidebarLink to="/tasks" icon={<ListChecks size={18} />} label="实时任务" />
+          <SidebarLink to="/stats" icon={<Activity size={18} />} label="运行状态" />
+          <SidebarLink to="/storage" icon={<HardDrive size={18} />} label="存储" />
+          <SidebarLink to="/files" icon={<FolderTree size={18} />} label="文件浏览" />
+          <SidebarLink to="/duplicates" icon={<Copy size={18} />} label="重复文件" />
+          <SidebarLink to="/scheduler" icon={<Clock size={18} />} label="定时任务" />
+          <SidebarLink to="/sites" icon={<Globe size={18} />} label="站点管理" />
+          <SidebarLink to="/recycle" icon={<Trash2 size={18} />} label="回收站" />
+          <SidebarLink to="/admin" icon={<Settings size={18} />} label="管理后台" />
             </>
           )}
         </nav>

@@ -1,11 +1,11 @@
-// Package service contains the business logic of MediaStationGo. Handlers
-// deserialize the HTTP request, call into a Service method, then serialize
-// the response. Services own all cross-cutting policy (auth, scanning,
-// transcoding, etc.) and never deal with HTTP types directly.
+// Package service 包含 MediaStationGo 的业务逻辑。
+// Handler 反序列化 HTTP 请求，调用 Service 方法，然后序列化响应。
+// Services 拥有所有横切策略（认证、扫描、转码等）且不直接处理 HTTP 类型。
 package service
 
 import (
 	"context"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -13,13 +13,13 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
-// Container holds every service initialized at startup. Handlers receive a
-// pointer to it and pick the relevant fields.
+// Container 持有在启动时初始化的每个服务。Handler 接收指向它的指针并选择相关字段。
 type Container struct {
 	Cfg          *config.Config
 	Log          *zap.Logger
 	Repo         *repository.Container
 	WSHub        *Hub
+	SSEHub       *SSEHub
 	Auth         *AuthService
 	Media        *MediaService
 	Scan         *ScannerService
@@ -55,15 +55,25 @@ type Container struct {
 	Notifier     *NotifierService
 	Organizer    *OrganizerService
 	Douban       *DoubanProvider
+	Permission   *PermissionService
+	Token        *TokenService
+	ApiConfig    *ApiConfigService
+	DownloadMgr  *DownloadManager
+	Notify       *NotifyService
+	Site         *SiteService
 
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
 }
 
-// New builds the service container.
+// New 构建服务容器。
 func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Container {
 	hub := NewHub(log)
 	go hub.Run()
+
+	// 初始化 SSE Hub
+	sseHub := NewSSEHub(log)
+	go sseHub.Run()
 
 	probe := NewFFprobeService(cfg, log)
 	tmdb := NewTMDbProvider(cfg, log)
@@ -92,6 +102,14 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 	douban := NewDoubanProvider(cfg, log)
 	scheduler := NewSchedulerService(log, repos, scanner, transcoder, hub, cfg.Cache.CacheDir)
 
+	// 初始化认证相关服务
+	tokenSvc := NewTokenService(cfg, log, repos)
+	permissionSvc := NewPermissionService(cfg, log, repos)
+	apiConfigSvc := NewApiConfigService(cfg, log, repos, crypto)
+	downloadMgr := NewDownloadManager(log, repos, crypto)
+	notifySvc := NewNotifyService(log, repos, crypto)
+	siteSvc := NewSiteService(log, repos, crypto)
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Container{
@@ -99,7 +117,8 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 		Log:          log,
 		Repo:         repos,
 		WSHub:        hub,
-		Auth:         NewAuthService(cfg, log, repos),
+		SSEHub:       sseHub,
+		Auth:         NewAuthService(cfg, log, repos, tokenSvc, permissionSvc),
 		Media:        NewMediaService(cfg, log, repos),
 		Scan:         scanner,
 		Stream:       NewStreamService(cfg, log, repos, transcoder),
@@ -134,13 +153,19 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 		Notifier:     notifier,
 		Organizer:    organizer,
 		Douban:       douban,
+		Permission:   permissionSvc,
+		Token:        tokenSvc,
+		ApiConfig:    apiConfigSvc,
+		DownloadMgr:  downloadMgr,
+		Notify:       notifySvc,
+		Site:         siteSvc,
 		stopCtx:      ctx,
 		stopCancel:   cancel,
 	}
 }
 
-// Boot kicks off background workers (watcher, downloads poller,
-// subscription scheduler).  Called once after AutoMigrate.
+// Boot 启动后台工作进程（watcher, downloads poller, subscription scheduler）。
+// 在 AutoMigrate 后调用一次。
 func (c *Container) Boot() {
 	if err := c.Watcher.Start(c.stopCtx); err != nil {
 		c.Log.Warn("watcher start failed", zap.Error(err))
@@ -150,11 +175,17 @@ func (c *Container) Boot() {
 	if err := c.APIConfig.SeedDefaults(c.stopCtx); err != nil {
 		c.Log.Warn("api config seed failed", zap.Error(err))
 	}
+
+	// 加载所有已配置的下载客户端
+	if err := c.DownloadMgr.LoadAll(c.stopCtx); err != nil {
+		c.Log.Warn("failed to load download clients", zap.Error(err))
+	}
+
+	// 启动调度器定时任务
 	c.Scheduler.Start(c.stopCtx)
 }
 
-// Close releases any resources held by services (websocket hub, ffmpeg
-// transcodes, fsnotify, background pollers).
+// Close 释放 services 持有的任何资源（websocket hub, ffmpeg 转码, fsnotify, 后台轮询器）。
 func (c *Container) Close() {
 	if c.stopCancel != nil {
 		c.stopCancel()
@@ -177,4 +208,13 @@ func (c *Container) Close() {
 	if c.WSHub != nil {
 		c.WSHub.Stop()
 	}
+	if c.SSEHub != nil {
+		c.SSEHub.Stop()
+	}
+	if c.Scheduler != nil {
+		c.Scheduler.Stop()
+	}
 }
+
+// unused guard
+var _ = time.Now

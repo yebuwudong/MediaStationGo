@@ -51,9 +51,6 @@ const DlnaPage = lazy(() => import('./pages/DlnaPage').then((m) => ({ default: m
 const FileManagerPage = lazy(() =>
   import('./pages/FileManagerPage').then((m) => ({ default: m.FileManagerPage })),
 )
-const APIConfigsPage = lazy(() =>
-  import('./pages/APIConfigsPage').then((m) => ({ default: m.APIConfigsPage })),
-)
 const StoragePage = lazy(() =>
   import('./pages/StoragePage').then((m) => ({ default: m.StoragePage })),
 )
@@ -69,6 +66,7 @@ const WatchHistoryPage = lazy(() =>
 const PosterWallPage = lazy(() =>
   import('./pages/PosterWallPage').then((m) => ({ default: m.PosterWallPage })),
 )
+const SitesPage = lazy(() => import('./pages/SitesPage').then((m) => ({ default: m.SitesPage })))
 
 const Loading = () => <p className="px-6 py-8 text-slate-500">加载中…</p>
 
@@ -100,6 +98,14 @@ export default function App() {
           <Route path="dlna" element={<DlnaPage />} />
           <Route path="history" element={<WatchHistoryPage />} />
           <Route path="poster-wall" element={<PosterWallPage />} />
+          <Route
+            path="sites"
+            element={
+              <RequireAdmin>
+                <SitesPage />
+              </RequireAdmin>
+            }
+          />
           <Route
             path="files"
             element={
@@ -134,11 +140,7 @@ export default function App() {
           />
           <Route
             path="api-configs"
-            element={
-              <RequireAdmin>
-                <APIConfigsPage />
-              </RequireAdmin>
-            }
+            element={<Navigate to="/admin" replace />}
           />
           <Route
             path="tasks"

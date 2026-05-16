@@ -1,17 +1,10 @@
-// Package config loads layered configuration from defaults, config files and
-// environment variables, mirroring the conventions used by nowen-video.
+// Package config 加载分层配置：默认值、配置文件和环境变量。
 //
-// Priority (low -> high):
-//  1. Built-in defaults
-//  2. config.yaml in the working directory (nested format)
-//  3. config/*.yaml shard files (per-module)
-//  4. Environment variables prefixed with MEDIASTATION_
-//
-// Environment variable example:
-//
-//	MEDIASTATION_APP_PORT=8080
-//	MEDIASTATION_SECRETS_JWT_SECRET=please-change-me
-//	MEDIASTATION_DATABASE_DB_PATH=/data/mediastation.db
+// 优先级（低 -> 高）:
+//  1. 内置默认值
+//  2. 工作目录中的 config.yaml（嵌套格式）
+//  3. config/*.yaml 分片文件（按模块）
+//  4. 以 MEDIASTATION_ 为前缀的环境变量
 package config
 
 import (
@@ -25,10 +18,10 @@ import (
 	"github.com/spf13/viper"
 )
 
-// EnvPrefix is the prefix used for all env-var-driven overrides.
+// EnvPrefix 是所有环境变量驱动的覆盖使用的前缀。
 const EnvPrefix = "MEDIASTATION"
 
-// Config is the root config aggregate.
+// Config 是根配置聚合。
 type Config struct {
 	App        AppConfig        `mapstructure:"app"`
 	Database   DatabaseConfig   `mapstructure:"database"`
@@ -38,9 +31,18 @@ type Config struct {
 	Media      MediaConfig      `mapstructure:"media"`
 	Transcoder TranscoderConfig `mapstructure:"transcoder"`
 	AI         AIConfig         `mapstructure:"ai"`
+	ApiConfig  ApiConfigConfig  `mapstructure:"api_config"`
 }
 
-// TranscoderConfig controls the HLS / ffmpeg backend.
+// ApiConfigConfig API 配置相关设置。
+type ApiConfigConfig struct {
+	// AutoEncrypt 是否自动加密敏感字段
+	AutoEncrypt bool `mapstructure:"auto_encrypt"`
+	// DefaultTimeout 默认请求超时（秒）
+	DefaultTimeout int `mapstructure:"default_timeout"`
+}
+
+// TranscoderConfig 控制 HLS / ffmpeg 后端。
 type TranscoderConfig struct {
 	Encoder        string `mapstructure:"encoder"` // "" / nvenc / qsv / vaapi
 	Preset         string `mapstructure:"preset"`
@@ -51,7 +53,7 @@ type TranscoderConfig struct {
 	SegmentSeconds int    `mapstructure:"segment_seconds"`
 }
 
-// AppConfig holds runtime app parameters.
+// AppConfig 保存运行时应用参数。
 type AppConfig struct {
 	Port        int      `mapstructure:"port"`
 	Debug       bool     `mapstructure:"debug"`
@@ -65,7 +67,7 @@ type AppConfig struct {
 	ServerURL   string   `mapstructure:"server_url"`
 }
 
-// DatabaseConfig configures GORM + SQLite.
+// DatabaseConfig 配置 GORM + SQLite。
 type DatabaseConfig struct {
 	DBPath       string `mapstructure:"db_path"`
 	WALMode      bool   `mapstructure:"wal_mode"`
@@ -75,7 +77,7 @@ type DatabaseConfig struct {
 	MaxIdleConns int    `mapstructure:"max_idle_conns"`
 }
 
-// SecretsConfig holds JWT / 3rd-party API keys (do NOT commit values).
+// SecretsConfig 保存 JWT / 第三方 API 密钥（不要提交值）。
 type SecretsConfig struct {
 	JWTSecret      string `mapstructure:"jwt_secret"`
 	TMDbAPIKey     string `mapstructure:"tmdb_api_key"`
@@ -85,9 +87,11 @@ type SecretsConfig struct {
 	TheTVDBAPIKey  string `mapstructure:"thetvdb_api_key"`
 	FanartAPIKey   string `mapstructure:"fanart_tv_api_key"`
 	DoubanCookie   string `mapstructure:"douban_cookie"`
+	// 用于加密的密钥，如果为空则使用 JWTSecret
+	EncryptionKey string `mapstructure:"encryption_key"`
 }
 
-// LoggingConfig configures Zap.
+// LoggingConfig 配置 Zap。
 type LoggingConfig struct {
 	Level          string `mapstructure:"level"`
 	Format         string `mapstructure:"format"`
@@ -98,7 +102,7 @@ type LoggingConfig struct {
 	MaxBackups     int    `mapstructure:"max_backups"`
 }
 
-// CacheConfig controls the on-disk transcode/scrape cache.
+// CacheConfig 控制磁盘转码/刮削缓存。
 type CacheConfig struct {
 	CacheDir           string `mapstructure:"cache_dir"`
 	MaxDiskUsageMB     int    `mapstructure:"max_disk_usage_mb"`
@@ -107,14 +111,14 @@ type CacheConfig struct {
 	CleanupIntervalMin int    `mapstructure:"cleanup_interval_min"`
 }
 
-// MediaConfig holds default library locations (used by the bootstrap library).
+// MediaConfig 保存默认库位置（用于引导库）。
 type MediaConfig struct {
 	MoviesDir string `mapstructure:"movies_dir"`
 	TVDir     string `mapstructure:"tv_dir"`
 	AnimeDir  string `mapstructure:"anime_dir"`
 }
 
-// AIConfig configures the optional LLM provider.
+// AIConfig 配置可选的 LLM 提供者。
 type AIConfig struct {
 	Enabled       bool   `mapstructure:"enabled"`
 	Provider      string `mapstructure:"provider"`
@@ -125,9 +129,9 @@ type AIConfig struct {
 	MaxConcurrent int    `mapstructure:"max_concurrent"`
 }
 
-// Load reads configuration from defaults / files / environment.
+// Load 从默认值 / 文件 / 环境读取配置。
 //
-// It always returns a usable Config, even if no files are present.
+// 即使没有文件也始终返回可用的 Config。
 func Load() (*Config, error) {
 	v := viper.New()
 	setDefaults(v)
@@ -143,7 +147,7 @@ func Load() (*Config, error) {
 		}
 	}
 
-	// Merge sharded files under ./config/*.yaml.
+	// 合并 ./config/*.yaml 下的分片文件。
 	if entries, err := os.ReadDir("config"); err == nil {
 		for _, e := range entries {
 			if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
@@ -215,9 +219,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("transcoder.buf_size", "3000k")
 	v.SetDefault("transcoder.max_height", 720)
 	v.SetDefault("transcoder.segment_seconds", 4)
+
+	// API Config 默认设置
+	v.SetDefault("api_config.auto_encrypt", true)
+	v.SetDefault("api_config.default_timeout", 30)
 }
 
-// normalize fills derived defaults and self-heals empty critical fields.
+// normalize 填充派生默认值并自愈空的关键字段。
 func (c *Config) normalize() error {
 	if c.App.DataDir == "" {
 		c.App.DataDir = "./data"
@@ -229,8 +237,7 @@ func (c *Config) normalize() error {
 		c.Cache.CacheDir = filepath.Join(c.App.DataDir, "cache")
 	}
 	if c.Secrets.JWTSecret == "" {
-		// Persist an auto-generated secret to keep sessions stable across
-		// restarts even when the operator forgot to configure one.
+		// 持久化自动生成的密钥以在操作员忘记配置时保持会话稳定。
 		path := filepath.Join(c.App.DataDir, ".jwt_secret")
 		if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
 			c.Secrets.JWTSecret = strings.TrimSpace(string(data))
@@ -247,8 +254,7 @@ func (c *Config) normalize() error {
 	return nil
 }
 
-// asConfigFileNotFound is a small helper around errors.As that avoids importing
-// errors in this short file.
+// asConfigFileNotFound 是 errors.As 的小辅助函数，避免在这个短文件中导入 errors。
 func asConfigFileNotFound(err error, target *viper.ConfigFileNotFoundError) bool {
 	if err == nil {
 		return false

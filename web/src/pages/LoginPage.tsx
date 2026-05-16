@@ -20,8 +20,8 @@ export function LoginPage() {
     setLoading(true)
     try {
       const data = await authAPI.login(username, password)
-      setSession(data.token, data.user)
-      toast.success(`欢迎回来,${data.user.username}`)
+      setSession(data.tokens.access_token, data.tokens.refresh_token, data.user)
+      toast.success(`欢迎回来, ${data.user.username}`)
       navigate('/')
     } catch (err: unknown) {
       const msg =

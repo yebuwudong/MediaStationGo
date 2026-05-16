@@ -28,20 +28,24 @@ func loginHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		u, token, err := svc.Auth.Login(c.Request.Context(), req.Username, req.Password)
+		resp, err := svc.Auth.Login(c.Request.Context(), req.Username, req.Password)
 		if err != nil {
 			if errors.Is(err, service.ErrInvalidCredentials) {
 				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+				return
+			}
+			if errors.Is(err, service.ErrUserInactive) {
+				c.JSON(http.StatusForbidden, gin.H{"error": "user account is inactive"})
 				return
 			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{
-			"token": token,
-			"user":  u,
+			"user":   resp.User,
+			"tokens": resp.Tokens,
 		})
-		svc.Audit.Record(c.Request.Context(), u.ID, "auth.login", u.Username, c.ClientIP(), "")
+		svc.Audit.Record(c.Request.Context(), resp.User.ID, "auth.login", resp.User.Username, c.ClientIP(), "")
 	}
 }
 
@@ -52,7 +56,7 @@ func registerHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		u, err := svc.Auth.Register(c.Request.Context(), req.Username, req.Password)
+		u, tokens, err := svc.Auth.Register(c.Request.Context(), req.Username, req.Password)
 		if err != nil {
 			if errors.Is(err, service.ErrUsernameTaken) {
 				c.JSON(http.StatusConflict, gin.H{"error": "username taken"})
@@ -61,7 +65,10 @@ func registerHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, u)
+		c.JSON(http.StatusOK, gin.H{
+			"user":   u,
+			"tokens": tokens,
+		})
 	}
 }
 

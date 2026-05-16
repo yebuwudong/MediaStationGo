@@ -4,39 +4,55 @@ import { Trash2 } from 'lucide-react'
 
 import { adminAPI } from '../api/admin'
 import { libraryAPI } from '../api/library'
+import { schedulerAPI, type JobStatus } from '../api/scheduler'
 import type { Library, User } from '../types'
+import { DownloadClientCard } from '../components/DownloadClientCard'
+import { NotifyChannelCard } from '../components/NotifyChannelCard'
+import { APIConfigsPanel } from '../components/APIConfigsPanel'
+import { SitesPage } from './SitesPage'
 
-// Single-page admin console. We split the surface into three panels:
-//   • Libraries  — create / delete / scan
-//   • Users      — list / delete (cannot delete self)
-//   • Settings   — generic key/value store viewer
-//
-// Each panel manages its own loading / refresh state.
 export function AdminPage() {
-  const [tab, setTab] = useState<'library' | 'users' | 'settings'>('library')
+  const [tab, setTab] = useState<
+    'sites' | 'library' | 'users' | 'settings' | 'api' | 'downloads' | 'notify' | 'scheduler'
+  >('sites')
+  const tabs = [
+    { key: 'sites' as const, label: '站点管理' },
+    { key: 'library' as const, label: '媒体库' },
+    { key: 'users' as const, label: '用户' },
+    { key: 'api' as const, label: '外部API' },
+    { key: 'settings' as const, label: '系统设置' },
+    { key: 'downloads' as const, label: '下载客户端' },
+    { key: 'notify' as const, label: '通知渠道' },
+    { key: 'scheduler' as const, label: '定时任务' },
+  ]
   return (
     <div className="space-y-6">
       <h1 className="font-display text-3xl font-bold text-white">管理后台</h1>
-      <div className="flex gap-2 border-b border-white/10">
-        {(['library', 'users', 'settings'] as const).map((k) => (
+      <div className="flex flex-wrap gap-2 border-b border-white/10">
+        {tabs.map((k) => (
           <button
-            key={k}
-            onClick={() => setTab(k)}
+            key={k.key}
+            onClick={() => setTab(k.key)}
             className={
               'border-b-2 px-4 py-2 text-sm transition ' +
-              (tab === k
+              (tab === k.key
                 ? 'border-primary-400 text-primary-400'
                 : 'border-transparent text-slate-400 hover:text-white')
             }
           >
-            {k === 'library' ? '媒体库' : k === 'users' ? '用户' : '设置'}
+            {k.label}
           </button>
         ))}
       </div>
 
+      {tab === 'sites' && <SitesPage />}
       {tab === 'library' && <LibraryPanel />}
       {tab === 'users' && <UsersPanel />}
+      {tab === 'api' && <APIConfigsPanel />}
       {tab === 'settings' && <SettingsPanel />}
+      {tab === 'downloads' && <DownloadClientCard />}
+      {tab === 'notify' && <NotifyChannelCard />}
+      {tab === 'scheduler' && <SchedulerPanel />}
     </div>
   )
 }
@@ -248,6 +264,67 @@ function SettingsPanel() {
           </tbody>
         </table>
       </div>
+    </div>
+  )
+}
+
+function SchedulerPanel() {
+  const [tasks, setTasks] = useState<JobStatus[]>([])
+  const [loading, setLoading] = useState(false)
+
+  const refresh = () => {
+    setLoading(true)
+    schedulerAPI.status().then(setTasks).finally(() => setLoading(false))
+  }
+  useEffect(() => {
+    refresh()
+  }, [])
+
+  return (
+    <div className="glass-panel">
+      {loading && <p className="py-4 text-center text-slate-400">加载中...</p>}
+      {!loading && tasks.length === 0 && (
+        <p className="py-4 text-center text-slate-400">暂无定时任务</p>
+      )}
+      {!loading && tasks.length > 0 && (
+        <table className="w-full text-left text-sm">
+          <thead className="text-xs uppercase tracking-wider text-slate-500">
+            <tr>
+              <th className="py-2">名称</th>
+              <th>间隔</th>
+              <th>上次运行</th>
+              <th className="text-right">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tasks.map((t) => (
+              <tr key={t.name} className="border-t border-white/5">
+                <td className="py-2 text-white">{t.name}</td>
+                <td className="text-slate-300">{t.interval}</td>
+                <td className="text-slate-400">
+                  {t.last_run ? new Date(t.last_run).toLocaleString() : '-'}
+                </td>
+                <td className="py-2 text-right">
+                  <button
+                    className="rounded border border-amber-400/40 px-2 py-1 text-xs text-amber-400 hover:bg-amber-400/10"
+                    onClick={async () => {
+                      try {
+                        await schedulerAPI.run(t.name)
+                        toast.success('任务已触发')
+                        refresh()
+                      } catch {
+                        toast.error('触发失败')
+                      }
+                    }}
+                  >
+                    手动运行
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   )
 }

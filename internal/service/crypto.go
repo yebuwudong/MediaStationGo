@@ -99,6 +99,11 @@ func (c *CryptoService) Decrypt(value string) string {
 	return string(plain)
 }
 
+// IsEncrypted returns true if value carries the encrypted prefix.
+func (c *CryptoService) IsEncrypted(value string) bool {
+	return strings.HasPrefix(value, encPrefix)
+}
+
 // MaskAPIKey returns "abcd****wxyz" so the key can be displayed in the
 // admin UI without leaking it. Inputs shorter than 8 chars become "****".
 func MaskAPIKey(plain string) string {

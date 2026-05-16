@@ -1,13 +1,14 @@
-// Package repository implements a thin GORM-based data-access layer over the
-// types declared in internal/model. Each method takes a context.Context so we
-// can plug in cancellation / tracing later.
+// Package repository 实现基于 GORM 的数据访问层。
+// 每个方法接受 context.Context 以便后续插入取消/追踪。
 //
-// Repositories are intentionally narrow: they only know how to persist data,
-// not how to interpret it. Domain logic lives in internal/service.
+// Repository 故意保持精简：它们只负责持久化数据，不处理业务逻辑。
+// 业务逻辑位于 internal/service。
 package repository
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
 
-// Container is the registry of all repositories injected into services.
+// Container 是所有 repositories 的注册表，注入到 services 中。
 type Container struct {
 	DB              *gorm.DB
 	User            *UserRepository
@@ -30,9 +31,16 @@ type Container struct {
 	Subscription    *SubscriptionRepository
 	Setting         *SettingRepository
 	Log             *AccessLogRepository
+	Permission      *PermissionRepository
+	RefreshToken    *RefreshTokenRepository
+	ApiConfig       *ApiConfigRepository
+	DownloadClient  *DownloadClientRepository
+	NotifyChannel   *NotifyChannelRepository
+	Site            *SiteRepository
+	STRM            *STRMRepository
 }
 
-// New wires every repository to a single *gorm.DB.
+// New 将每个 repository 连接到单个 *gorm.DB。
 func New(db *gorm.DB) *Container {
 	return &Container{
 		DB:           db,
@@ -47,6 +55,13 @@ func New(db *gorm.DB) *Container {
 		Subscription: &SubscriptionRepository{db: db},
 		Setting:      &SettingRepository{db: db},
 		Log:          &AccessLogRepository{db: db},
+		Permission:   &PermissionRepository{db: db},
+		RefreshToken: &RefreshTokenRepository{db: db},
+		ApiConfig:    &ApiConfigRepository{db: db},
+		DownloadClient: &DownloadClientRepository{db: db},
+		NotifyChannel:  &NotifyChannelRepository{db: db},
+		Site:          &SiteRepository{db: db},
+		STRM:          &STRMRepository{db: db},
 	}
 }
 
@@ -267,7 +282,7 @@ func (r *HistoryRepository) ListByUser(ctx context.Context, userID string, limit
 	return rows, err
 }
 
-// ─── Favorite ────────────────────────────────────────────────────────────────
+// ─── Favorite ───────────────────────────────────────────────────────────────
 
 // FavoriteRepository persists model.Favorite records.
 type FavoriteRepository struct{ db *gorm.DB }
@@ -311,7 +326,7 @@ func (r *PlaylistRepository) ListByUser(ctx context.Context, userID string) ([]m
 	return rows, err
 }
 
-// ─── Download ────────────────────────────────────────────────────────────────
+// ─── Download ───────────────────────────────────────────────────────────────
 
 // DownloadRepository persists model.DownloadTask records.
 type DownloadRepository struct{ db *gorm.DB }
@@ -328,7 +343,7 @@ func (r *DownloadRepository) List(ctx context.Context) ([]model.DownloadTask, er
 	return rows, err
 }
 
-// ─── Subscription ────────────────────────────────────────────────────────────
+// ─── Subscription ───────────────────────────────────────────────────────────
 
 // SubscriptionRepository persists model.Subscription records.
 type SubscriptionRepository struct{ db *gorm.DB }
@@ -388,4 +403,159 @@ func (r *AccessLogRepository) Recent(ctx context.Context, limit int) ([]model.Ac
 	var rows []model.AccessLog
 	err := r.db.WithContext(ctx).Order("created_at desc").Limit(limit).Find(&rows).Error
 	return rows, err
+}
+
+// ─── Permission ──────────────────────────────────────────────────────────────
+
+// PermissionRepository persists model.UserPermission records.
+type PermissionRepository struct{ db *gorm.DB }
+
+// Create inserts a new permission record.
+func (r *PermissionRepository) Create(ctx context.Context, p *model.UserPermission) error {
+	return r.db.WithContext(ctx).Create(p).Error
+}
+
+// FindByUserID returns the permission record for a user, or (nil, nil) when absent.
+func (r *PermissionRepository) FindByUserID(ctx context.Context, userID string) (*model.UserPermission, error) {
+	var p model.UserPermission
+	err := r.db.WithContext(ctx).Where("user_id = ?", userID).First(&p).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// Update updates permission fields for a user.
+func (r *PermissionRepository) Update(ctx context.Context, userID string, updates map[string]bool) error {
+	return r.db.WithContext(ctx).Model(&model.UserPermission{}).
+		Where("user_id = ?", userID).Updates(updates).Error
+}
+
+// Upsert creates or updates a permission record.
+func (r *PermissionRepository) Upsert(ctx context.Context, p *model.UserPermission) error {
+	return r.db.WithContext(ctx).Where("user_id = ?", p.UserID).
+		Assign(*p).FirstOrCreate(p).Error
+}
+
+// Delete removes a permission record.
+func (r *PermissionRepository) Delete(ctx context.Context, userID string) error {
+	return r.db.WithContext(ctx).Where("user_id = ?", userID).Delete(&model.UserPermission{}).Error
+}
+
+// ─── Refresh Token ───────────────────────────────────────────────────────────
+
+// RefreshTokenRepository persists model.RefreshToken records.
+type RefreshTokenRepository struct{ db *gorm.DB }
+
+// Create inserts a new refresh token record.
+func (r *RefreshTokenRepository) Create(ctx context.Context, t *model.RefreshToken) error {
+	return r.db.WithContext(ctx).Create(t).Error
+}
+
+// FindByHash returns the refresh token matching the hash, or (nil, nil).
+func (r *RefreshTokenRepository) FindByHash(ctx context.Context, hash string) (*model.RefreshToken, error) {
+	var t model.RefreshToken
+	err := r.db.WithContext(ctx).Where("token_hash = ?", hash).First(&t).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+// RevokeByUserID revokes all refresh tokens for a user.
+func (r *RefreshTokenRepository) RevokeByUserID(ctx context.Context, userID string) error {
+	return r.db.WithContext(ctx).Model(&model.RefreshToken{}).
+		Where("user_id = ?", userID).Update("revoked", true).Error
+}
+
+// DeleteExpired removes all expired refresh tokens.
+func (r *RefreshTokenRepository) DeleteExpired(ctx context.Context) error {
+	return r.db.WithContext(ctx).Where("expires_at < ?", time.Now()).Delete(&model.RefreshToken{}).Error
+}
+
+// Revoke revokes a specific refresh token.
+func (r *RefreshTokenRepository) Revoke(ctx context.Context, hash string) error {
+	return r.db.WithContext(ctx).Model(&model.RefreshToken{}).
+		Where("token_hash = ?", hash).Update("revoked", true).Error
+}
+
+// HashToken returns the SHA256 hash of a token.
+func HashToken(token string) string {
+	h := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(h[:])
+}
+
+// ─── API Config ──────────────────────────────────────────────────────────────
+
+// ApiConfigRepository persists model.ApiConfig records.
+type ApiConfigRepository struct{ db *gorm.DB }
+
+// Create inserts a new API config record.
+func (r *ApiConfigRepository) Create(ctx context.Context, c *model.ApiConfig) error {
+	return r.db.WithContext(ctx).Create(c).Error
+}
+
+// FindByProvider returns the API config for a provider, or (nil, nil).
+func (r *ApiConfigRepository) FindByProvider(ctx context.Context, provider string) (*model.ApiConfig, error) {
+	var c model.ApiConfig
+	err := r.db.WithContext(ctx).Where("provider = ?", provider).First(&c).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// List returns all API configs.
+func (r *ApiConfigRepository) List(ctx context.Context) ([]model.ApiConfig, error) {
+	var rows []model.ApiConfig
+	err := r.db.WithContext(ctx).Order("provider asc").Find(&rows).Error
+	return rows, err
+}
+
+// Upsert creates or updates an API config.
+func (r *ApiConfigRepository) Upsert(ctx context.Context, c *model.ApiConfig) error {
+	return r.db.WithContext(ctx).Where("provider = ?", c.Provider).
+		Assign(model.ApiConfig{
+			APIKey:      c.APIKey,
+			BaseURL:    c.BaseURL,
+			Extra:      c.Extra,
+			Enabled:    c.Enabled,
+			UpdatedAt:  time.Now(),
+		}).FirstOrCreate(c).Error
+}
+
+// Update updates an API config.
+func (r *ApiConfigRepository) Update(ctx context.Context, c *model.ApiConfig) error {
+	return r.db.WithContext(ctx).Model(&model.ApiConfig{}).
+		Where("provider = ?", c.Provider).Updates(map[string]any{
+		"api_key":        c.APIKey,
+		"base_url":       c.BaseURL,
+		"extra":          c.Extra,
+		"enabled":        c.Enabled,
+		"updated_at":     time.Now(),
+	}).Error
+}
+
+// Delete removes an API config.
+func (r *ApiConfigRepository) Delete(ctx context.Context, provider string) error {
+	return r.db.WithContext(ctx).Where("provider = ?", provider).Delete(&model.ApiConfig{}).Error
+}
+
+// UpdateTestResult 更新测试结果。
+func (r *ApiConfigRepository) UpdateTestResult(ctx context.Context, provider, result string) error {
+	now := time.Now()
+	return r.db.WithContext(ctx).Model(&model.ApiConfig{}).
+		Where("provider = ?", provider).Updates(map[string]any{
+		"test_result":    result,
+		"last_tested_at": &now,
+	}).Error
 }

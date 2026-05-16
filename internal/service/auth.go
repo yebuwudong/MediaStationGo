@@ -14,27 +14,29 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
-	"github.com/ShukeBta/MediaStationGo/internal/middleware"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
 // AuthService handles registration, login, and JWT issuance.
 type AuthService struct {
-	cfg  *config.Config
-	log  *zap.Logger
-	repo *repository.Container
+	cfg         *config.Config
+	log         *zap.Logger
+	repo        *repository.Container
+	tokenSvc    *TokenService
+	permissionSvc *PermissionService
 }
 
 // NewAuthService is the constructor.
-func NewAuthService(cfg *config.Config, log *zap.Logger, repo *repository.Container) *AuthService {
-	return &AuthService{cfg: cfg, log: log, repo: repo}
+func NewAuthService(cfg *config.Config, log *zap.Logger, repo *repository.Container, tokenSvc *TokenService, permissionSvc *PermissionService) *AuthService {
+	return &AuthService{cfg: cfg, log: log, repo: repo, tokenSvc: tokenSvc, permissionSvc: permissionSvc}
 }
 
 // Common service-level errors.
 var (
 	ErrInvalidCredentials = errors.New("invalid username or password")
 	ErrUsernameTaken      = errors.New("username already taken")
+	ErrUserInactive      = errors.New("user account is inactive")
 )
 
 // SeedAdmin makes sure at least one admin user exists. It mirrors the
@@ -60,11 +62,14 @@ func (s *AuthService) SeedAdmin(ctx context.Context) error {
 		Username:           "admin",
 		PasswordHash:       hash,
 		Role:               "admin",
+		Tier:               "plus",
 		ForcePasswordReset: pwd == "admin123",
 	}
 	if err := s.repo.User.Create(ctx, user); err != nil {
 		return err
 	}
+	// 确保管理员有权限记录
+	_, _ = s.permissionSvc.EnsureForUser(ctx, user.ID)
 	s.log.Warn("default admin created — change the password after first login",
 		zap.String("username", "admin"),
 		zap.String("password_source", "ADMIN_INITIAL_PASSWORD or admin123"),
@@ -74,49 +79,72 @@ func (s *AuthService) SeedAdmin(ctx context.Context) error {
 
 // Register creates a new user. The first registered user is auto-promoted to
 // admin to support fresh installs that did not run SeedAdmin.
-func (s *AuthService) Register(ctx context.Context, username, password string) (*model.User, error) {
+func (s *AuthService) Register(ctx context.Context, username, password string) (*model.User, *TokenPair, error) {
 	username = strings.TrimSpace(username)
 	if username == "" || password == "" {
-		return nil, fmt.Errorf("username and password required")
+		return nil, nil, fmt.Errorf("username and password required")
 	}
 	if existing, err := s.repo.User.FindByUsername(ctx, username); err != nil {
-		return nil, err
+		return nil, nil, err
 	} else if existing != nil {
-		return nil, ErrUsernameTaken
+		return nil, nil, ErrUsernameTaken
 	}
 	hash, err := hashPassword(password)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	role := "user"
 	if n, err := s.repo.User.CountAdmins(ctx); err == nil && n == 0 {
 		role = "admin"
 	}
-	u := &model.User{Username: username, PasswordHash: hash, Role: role}
-	if err := s.repo.User.Create(ctx, u); err != nil {
-		return nil, err
+	u := &model.User{
+		Username:     username,
+		PasswordHash: hash,
+		Role:         role,
+		Tier:         "free",
 	}
-	return u, nil
+	if err := s.repo.User.Create(ctx, u); err != nil {
+		return nil, nil, err
+	}
+	// 自动为新用户创建默认权限
+	_, _ = s.permissionSvc.EnsureForUser(ctx, u.ID)
+	// 签发令牌对
+	tokens, err := s.tokenSvc.IssuePair(ctx, u.ID, u.Role, u.Tier)
+	if err != nil {
+		return u, nil, nil // 用户已创建，令牌签发失败不影响注册成功
+	}
+	return u, tokens, nil
 }
 
-// Login validates credentials and returns the user + a fresh JWT.
-func (s *AuthService) Login(ctx context.Context, username, password string) (*model.User, string, error) {
+// LoginResponse 登录响应结构。
+type LoginResponse struct {
+	User   *model.User   `json:"user"`
+	Tokens *TokenPair    `json:"tokens"`
+}
+
+// Login validates credentials and returns the user + a fresh JWT token pair.
+func (s *AuthService) Login(ctx context.Context, username, password string) (*LoginResponse, error) {
 	u, err := s.repo.User.FindByUsername(ctx, username)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	if u == nil {
-		return nil, "", ErrInvalidCredentials
+		return nil, ErrInvalidCredentials
+	}
+	// 检查用户是否激活
+	if !u.IsActive {
+		return nil, ErrUserInactive
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)); err != nil {
-		return nil, "", ErrInvalidCredentials
+		return nil, ErrInvalidCredentials
 	}
-	token, err := s.IssueToken(u)
+	// 签发令牌对
+	tokens, err := s.tokenSvc.IssuePair(ctx, u.ID, u.Role, u.Tier)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	_ = s.repo.User.TouchLogin(ctx, u.ID)
-	return u, token, nil
+	return &LoginResponse{User: u, Tokens: tokens}, nil
 }
 
 // ChangePassword updates the user password if the old one matches.
@@ -138,20 +166,31 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID, oldPwd, newPwd
 	return s.repo.User.UpdatePassword(ctx, userID, hash)
 }
 
-// IssueToken signs a JWT for the given user (24h validity).
+// IssueToken signs a JWT for the given user (60min validity, includes tier).
 func (s *AuthService) IssueToken(u *model.User) (string, error) {
-	claims := middleware.Claims{
+	claims := Claims{
 		UserID: u.ID,
 		Role:   u.Role,
+		Tier:   u.Tier,
 		RegisteredClaims: jwt.RegisteredClaims{
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(60 * time.Minute)),
 			Issuer:    "mediastationgo",
 			Subject:   u.ID,
 		},
 	}
 	t := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return t.SignedString([]byte(s.cfg.Secrets.JWTSecret))
+}
+
+// RefreshTokens 使用刷新令牌获取新的令牌对。
+func (s *AuthService) RefreshTokens(ctx context.Context, refreshToken string) (*TokenPair, error) {
+	return s.tokenSvc.Refresh(ctx, refreshToken)
+}
+
+// Logout 撤销用户的所有刷新令牌。
+func (s *AuthService) Logout(ctx context.Context, userID string) error {
+	return s.tokenSvc.RevokeAll(ctx, userID)
 }
 
 func hashPassword(p string) (string, error) {

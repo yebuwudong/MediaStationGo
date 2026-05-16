@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useEffect, useState } from 'react'
+import { ChangeEvent, FormEvent, useCallback, useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { Sparkles } from 'lucide-react'
 
@@ -7,16 +7,15 @@ import { mediaAPI } from '../api/library'
 import { MediaCard } from '../components/MediaCard'
 import type { Media } from '../types'
 
-// SearchPage runs a fast LIKE search by default, with an optional AI
-// "smart search" toggle that calls /api/ai/search to produce a structured
-// intent before executing the library lookup.
 export function SearchPage() {
   const [q, setQ] = useState('')
   const [items, setItems] = useState<Media[]>([])
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
   const [aiOn, setAiOn] = useState(false)
   const [aiAvailable, setAiAvailable] = useState(false)
   const [intent, setIntent] = useState<SearchIntent | null>(null)
+  const [hasSearched, setHasSearched] = useState(false)
 
   useEffect(() => {
     aiAPI
@@ -25,36 +24,62 @@ export function SearchPage() {
       .catch(() => setAiAvailable(false))
   }, [])
 
+  const doQuickSearch = useCallback((query: string) => {
+    if (!query.trim()) {
+      setItems([])
+      setHasSearched(false)
+      setLoading(false)
+      return
+    }
+    setHasSearched(true)
+    setError('')
+    mediaAPI
+      .search(query, 60)
+      .then((d) => {
+        setItems(d.items ?? [])
+        setIntent(null)
+      })
+      .catch((err) => {
+        const msg =
+          (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+          '搜索失败'
+        setError(msg)
+        toast.error(msg)
+      })
+      .finally(() => setLoading(false))
+  }, [])
+
   // Fast LIKE search-as-you-type when AI mode is OFF.
   useEffect(() => {
     if (aiOn) return
-    const t = setTimeout(() => {
-      setLoading(true)
-      mediaAPI
-        .search(q, 60)
-        .then((d) => {
-          setItems(d.items)
-          setIntent(null)
-        })
-        .finally(() => setLoading(false))
-    }, 300)
+    setLoading(true)
+    const t = setTimeout(() => doQuickSearch(q), 300)
     return () => clearTimeout(t)
-  }, [q, aiOn])
+  }, [q, aiOn, doQuickSearch])
 
   const onAISubmit = async (e: FormEvent) => {
     e.preventDefault()
     if (!q.trim()) return
     setLoading(true)
+    setError('')
+    setHasSearched(true)
     try {
       const data = await aiAPI.smartSearch(q)
-      setItems(data.items)
+      setItems(data.items ?? [])
       setIntent(data.intent)
-    } catch {
-      toast.error('AI 搜索失败')
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+        'AI 搜索失败'
+      setError(msg)
+      toast.error(msg)
     } finally {
       setLoading(false)
     }
   }
+
+  const showEmpty = !loading && !error && hasSearched && items.length === 0
+  const showIdle = !loading && !error && !hasSearched
 
   return (
     <div className="space-y-6">
@@ -78,7 +103,7 @@ export function SearchPage() {
           <input
             autoFocus
             className="input-base"
-            placeholder='例如:“2010 年后的科幻电影” / “最近的动漫”'
+            placeholder='例如:"2010 年后的科幻电影" / "最近的动漫"'
             value={q}
             onChange={(e: ChangeEvent<HTMLInputElement>) => setQ(e.target.value)}
           />
@@ -103,12 +128,40 @@ export function SearchPage() {
         </div>
       )}
 
-      {loading && <p className="text-slate-500">搜索中…</p>}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-        {items.map((m) => (
-          <MediaCard key={m.id} media={m} />
-        ))}
-      </div>
+      {loading && (
+        <div className="flex items-center gap-2 py-8 text-slate-400">
+          <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-primary-400 border-t-transparent" />
+          搜索中…
+        </div>
+      )}
+
+      {error && (
+        <div className="glass-panel !border-red-400/30 p-4 text-sm text-red-400">{error}</div>
+      )}
+
+      {showIdle && (
+        <div className="glass-panel flex flex-col items-center gap-2 p-10 text-center">
+          <p className="text-lg text-slate-300">输入关键词开始搜索</p>
+          <p className="text-sm text-slate-500">
+            支持电影、电视剧、动漫等媒体内容的快速搜索
+          </p>
+        </div>
+      )}
+
+      {showEmpty && (
+        <div className="glass-panel flex flex-col items-center gap-2 p-10 text-center">
+          <p className="text-lg text-slate-300">未找到匹配的媒体</p>
+          <p className="text-sm text-slate-500">尝试其他关键词，或者添加媒体库后执行扫描</p>
+        </div>
+      )}
+
+      {items.length > 0 && (
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+          {items.map((m) => (
+            <MediaCard key={m.id} media={m} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }

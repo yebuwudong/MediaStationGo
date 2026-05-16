@@ -1,9 +1,9 @@
 import { api } from './client'
-import type { User } from '../types'
+import type { User, TokenPair } from '../types'
 
 export interface LoginResponse {
-  token: string
   user: User
+  tokens: TokenPair
 }
 
 export const authAPI = {
@@ -11,7 +11,7 @@ export const authAPI = {
     api.post<LoginResponse>('/auth/login', { username, password }).then((r) => r.data),
 
   register: (username: string, password: string) =>
-    api.post<User>('/auth/register', { username, password }).then((r) => r.data),
+    api.post<LoginResponse>('/auth/register', { username, password }).then((r) => r.data),
 
   me: () => api.get<User>('/me').then((r) => r.data),
 

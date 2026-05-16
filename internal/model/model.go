@@ -1,6 +1,5 @@
-// Package model defines GORM data models and the registry used by
-// auto-migration. Each subsystem in MediaStationGo owns a slice of tables
-// here; AllModels returns the union for db.AutoMigrate.
+// Package model 定义 GORM 数据模型和自动迁移使用的注册表。
+// 每个子系统在 MediaStationGo 中拥有一个表切片；AllModels 返回联合以供 db.AutoMigrate 使用。
 package model
 
 import (
@@ -10,11 +9,11 @@ import (
 	"gorm.io/gorm"
 )
 
-// Base captures the fields embedded in every domain entity:
+// Base 嵌入每个域实体共享的字段:
 //
-//   - ID:         UUID v4 string primary key.
-//   - CreatedAt / UpdatedAt: managed by GORM.
-//   - DeletedAt:  soft-delete (queries auto-filter on it).
+//   - ID:         UUID v4 字符串主键
+//   - CreatedAt / UpdatedAt: 由 GORM 管理
+//   - DeletedAt:  软删除（查询自动过滤）
 type Base struct {
 	ID        string         `gorm:"primaryKey;type:varchar(36)" json:"id"`
 	CreatedAt time.Time      `json:"created_at"`
@@ -22,7 +21,7 @@ type Base struct {
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
-// BeforeCreate generates a UUID if the caller did not supply one.
+// BeforeCreate 如果调用者未提供则生成 UUID。
 func (b *Base) BeforeCreate(_ *gorm.DB) error {
 	if b.ID == "" {
 		b.ID = uuid.NewString()
@@ -30,20 +29,23 @@ func (b *Base) BeforeCreate(_ *gorm.DB) error {
 	return nil
 }
 
-// User is a local account. The first registered admin (or seeded admin)
-// gains the "admin" role; everyone else defaults to "user".
+// User 是本地账户。第一个注册的管理员（或种子管理员）获得 "admin" 角色；
+// 其他所有用户默认为 "user"。
 type User struct {
 	Base
 	Username           string     `gorm:"uniqueIndex;size:64;not null" json:"username"`
 	PasswordHash       string     `gorm:"size:128;not null" json:"-"`
 	Role               string     `gorm:"size:16;not null;default:user" json:"role"`
+	Tier               string     `gorm:"size:16;default:free" json:"tier"` // free / plus
+	Nickname           string     `gorm:"size:128" json:"nickname,omitempty"`
 	Email              string     `gorm:"size:128" json:"email,omitempty"`
 	AvatarURL          string     `gorm:"size:255" json:"avatar_url,omitempty"`
 	ForcePasswordReset bool       `gorm:"default:false" json:"force_password_reset"`
+	IsActive           bool       `gorm:"default:true" json:"is_active"`
 	LastLoginAt        *time.Time `json:"last_login_at,omitempty"`
 }
 
-// Library represents a user-defined media root directory.
+// Library 表示用户定义的媒体根目录。
 type Library struct {
 	Base
 	Name    string `gorm:"size:128;not null" json:"name"`
@@ -52,8 +54,7 @@ type Library struct {
 	Enabled bool   `gorm:"default:true" json:"enabled"`
 }
 
-// Media is a single playable item. Series episodes link to a SeriesID; movies
-// have SeriesID == "".
+// Media 是单个可播放项。剧集链接到 SeriesID；电影 SeriesID == ""。
 type Media struct {
 	Base
 	LibraryID    string  `gorm:"index;size:36" json:"library_id"`
@@ -116,7 +117,7 @@ type APIConfig struct {
 	Description string `gorm:"size:255" json:"description,omitempty"`
 }
 
-// Series groups episodes that belong to the same show.
+// Series 将属于同一节目的剧集分组。
 type Series struct {
 	Base
 	LibraryID   string  `gorm:"index;size:36" json:"library_id"`
@@ -130,7 +131,7 @@ type Series struct {
 	BangumiID   int     `json:"bangumi_id"`
 }
 
-// PlaybackHistory records the current playback position for resume support.
+// PlaybackHistory 记录当前播放位置以支持续播。
 type PlaybackHistory struct {
 	Base
 	UserID     string    `gorm:"index;size:36;not null" json:"user_id"`
@@ -141,14 +142,14 @@ type PlaybackHistory struct {
 	Completed  bool      `json:"completed"`
 }
 
-// Favorite marks a media item as favourite for a given user.
+// Favorite 将媒体项标记为给定用户的收藏。
 type Favorite struct {
 	Base
 	UserID  string `gorm:"index;size:36;not null;uniqueIndex:uniq_user_media" json:"user_id"`
 	MediaID string `gorm:"index;size:36;not null;uniqueIndex:uniq_user_media" json:"media_id"`
 }
 
-// Playlist is a user-curated, ordered list of media items.
+// Playlist 是用户策划的、有序的媒体列表。
 type Playlist struct {
 	Base
 	UserID   string `gorm:"index;size:36;not null" json:"user_id"`
@@ -156,7 +157,7 @@ type Playlist struct {
 	IsPublic bool   `gorm:"default:false" json:"is_public"`
 }
 
-// PlaylistItem is the join table between Playlists and Media with ordering.
+// PlaylistItem 是 Playlist 和 Media 的连接表，带有排序。
 type PlaylistItem struct {
 	Base
 	PlaylistID string `gorm:"index;size:36;not null" json:"playlist_id"`
@@ -164,7 +165,7 @@ type PlaylistItem struct {
 	Position   int    `json:"position"`
 }
 
-// DownloadTask is an outstanding (or completed) torrent / HTTP download.
+// DownloadTask 是待处理（或已完成）的 torrent / HTTP 下载。
 type DownloadTask struct {
 	Base
 	UserID   string  `gorm:"index;size:36" json:"user_id"`
@@ -175,27 +176,25 @@ type DownloadTask struct {
 	Progress float32 `json:"progress"`
 }
 
-// Subscription is an automation rule that polls an RSS feed and queues
-// matching torrents into the configured download client.
+// Subscription 是自动化规则，轮询 RSS 源并将匹配种子排队到配置的下载客户端。
 type Subscription struct {
 	Base
-	UserID    string `gorm:"index;size:36" json:"user_id"`
-	Name      string `gorm:"size:128;not null" json:"name"`
-	FeedURL   string `gorm:"size:2048;not null" json:"feed_url"`
-	Filter    string `gorm:"size:512" json:"filter"`
-	Enabled   bool   `gorm:"default:true" json:"enabled"`
+	UserID    string     `gorm:"index;size:36" json:"user_id"`
+	Name      string     `gorm:"size:128;not null" json:"name"`
+	FeedURL   string     `gorm:"size:2048;not null" json:"feed_url"`
+	Filter    string     `gorm:"size:512" json:"filter"`
+	Enabled   bool       `gorm:"default:true" json:"enabled"`
 	LastRunAt *time.Time `json:"last_run_at,omitempty"`
 }
 
-// Setting is a single key/value system-wide preference (used by the admin UI).
+// Setting 是单个键/值系统级偏好（供管理 UI 使用）。
 type Setting struct {
 	Key       string    `gorm:"primaryKey;size:128" json:"key"`
 	Value     string    `gorm:"type:text" json:"value"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// AccessLog is a structured audit-trail entry. Stored in SQLite for the
-// admin Activity panel.
+// AccessLog 是结构化审计跟踪条目。存储在 SQLite 中供管理活动面板使用。
 type AccessLog struct {
 	Base
 	UserID string `gorm:"index;size:36" json:"user_id"`
@@ -205,7 +204,7 @@ type AccessLog struct {
 	Detail string `gorm:"type:text" json:"detail"`
 }
 
-// AllModels returns the slice consumed by gorm.AutoMigrate.
+// AllModels 返回 gorm.AutoMigrate 使用的切片。
 func AllModels() []interface{} {
 	return []interface{}{
 		&User{},
@@ -221,5 +220,12 @@ func AllModels() []interface{} {
 		&Setting{},
 		&AccessLog{},
 		&APIConfig{},
+		&UserPermission{},
+		&RefreshToken{},
+		&ApiConfig{},
+		&DownloadClient{},
+		&NotifyChannel{},
+		&Site{},
+		&STRMRecord{},
 	}
 }

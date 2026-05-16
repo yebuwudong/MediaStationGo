@@ -1,4 +1,4 @@
-import axios, { AxiosError } from 'axios'
+import axios, { AxiosError, type InternalAxiosRequestConfig } from 'axios'
 
 import { useAuthStore } from '../stores/auth'
 
@@ -9,6 +9,22 @@ export const api = axios.create({
   timeout: 30000,
 })
 
+// Flag to prevent multiple simultaneous refresh attempts
+let isRefreshing = false
+let refreshSubscribers: Array<(token: string) => void> = []
+
+// Subscribe to token refresh
+function subscribeTokenRefresh(callback: (token: string) => void) {
+  refreshSubscribers.push(callback)
+}
+
+// Notify all subscribers about new token
+function onTokenRefreshed(newToken: string) {
+  refreshSubscribers.forEach(callback => callback(newToken))
+  refreshSubscribers = []
+}
+
+// Add auth token to requests
 api.interceptors.request.use((config) => {
   const token = useAuthStore.getState().token
   if (token) {
@@ -18,15 +34,54 @@ api.interceptors.request.use((config) => {
   return config
 })
 
+// Handle 401 errors with token refresh
 api.interceptors.response.use(
   (resp) => resp,
-  (err: AxiosError) => {
-    if (err.response?.status === 401) {
+  async (err: AxiosError) => {
+    const originalRequest = err.config as InternalAxiosRequestConfig & { _retry?: boolean }
+
+    // If 401 and not already retried
+    if (err.response?.status === 401 && originalRequest && !originalRequest._retry) {
+      if (isRefreshing) {
+        // Wait for token refresh to complete
+        return new Promise((resolve) => {
+          subscribeTokenRefresh((token: string) => {
+            if (originalRequest.headers) {
+              originalRequest.headers.Authorization = `Bearer ${token}`
+            }
+            resolve(api(originalRequest))
+          })
+        })
+      }
+
+      originalRequest._retry = true
+      isRefreshing = true
+
+      try {
+        const refreshed = await useAuthStore.getState().tokenRefresh()
+        if (refreshed) {
+          const newToken = useAuthStore.getState().token
+          if (newToken && originalRequest.headers) {
+            originalRequest.headers.Authorization = `Bearer ${newToken}`
+          }
+          onTokenRefreshed(newToken || '')
+          isRefreshing = false
+          return api(originalRequest)
+        }
+      } catch (refreshError) {
+        isRefreshing = false
+        refreshSubscribers = []
+      }
+
+      // Refresh failed, logout
       useAuthStore.getState().logout()
       if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
         window.location.href = '/login'
       }
+      return Promise.reject(err)
     }
+
+    // For other errors, just reject
     return Promise.reject(err)
   },
 )
@@ -54,4 +109,14 @@ export function imageURL(remote?: string): string {
   if (!remote) return ''
   if (remote.startsWith('/api/img')) return remote
   return `/api/img?url=${encodeURIComponent(remote)}&${tokenQuery()}`
+}
+
+// getToken returns the current auth token
+export function getToken(): string | null {
+  return useAuthStore.getState().token
+}
+
+// getRefreshToken returns the current refresh token
+export function getRefreshToken(): string | null {
+  return useAuthStore.getState().refreshToken
 }

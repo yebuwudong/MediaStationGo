@@ -25,6 +25,7 @@ func Register(r *gin.Engine, cfg *config.Config, log *zap.Logger, svc *service.C
 		{
 			auth.POST("/login", loginHandler(svc))
 			auth.POST("/register", registerHandler(svc))
+			auth.POST("/refresh", refreshHandler(svc))
 		}
 
 		// Authenticated endpoints.
@@ -34,6 +35,10 @@ func Register(r *gin.Engine, cfg *config.Config, log *zap.Logger, svc *service.C
 			authed.GET("/me", meHandler(svc))
 			authed.PATCH("/me", updateProfileHandler(svc))
 			authed.POST("/me/password", changePasswordHandler(svc))
+			authed.POST("/me/logout", logoutHandler(svc))
+
+			// Permissions.
+			authed.GET("/auth/permissions", getMyPermissionsHandler(svc))
 
 			// Libraries.
 			authed.GET("/libraries", listLibrariesHandler(svc))
@@ -129,6 +134,42 @@ func Register(r *gin.Engine, cfg *config.Config, log *zap.Logger, svc *service.C
 			authed.GET("/recycle", middleware.AdminRequired(), listRecycleHandler(svc))
 
 			authed.GET("/ws", wsHandler(svc))
+
+			// SSE event stream.
+			authed.GET("/events", sseHandler(svc))
+
+			// Download clients.
+			authed.GET("/download-clients", listDownloadClientsHandler(svc))
+			authed.POST("/download-clients", middleware.AdminRequired(), createDownloadClientHandler(svc))
+			authed.GET("/download-clients/:id", getDownloadClientHandler(svc))
+			authed.PUT("/download-clients/:id", middleware.AdminRequired(), updateDownloadClientHandler(svc))
+			authed.DELETE("/download-clients/:id", middleware.AdminRequired(), deleteDownloadClientHandler(svc))
+			authed.POST("/download-clients/:id/test", middleware.AdminRequired(), testDownloadClientHandler(svc))
+
+			// Notify channels.
+			authed.GET("/notify-channels", listNotifyChannelsHandler(svc))
+			authed.GET("/notify-channels/types", getNotifyChannelTypesHandler(svc))
+			authed.POST("/notify-channels", middleware.AdminRequired(), createNotifyChannelHandler(svc))
+			authed.GET("/notify-channels/:id", getNotifyChannelHandler(svc))
+			authed.PUT("/notify-channels/:id", middleware.AdminRequired(), updateNotifyChannelHandler(svc))
+			authed.DELETE("/notify-channels/:id", middleware.AdminRequired(), deleteNotifyChannelHandler(svc))
+			authed.POST("/notify-channels/:id/test", middleware.AdminRequired(), testNotifyChannelHandler(svc))
+
+			// Scheduler.
+			authed.GET("/scheduler/tasks", schedulerListTasksHandler(svc))
+			authed.POST("/scheduler/tasks/:id/run", middleware.AdminRequired(), schedulerRunTaskHandler(svc))
+			authed.GET("/scheduler/status", schedulerGetStatusHandler(svc))
+
+			// Sites (PT 站点管理).
+			siteHandler := NewSiteHandler(svc)
+			authed.GET("/sites", siteHandler.ListSites)
+			authed.GET("/sites/types", siteHandler.GetSiteTypes)
+			authed.GET("/sites/auth-types", siteHandler.GetAuthTypes)
+			authed.POST("/sites", middleware.AdminRequired(), siteHandler.CreateSite)
+			authed.GET("/sites/:id", siteHandler.GetSite)
+			authed.PUT("/sites/:id", middleware.AdminRequired(), siteHandler.UpdateSite)
+			authed.DELETE("/sites/:id", middleware.AdminRequired(), siteHandler.DeleteSite)
+			authed.POST("/sites/:id/test", middleware.AdminRequired(), siteHandler.TestSite)
 		}
 
 		// Admin-only endpoints.
@@ -164,6 +205,24 @@ func Register(r *gin.Engine, cfg *config.Config, log *zap.Logger, svc *service.C
 			// Scheduled jobs.
 			admin.GET("/scheduler", schedulerStatusHandler(svc))
 			admin.POST("/scheduler/:name/run", schedulerRunHandler(svc))
+
+			// User permissions management.
+			admin.GET("/users/:id/permissions", getUserPermissionsHandler(svc))
+			admin.PUT("/users/:id/permissions", updateUserPermissionsHandler(svc))
+			admin.POST("/users/:id/permissions/reset", resetUserPermissionsHandler(svc))
+		}
+
+		// API Config management (admin only).
+		apiConfig := api.Group("/api-config")
+		apiConfig.Use(middleware.AuthRequired(cfg.Secrets.JWTSecret), middleware.AdminRequired())
+		{
+			apiConfig.GET("", listApiConfigsHandler(svc))
+			apiConfig.GET("/providers/list", listProvidersHandler(svc))
+			apiConfig.GET("/:provider", getApiConfigHandler(svc))
+			apiConfig.GET("/:provider/effective", getEffectiveConfigHandler(svc))
+			apiConfig.POST("/:provider", upsertApiConfigHandler(svc))
+			apiConfig.DELETE("/:provider", deleteApiConfigHandler(svc))
+			apiConfig.POST("/:provider/test", testApiConfigHandler(svc))
 		}
 
 		// Emby/Jellyfin compatibility shim (read-only).
@@ -187,4 +246,199 @@ func healthCheck(c *gin.Context) {
 
 func versionInfo(c *gin.Context) {
 	c.JSON(200, gin.H{"name": "MediaStationGo", "version": "0.1.0"})
+}
+
+// ─── 权限 Handler 包装 ────────────────────────────────────────────────────────
+
+func getUserPermissionsHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewPermissionHandler(svc, svc.Log)
+	return h.GetUserPermissions
+}
+
+func updateUserPermissionsHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewPermissionHandler(svc, svc.Log)
+	return h.UpdateUserPermissions
+}
+
+func resetUserPermissionsHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewPermissionHandler(svc, svc.Log)
+	return h.ResetUserPermissions
+}
+
+func getMyPermissionsHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewPermissionHandler(svc, svc.Log)
+	return h.GetMyPermissions
+}
+
+// ─── 刷新 Handler 包装 ────────────────────────────────────────────────────────
+
+func refreshHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewRefreshHandler(svc, svc.Log)
+	return h.RefreshToken
+}
+
+func logoutHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewRefreshHandler(svc, svc.Log)
+	return h.Logout
+}
+
+// ─── API Config Handler 包装 ───────────────────────────────────────────────────
+
+func listApiConfigsHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewApiConfigHandler(svc, svc.Log)
+	return h.ListApiConfigs
+}
+
+func listProvidersHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewApiConfigHandler(svc, svc.Log)
+	return h.ListProviders
+}
+
+func getApiConfigHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewApiConfigHandler(svc, svc.Log)
+	return h.GetApiConfig
+}
+
+func getEffectiveConfigHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewApiConfigHandler(svc, svc.Log)
+	return h.GetEffectiveConfig
+}
+
+func upsertApiConfigHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewApiConfigHandler(svc, svc.Log)
+	return h.UpsertApiConfig
+}
+
+func deleteApiConfigHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewApiConfigHandler(svc, svc.Log)
+	return h.DeleteApiConfig
+}
+
+func testApiConfigHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewApiConfigHandler(svc, svc.Log)
+	return h.TestApiConfig
+}
+
+// ─── Download Client Handler 包装 ─────────────────────────────────────────────
+
+func listDownloadClientsHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewDownloadClientHandler(svc, svc.Log)
+	return h.List
+}
+
+func createDownloadClientHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewDownloadClientHandler(svc, svc.Log)
+	return h.Create
+}
+
+func getDownloadClientHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewDownloadClientHandler(svc, svc.Log)
+	return h.Get
+}
+
+func updateDownloadClientHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewDownloadClientHandler(svc, svc.Log)
+	return h.Update
+}
+
+func deleteDownloadClientHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewDownloadClientHandler(svc, svc.Log)
+	return h.Delete
+}
+
+func testDownloadClientHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewDownloadClientHandler(svc, svc.Log)
+	return h.Test
+}
+
+// ─── Notify Channel Handler 包装 ──────────────────────────────────────────────
+
+func listNotifyChannelsHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewNotifyHandler(svc, svc.Log)
+	return h.List
+}
+
+func getNotifyChannelTypesHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewNotifyHandler(svc, svc.Log)
+	return h.GetTypes
+}
+
+func createNotifyChannelHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewNotifyHandler(svc, svc.Log)
+	return h.Create
+}
+
+func getNotifyChannelHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewNotifyHandler(svc, svc.Log)
+	return h.Get
+}
+
+func updateNotifyChannelHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewNotifyHandler(svc, svc.Log)
+	return h.Update
+}
+
+func deleteNotifyChannelHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewNotifyHandler(svc, svc.Log)
+	return h.Delete
+}
+
+func testNotifyChannelHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewNotifyHandler(svc, svc.Log)
+	return h.Test
+}
+
+// ─── Scheduler Handler 包装 ──────────────────────────────────────────────────
+
+func schedulerListTasksHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewSchedulerHandler(svc, svc.Log)
+	return h.ListTasks
+}
+
+func schedulerRunTaskHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewSchedulerHandler(svc, svc.Log)
+	return h.RunTask
+}
+
+func schedulerGetStatusHandler(svc *service.Container) gin.HandlerFunc {
+	h := NewSchedulerHandler(svc, svc.Log)
+	return h.GetStatus
+}
+
+// ─── SSE Handler ──────────────────────────────────────────────────────────────
+
+func sseHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// 获取 SSE Hub
+		hub := svc.SSEHub
+
+		// 设置 SSE 响应头
+		c.Header("Content-Type", "text/event-stream")
+		c.Header("Cache-Control", "no-cache")
+		c.Header("Connection", "keep-alive")
+		c.Header("X-Accel-Buffering", "no")
+
+		// 订阅事件流
+		client := hub.Subscribe()
+		defer hub.Unsubscribe(client)
+
+		// 发送初始连接成功事件
+		c.SSEvent("connected", gin.H{"status": "ok"})
+		c.Writer.Flush()
+
+		// 持续发送事件直到客户端断开连接
+		clientGone := c.Request.Context().Done()
+		for {
+			select {
+			case <-clientGone:
+				return
+			case event, ok := <-client.Ch:
+				if !ok {
+					return
+				}
+				c.SSEvent(event.Type, event.Payload)
+				c.Writer.Flush()
+			}
+		}
+	}
 }
