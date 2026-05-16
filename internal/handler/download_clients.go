@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
 
@@ -16,6 +17,9 @@ func listDownloadClientsHandler(svc *service.Container) gin.HandlerFunc {
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
+		}
+		if rows == nil {
+			rows = []model.DownloadClient{}
 		}
 		c.JSON(http.StatusOK, rows)
 	}

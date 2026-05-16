@@ -16,6 +16,9 @@ func trendingHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		if items == nil {
+			items = []service.Match{}
+		}
 		c.JSON(http.StatusOK, gin.H{"items": items})
 	}
 }
@@ -26,6 +29,9 @@ func popularHandler(svc *service.Container) gin.HandlerFunc {
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
+		}
+		if items == nil {
+			items = []service.Match{}
 		}
 		c.JSON(http.StatusOK, gin.H{"items": items})
 	}

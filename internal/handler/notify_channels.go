@@ -16,6 +16,10 @@ func listNotifyChannelsHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		if rows == nil {
+			c.JSON(http.StatusOK, []struct{}{})
+			return
+		}
 		c.JSON(http.StatusOK, rows)
 	}
 }

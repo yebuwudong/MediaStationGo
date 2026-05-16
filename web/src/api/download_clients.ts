@@ -28,7 +28,7 @@ export interface DownloadClientInput {
 
 export const downloadClientsAPI = {
   list: () =>
-    api.get<DownloadClient[]>('/admin/download/clients').then((r) => r.data),
+    api.get<DownloadClient[]>('/admin/download/clients').then((r) => r.data ?? []),
 
   create: (input: DownloadClientInput) =>
     api.post<DownloadClient>('/admin/download/clients', input).then((r) => r.data),

@@ -15,7 +15,7 @@ export interface DiscoverItem extends Partial<Media> {
 
 export const discoverAPI = {
   trending: () =>
-    api.get<{ items: DiscoverItem[] }>('/discover/trending').then((r) => r.data.items),
+    api.get<{ items: DiscoverItem[] }>('/discover/trending').then((r) => r.data.items ?? []),
   popular: () =>
-    api.get<{ items: DiscoverItem[] }>('/discover/popular').then((r) => r.data.items),
+    api.get<{ items: DiscoverItem[] }>('/discover/popular').then((r) => r.data.items ?? []),
 }

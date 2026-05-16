@@ -13,7 +13,7 @@ export interface NotifyChannelInput {
 // notifyChannelsAPI wraps the admin /admin/notify/channels surface.
 export const notifyChannelsAPI = {
   list: () =>
-    api.get<NotifyChannel[]>('/admin/notify/channels').then((r) => r.data),
+    api.get<NotifyChannel[]>('/admin/notify/channels').then((r) => r.data ?? []),
 
   create: (input: NotifyChannelInput) =>
     api.post<NotifyChannel>('/admin/notify/channels', input).then((r) => r.data),
