@@ -229,6 +229,52 @@ type Site struct {
 	Downloader  string `gorm:"size:50" json:"downloader,omitempty"`
 }
 
+// NotifyChannel is one named outbound notification destination.
+//
+// The Config column holds a JSON blob whose schema depends on the
+// ChannelType (telegram/wechat/bark/webhook):
+//
+//	telegram → {bot_token, chat_id}
+//	wechat   → {sendkey}
+//	bark     → {device_key, server?}
+//	webhook  → {url, method, headers (JSON string), body_template}
+//
+// The Events column is a JSON array of event-type strings the channel
+// subscribes to; an empty array means "all events".
+type NotifyChannel struct {
+	Base
+	Name        string `gorm:"size:128;not null" json:"name"`
+	ChannelType string `gorm:"size:32;not null" json:"channel_type"`
+	Config      string `gorm:"type:text;not null" json:"config"`
+	Enabled     bool   `gorm:"default:true" json:"enabled"`
+	Events      string `gorm:"type:text;default:'[]'" json:"events"`
+}
+
+// PlayProfile lets one user define multiple "viewing personas" with
+// different content-rating limits, library access, and player defaults.
+// The original Vue project sketched this out as a forward-looking
+// feature; we materialise it server-side so the React port can fully
+// function without dropping the screen.
+//
+// AllowedLibraryIDs is a JSON array of library UUIDs (empty = all).
+type PlayProfile struct {
+	Base
+	UserID                string `gorm:"index;size:36;not null" json:"user_id"`
+	Name                  string `gorm:"size:64;not null" json:"name"`
+	IsDefault             bool   `gorm:"default:false" json:"is_default"`
+	ContentRatingLimit    string `gorm:"size:16" json:"content_rating_limit,omitempty"`
+	AllowAdult            bool   `gorm:"default:false" json:"allow_adult"`
+	RequirePIN            bool   `gorm:"default:false" json:"require_pin"`
+	PINHash               string `gorm:"size:128" json:"-"`
+	PreferredSubtitleLang string `gorm:"size:16" json:"preferred_subtitle_lang,omitempty"`
+	PreferredAudioLang    string `gorm:"size:16" json:"preferred_audio_lang,omitempty"`
+	AutoplayNext          bool   `gorm:"default:true" json:"autoplay_next"`
+	SkipIntro             bool   `gorm:"default:false" json:"skip_intro"`
+	AllowedLibraryIDs     string `gorm:"type:text;default:'[]'" json:"allowed_library_ids"`
+	TotalWatchTime        int64  `gorm:"default:0" json:"total_watch_time"`
+	LastActiveAt          *time.Time `json:"last_active_at,omitempty"`
+}
+
 // AllModels returns the slice consumed by gorm.AutoMigrate.
 func AllModels() []interface{} {
 	return []interface{}{
@@ -246,5 +292,7 @@ func AllModels() []interface{} {
 		&Site{},
 		&AccessLog{},
 		&APIConfig{},
+		&NotifyChannel{},
+		&PlayProfile{},
 	}
 }

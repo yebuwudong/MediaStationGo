@@ -84,6 +84,15 @@ const StrmPage = lazy(() =>
 const ToolsPage = lazy(() =>
   import('./pages/ToolsPage').then((m) => ({ default: m.ToolsPage })),
 )
+const ProfileManagementPage = lazy(() =>
+  import('./pages/ProfileManagementPage').then((m) => ({ default: m.ProfileManagementPage })),
+)
+const NotifyChannelsPage = lazy(() =>
+  import('./pages/NotifyChannelsPage').then((m) => ({ default: m.NotifyChannelsPage })),
+)
+const SettingsPage = lazy(() =>
+  import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })),
+)
 
 const Loading = () => <p className="px-6 py-8 text-slate-500">加载中…</p>
 
@@ -118,6 +127,7 @@ export default function App() {
           <Route path="sites" element={<SitesPage />} />
           <Route path="site-search" element={<SiteSearchPage />} />
           <Route path="ai" element={<AIAssistantPage />} />
+          <Route path="play-profiles" element={<ProfileManagementPage />} />
           <Route
             path="files"
             element={
@@ -187,6 +197,22 @@ export default function App() {
             element={
               <RequireAdmin>
                 <ToolsPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="notify-channels"
+            element={
+              <RequireAdmin>
+                <NotifyChannelsPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="settings"
+            element={
+              <RequireAdmin>
+                <SettingsPage />
               </RequireAdmin>
             }
           />

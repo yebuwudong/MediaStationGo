@@ -138,6 +138,39 @@ func Register(r *gin.Engine, cfg *config.Config, log *zap.Logger, svc *service.C
 			authed.GET("/recycle", middleware.AdminRequired(), listRecycleHandler(svc))
 
 			authed.GET("/ws", wsHandler(svc))
+
+			// ── Auxiliary endpoints used by the React UI rails ──
+			authed.GET("/media/recent", recentMediaHandler(svc))
+			authed.GET("/media/stats", mediaStatsHandler(svc))
+
+			// Watch history (extra surface beyond /history).
+			authed.GET("/watch-history", historyListHandler(svc))
+			authed.GET("/watch-history/stats", historyStatsHandler(svc))
+			authed.GET("/watch-history/continue", historyContinueHandler(svc))
+			authed.DELETE("/watch-history", historyDeleteHandler(svc))
+			authed.DELETE("/watch-history/:id", historyDeleteOneHandler(svc))
+
+			// Multi-section TMDb feed used by DiscoverPage.
+			authed.GET("/discover/sections", discoverSectionsHandler(svc))
+			authed.GET("/discover/feed", discoverFeedHandler(svc))
+
+			// System metadata + read-only scheduler view.
+			authed.GET("/system/info", systemInfoHandler(svc))
+			authed.GET("/system/status", systemStatusHandler(svc))
+			authed.GET("/system/scheduler", systemSchedulerHandler(svc))
+
+			// Richer dashboard rails.
+			authed.GET("/stats/overview", statsOverviewHandler(svc))
+			authed.GET("/stats/trend", statsTrendHandler(svc))
+			authed.GET("/stats/top-content", statsTopContentHandler(svc))
+			authed.GET("/stats/libraries", statsLibrariesHandler(svc))
+			authed.GET("/stats/monitor", statsMonitorHandler(svc))
+
+			// Multi-persona play profiles (caller-scoped, admins via ?all=true).
+			authed.GET("/play-profiles", listPlayProfilesHandler(svc))
+			authed.POST("/play-profiles", createPlayProfileHandler(svc))
+			authed.PUT("/play-profiles/:id", updatePlayProfileHandler(svc))
+			authed.DELETE("/play-profiles/:id", deletePlayProfileHandler(svc))
 		}
 
 		// Admin-only endpoints.
@@ -159,6 +192,13 @@ func Register(r *gin.Engine, cfg *config.Config, log *zap.Logger, svc *service.C
 
 			// Notifications (test endpoint).
 			admin.POST("/notify/test", notifyTestHandler(svc))
+
+			// Notify channels CRUD + per-channel test.
+			admin.GET("/notify/channels", listNotifyChannelsHandler(svc))
+			admin.POST("/notify/channels", createNotifyChannelHandler(svc))
+			admin.PUT("/notify/channels/:id", updateNotifyChannelHandler(svc))
+			admin.DELETE("/notify/channels/:id", deleteNotifyChannelHandler(svc))
+			admin.POST("/notify/channels/:id/test", testNotifyChannelHandler(svc))
 
 			// File organizer.
 			admin.POST("/media/:id/organize", organizeMediaHandler(svc))

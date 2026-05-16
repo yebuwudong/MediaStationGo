@@ -30,23 +30,27 @@ type Container struct {
 	Subscription    *SubscriptionRepository
 	Setting         *SettingRepository
 	Log             *AccessLogRepository
+	NotifyChannel   *NotifyChannelRepository
+	PlayProfile     *PlayProfileRepository
 }
 
 // New wires every repository to a single *gorm.DB.
 func New(db *gorm.DB) *Container {
 	return &Container{
-		DB:           db,
-		User:         &UserRepository{db: db},
-		Library:      &LibraryRepository{db: db},
-		Media:        &MediaRepository{db: db},
-		Series:       &SeriesRepository{db: db},
-		History:      &HistoryRepository{db: db},
-		Favorite:     &FavoriteRepository{db: db},
-		Playlist:     &PlaylistRepository{db: db},
-		Download:     &DownloadRepository{db: db},
-		Subscription: &SubscriptionRepository{db: db},
-		Setting:      &SettingRepository{db: db},
-		Log:          &AccessLogRepository{db: db},
+		DB:            db,
+		User:          &UserRepository{db: db},
+		Library:       &LibraryRepository{db: db},
+		Media:         &MediaRepository{db: db},
+		Series:        &SeriesRepository{db: db},
+		History:       &HistoryRepository{db: db},
+		Favorite:      &FavoriteRepository{db: db},
+		Playlist:      &PlaylistRepository{db: db},
+		Download:      &DownloadRepository{db: db},
+		Subscription:  &SubscriptionRepository{db: db},
+		Setting:       &SettingRepository{db: db},
+		Log:           &AccessLogRepository{db: db},
+		NotifyChannel: &NotifyChannelRepository{db: db},
+		PlayProfile:   &PlayProfileRepository{db: db},
 	}
 }
 
@@ -388,4 +392,112 @@ func (r *AccessLogRepository) Recent(ctx context.Context, limit int) ([]model.Ac
 	var rows []model.AccessLog
 	err := r.db.WithContext(ctx).Order("created_at desc").Limit(limit).Find(&rows).Error
 	return rows, err
+}
+
+
+// ─── Notify Channel ──────────────────────────────────────────────────────────
+
+// NotifyChannelRepository persists model.NotifyChannel records.
+type NotifyChannelRepository struct{ db *gorm.DB }
+
+// Create inserts a new notify channel.
+func (r *NotifyChannelRepository) Create(ctx context.Context, n *model.NotifyChannel) error {
+	return r.db.WithContext(ctx).Create(n).Error
+}
+
+// FindByID returns the channel or (nil, nil).
+func (r *NotifyChannelRepository) FindByID(ctx context.Context, id string) (*model.NotifyChannel, error) {
+	var n model.NotifyChannel
+	err := r.db.WithContext(ctx).Where("id = ?", id).First(&n).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &n, nil
+}
+
+// List returns every channel ordered by creation time desc.
+func (r *NotifyChannelRepository) List(ctx context.Context) ([]model.NotifyChannel, error) {
+	var rows []model.NotifyChannel
+	err := r.db.WithContext(ctx).Order("created_at desc").Find(&rows).Error
+	return rows, err
+}
+
+// ListEnabled is the variant the dispatcher uses; honours Enabled flag.
+func (r *NotifyChannelRepository) ListEnabled(ctx context.Context) ([]model.NotifyChannel, error) {
+	var rows []model.NotifyChannel
+	err := r.db.WithContext(ctx).Where("enabled = ?", true).
+		Order("created_at desc").Find(&rows).Error
+	return rows, err
+}
+
+// Update applies a partial patch addressed by ID. The map keys must use
+// snake_case GORM column names.
+func (r *NotifyChannelRepository) Update(ctx context.Context, id string, patch map[string]any) error {
+	return r.db.WithContext(ctx).Model(&model.NotifyChannel{}).
+		Where("id = ?", id).Updates(patch).Error
+}
+
+// Delete soft-deletes a channel.
+func (r *NotifyChannelRepository) Delete(ctx context.Context, id string) error {
+	return r.db.WithContext(ctx).Delete(&model.NotifyChannel{}, "id = ?", id).Error
+}
+
+// ─── Play Profile ────────────────────────────────────────────────────────────
+
+// PlayProfileRepository persists model.PlayProfile records.
+type PlayProfileRepository struct{ db *gorm.DB }
+
+// Create inserts a new play profile.
+func (r *PlayProfileRepository) Create(ctx context.Context, p *model.PlayProfile) error {
+	return r.db.WithContext(ctx).Create(p).Error
+}
+
+// FindByID returns the profile or (nil, nil).
+func (r *PlayProfileRepository) FindByID(ctx context.Context, id string) (*model.PlayProfile, error) {
+	var p model.PlayProfile
+	err := r.db.WithContext(ctx).Where("id = ?", id).First(&p).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// ListByUser returns every profile owned by a user.
+func (r *PlayProfileRepository) ListByUser(ctx context.Context, userID string) ([]model.PlayProfile, error) {
+	var rows []model.PlayProfile
+	err := r.db.WithContext(ctx).Where("user_id = ?", userID).
+		Order("is_default desc, created_at asc").Find(&rows).Error
+	return rows, err
+}
+
+// List returns every profile across users (admin view).
+func (r *PlayProfileRepository) List(ctx context.Context) ([]model.PlayProfile, error) {
+	var rows []model.PlayProfile
+	err := r.db.WithContext(ctx).
+		Order("user_id asc, is_default desc, created_at asc").Find(&rows).Error
+	return rows, err
+}
+
+// ClearDefaultsFor flips all is_default flags to false for the given
+// user; called inside the same transaction that promotes a new default.
+func (r *PlayProfileRepository) ClearDefaultsFor(ctx context.Context, userID string) error {
+	return r.db.WithContext(ctx).Model(&model.PlayProfile{}).
+		Where("user_id = ?", userID).Update("is_default", false).Error
+}
+
+// Update applies a partial patch addressed by ID.
+func (r *PlayProfileRepository) Update(ctx context.Context, id string, patch map[string]any) error {
+	return r.db.WithContext(ctx).Model(&model.PlayProfile{}).
+		Where("id = ?", id).Updates(patch).Error
+}
+
+// Delete soft-deletes a profile.
+func (r *PlayProfileRepository) Delete(ctx context.Context, id string) error {
+	return r.db.WithContext(ctx).Delete(&model.PlayProfile{}, "id = ?", id).Error
 }

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   Activity,
+  Bell,
   Cast,
   Clock,
   CloudDownload,
@@ -22,8 +23,10 @@ import {
   Rss,
   Search,
   Settings,
+  Sliders,
   Sparkles,
   Trash2,
+  UserCog,
   Wrench,
   Library as LibraryIcon,
   User as UserIcon,
@@ -98,6 +101,7 @@ export function Layout() {
             账号
           </div>
           <SidebarLink to="/profile" icon={<UserIcon size={18} />} label="个人资料" />
+          <SidebarLink to="/play-profiles" icon={<UserCog size={18} />} label="观影 Profile" />
 
           {user?.role === 'admin' && (
             <>
@@ -113,6 +117,8 @@ export function Layout() {
               <SidebarLink to="/api-configs" icon={<KeyRound size={18} />} label="API 配置" />
               <SidebarLink to="/strm" icon={<Link2 size={18} />} label="STRM 管理" />
               <SidebarLink to="/tools" icon={<Wrench size={18} />} label="运维工具" />
+              <SidebarLink to="/notify-channels" icon={<Bell size={18} />} label="通知渠道" />
+              <SidebarLink to="/settings" icon={<Sliders size={18} />} label="系统设置" />
               <SidebarLink to="/recycle" icon={<Trash2 size={18} />} label="回收站" />
               <SidebarLink to="/admin" icon={<Settings size={18} />} label="管理后台" />
             </>

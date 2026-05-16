@@ -53,6 +53,8 @@ type Container struct {
 	Emby         *EmbyService
 	Backup       *BackupService
 	Notifier     *NotifierService
+	NotifyChannels *NotifyChannelService
+	PlayProfiles *PlayProfileService
 	Organizer    *OrganizerService
 	Douban       *DoubanProvider
 	Site         *SiteService
@@ -89,6 +91,8 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 	emby := NewEmbyService(cfg, log, repos)
 	backup := NewBackupService(cfg, log, repos.DB)
 	notifier := NewNotifierService(log, repos)
+	notifyChannels := NewNotifyChannelService(log, repos)
+	playProfiles := NewPlayProfileService(log, repos)
 	organizer := NewOrganizerService(cfg, log, repos)
 	douban := NewDoubanProvider(cfg, log)
 	siteService := NewSiteService(log, repos)
@@ -134,6 +138,8 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 		Emby:         emby,
 		Backup:       backup,
 		Notifier:     notifier,
+		NotifyChannels: notifyChannels,
+		PlayProfiles: playProfiles,
 		Organizer:    organizer,
 		Douban:       douban,
 		Site:         siteService,
