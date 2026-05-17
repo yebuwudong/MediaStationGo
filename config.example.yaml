@@ -93,3 +93,17 @@ flaresolverr:
   url: "http://localhost:8191"  # FlareSolverr 服务地址
   session: "mediastation"        # 会话名称（可选，保持 cookie 持久化）
   timeout: 60                   # 请求超时（秒）
+
+# 整理配置（智能分类）
+organizer:
+  smart_classify: false           # 是否启用智能分类整理
+  categories:
+    chinese_movie: "华语电影"
+    foreign_movie: "外语电影"
+    euus_movie: "欧美电影"
+    jk_movie: "日韩电影"
+    domestic_tv: "国产剧"
+    euus_tv: "欧美剧"
+    jk_tv: "日韩剧"
+    jp_anime: "日番"
+    cn_anime: "国漫"

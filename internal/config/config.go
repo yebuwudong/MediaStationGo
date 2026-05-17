@@ -33,6 +33,7 @@ type Config struct {
 	AI         AIConfig         `mapstructure:"ai"`
 	FlareSolverr FlareSolverrConfig `mapstructure:"flaresolverr"`
 	ApiConfig  ApiConfigConfig  `mapstructure:"api_config"`
+	Organizer  OrganizerConfig  `mapstructure:"organizer"`
 }
 
 // ApiConfigConfig API 配置相关设置。
@@ -130,6 +131,12 @@ type AIConfig struct {
 	MaxConcurrent int    `mapstructure:"max_concurrent"`
 }
 
+// OrganizerConfig 配置媒体文件智能分类整理。
+type OrganizerConfig struct {
+	SmartClassify bool              `mapstructure:"smart_classify"`
+	Categories   map[string]string `mapstructure:"categories"`
+}
+
 // FlareSolverrConfig 配置 FlareSolverr 服务（用于绕过 Cloudflare/WAF）。
 type FlareSolverrConfig struct {
 	Enabled bool   `mapstructure:"enabled"`
@@ -225,6 +232,17 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("flaresolverr.url", "http://localhost:8191")
 	v.SetDefault("flaresolverr.session", "mediastation")
 	v.SetDefault("flaresolverr.timeout", 60)
+
+	v.SetDefault("organizer.smart_classify", false)
+	v.SetDefault("organizer.categories.chinese_movie", "华语电影")
+	v.SetDefault("organizer.categories.foreign_movie", "外语电影")
+	v.SetDefault("organizer.categories.euus_movie", "欧美电影")
+	v.SetDefault("organizer.categories.jk_movie", "日韩电影")
+	v.SetDefault("organizer.categories.domestic_tv", "国产剧")
+	v.SetDefault("organizer.categories.euus_tv", "欧美剧")
+	v.SetDefault("organizer.categories.jk_tv", "日韩剧")
+	v.SetDefault("organizer.categories.jp_anime", "日番")
+	v.SetDefault("organizer.categories.cn_anime", "国漫")
 
 	v.SetDefault("transcoder.encoder", "")
 	v.SetDefault("transcoder.preset", "veryfast")

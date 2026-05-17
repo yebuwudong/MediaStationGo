@@ -79,6 +79,9 @@ type Media struct {
 	ScrapeStatus string  `gorm:"size:16;default:pending" json:"scrape_status"`
 	TMDbID       int     `json:"tmdb_id"`
 	BangumiID    int     `json:"bangumi_id"`
+	Languages    string  `gorm:"size:64"  json:"languages,omitempty"`  // 逗号分隔的 ISO 639-1 代码，如 "zh,en"
+	Countries    string  `gorm:"size:128" json:"countries,omitempty"`  // 逗号分隔的 ISO 3166-1，如 "CN,US"
+	Genres       string  `gorm:"size:255" json:"genres,omitempty"`     // 逗号分隔的类型名，如 "Action,Animation"
 	NSFW         bool    `gorm:"default:false" json:"nsfw"`
 
 	// STRMURL is the indirection target for .strm files: when present the

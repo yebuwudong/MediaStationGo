@@ -96,6 +96,12 @@ const GROUPS: SettingGroup[] = [
         type: 'toggle',
       },
       {
+        key: 'organizer.smart_classify',
+        label: '启用智能分类',
+        type: 'toggle',
+        hint: '根据元数据（语言/国家/类型）自动分类到子目录（如：华语电影、欧美剧、日番）',
+      },
+      {
         key: 'organize.target_dir',
         label: '整理目标目录',
         type: 'text',

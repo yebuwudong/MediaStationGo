@@ -154,6 +154,34 @@ func (s *ScraperService) EnrichOne(ctx context.Context, m *model.Media) error {
 	if match.BangumiID > 0 {
 		updates["bangumi_id"] = match.BangumiID
 	}
+
+	// Fetch extended metadata (languages, countries, genres) from TMDb
+	if match.TMDbID > 0 && s.tmdb != nil && s.tmdb.Enabled() {
+		mediaType := s.determineMediaType(lib, match)
+		details, err := s.tmdb.GetDetails(ctx, match.TMDbID, mediaType)
+		if err != nil {
+			s.log.Warn("failed to get details from tmdb",
+				zap.Int("tmdb_id", match.TMDbID),
+				zap.String("type", mediaType),
+				zap.Error(err))
+		} else if details != nil {
+			if len(details.Languages) > 0 {
+				updates["languages"] = strings.Join(details.Languages, ",")
+			}
+			if len(details.Countries) > 0 {
+				updates["countries"] = strings.Join(details.Countries, ",")
+			}
+			if len(details.Genres) > 0 {
+				updates["genres"] = strings.Join(details.Genres, ",")
+			}
+			s.log.Debug("enrich: saved extended metadata",
+				zap.String("media_id", m.ID),
+				zap.Strings("languages", details.Languages),
+				zap.Strings("countries", details.Countries),
+				zap.Strings("genres", details.Genres))
+		}
+	}
+
 	if err := s.repo.DB.Model(&model.Media{}).Where("id = ?", m.ID).
 		Updates(updates).Error; err != nil {
 		return err
@@ -241,4 +269,20 @@ func (s *ScraperService) AnyEnabled() bool {
 		return true
 	}
 	return false
+}
+
+// determineMediaType returns "tv" for TV shows and "movie" for movies.
+// It uses the library type as the primary signal.
+func (s *ScraperService) determineMediaType(lib *model.Library, match *Match) string {
+	if lib != nil {
+		switch lib.Type {
+		case "tv", "anime":
+			return "tv"
+		}
+	}
+	// Fallback: if Bangumi ID is present, treat as TV/anime
+	if match != nil && match.BangumiID > 0 {
+		return "tv"
+	}
+	return "movie"
 }

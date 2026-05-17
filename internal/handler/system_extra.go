@@ -75,6 +75,7 @@ func schemaHandler(_ *service.Container) gin.HandlerFunc {
 					"label": "整理 & 刮削",
 					"items": []gin.H{
 						{"key": "organize.auto", "type": "toggle"},
+						{"key": "organizer.smart_classify", "type": "toggle"},
 						{"key": "organize.movie_format", "type": "text"},
 						{"key": "organize.tv_format", "type": "text"},
 						{"key": "organize.anime_format", "type": "text"},
