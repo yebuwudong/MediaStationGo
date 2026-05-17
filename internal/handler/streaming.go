@@ -97,9 +97,10 @@ func reprobeHandler(svc *service.Container) gin.HandlerFunc {
 				c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 				return
 			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			// ffprobe unavailable or file inaccessible — still 200 with error info
+			c.JSON(http.StatusOK, gin.H{"code": 1, "error": err.Error()})
 			return
 		}
-		c.Status(http.StatusNoContent)
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
 	}
 }

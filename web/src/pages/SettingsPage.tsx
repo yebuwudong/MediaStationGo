@@ -1,10 +1,11 @@
 import { FormEvent, useEffect, useState } from 'react'
-import { Loader2, Save, SettingsIcon } from 'lucide-react'
+import { FolderOpen, Loader2, Save, SettingsIcon } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 import { AppFooter } from '../components/AppFooter'
 import { adminAPI } from '../api/admin'
-import type { Setting } from '../types'
+import { libraryAPI } from '../api/library'
+import type { Library, Setting } from '../types'
 
 // SettingsPage replaces the Vue SettingsView's General / Organize /
 // Scrape / Adult tabs. The Go backend stores settings as a single
@@ -33,7 +34,7 @@ const GROUPS: SettingGroup[] = [
   {
     key: 'general',
     label: '常规',
-    description: 'TMDb / 转码引擎默认参数',
+    description: '语言 / 转码引擎参数（API 密钥请在管理后台 → 外部API 配置）',
     items: [
       {
         key: 'tmdb.language',
@@ -88,12 +89,19 @@ const GROUPS: SettingGroup[] = [
   {
     key: 'organize',
     label: '整理 & 刮削',
-    description: '媒体文件命名 + 自动刮削开关',
+    description: '媒体文件命名 + 自动刮削 + 整理目标',
     items: [
       {
         key: 'organize.auto',
         label: '入库时自动整理',
         type: 'toggle',
+      },
+      {
+        key: 'organize.target_dir',
+        label: '整理目标目录',
+        type: 'text',
+        hint: '留空则默认整理到各媒体库对应路径（见下方参考）',
+        placeholder: '/mnt/media/organized',
       },
       {
         key: 'organize.movie_format',
@@ -179,16 +187,21 @@ export function SettingsPage() {
   const [dirty, setDirty] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [libraries, setLibraries] = useState<Library[]>([])
 
   const refresh = async () => {
     setLoading(true)
     try {
-      const all = await adminAPI.listSettings()
+      const [all, libs] = await Promise.all([
+        adminAPI.listSettings(),
+        libraryAPI.list().catch(() => [] as Library[]),
+      ])
       const idx: Record<string, string> = {}
       for (const s of all as Setting[]) {
         if (ALL_KEYS.has(s.key)) idx[s.key] = s.value
       }
       setValues(idx)
+      setLibraries(libs as Library[])
       setDirty(new Set())
     } finally {
       setLoading(false)
@@ -235,7 +248,7 @@ export function SettingsPage() {
         <div>
           <h1 className="font-display text-3xl font-bold text-white">系统设置</h1>
           <p className="text-sm text-slate-400">
-            按分组编辑 TMDb / 整理 / 刮削 / 下载器等关键配置
+            按分组编辑转码 / 整理 / 刮削 / 下载器等关键配置
           </p>
         </div>
       </div>
@@ -288,6 +301,44 @@ export function SettingsPage() {
             </button>
           </div>
         </form>
+      )}
+
+      {/* 整理 tab 时显示各媒体库默认路径 */}
+      {!loading && activeGroup === 'organize' && libraries.length > 0 && (
+        <div className="glass-panel">
+          <div className="mb-3 flex items-center gap-2 text-sm text-slate-300">
+            <FolderOpen size={16} className="text-primary-400" />
+            <span>默认整理路径参考（未设目标目录时按媒体库归类）</span>
+          </div>
+          <table className="w-full text-left text-sm">
+            <thead className="text-xs uppercase tracking-wider text-slate-500">
+              <tr>
+                <th className="py-2">媒体库</th>
+                <th>类型</th>
+                <th>路径</th>
+                <th>整理后示例</th>
+              </tr>
+            </thead>
+            <tbody>
+              {libraries.map((lib) => (
+                <tr key={lib.id} className="border-t border-white/5">
+                  <td className="py-2 font-medium text-white">{lib.name}</td>
+                  <td className="text-slate-400">
+                    {lib.type === 'movie' ? '电影' : lib.type === 'tv' ? '电视剧' : lib.type === 'anime' ? '动漫' : '音乐'}
+                  </td>
+                  <td className="font-mono text-xs text-slate-400">{lib.path}</td>
+                  <td className="font-mono text-[11px] text-slate-500">
+                    {lib.type === 'movie'
+                      ? `${lib.path}/片名 (2024)/片名 (2024).mkv`
+                      : lib.type === 'tv' || lib.type === 'anime'
+                        ? `${lib.path}/剧名/Season 01/剧名 - S01E01.mkv`
+                        : lib.path}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       <AppFooter className="mt-6" />

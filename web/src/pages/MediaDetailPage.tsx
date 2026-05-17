@@ -78,9 +78,20 @@ export function MediaDetailPage() {
 
   const reprobe = async () => {
     if (!media) return
-    await api.post(`/media/${media.id}/probe`)
-    toast.success('已重新探测')
-    await refresh()
+    try {
+      const r = await api.post(`/media/${media.id}/probe`)
+      if (r.data?.code === 0) {
+        toast.success('已重新探测')
+      } else {
+        toast.error(r.data?.error || '探测失败')
+      }
+      await refresh()
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+        '探测失败，请检查 ffprobe 是否已安装'
+      toast.error(msg)
+    }
   }
 
   const exportNFO = async () => {

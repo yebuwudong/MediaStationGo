@@ -15,7 +15,6 @@ import {
   Heart,
   Home,
   GalleryHorizontalEnd,
-  KeySquare,
   Link2,
   ListChecks,
   ListMusic,
@@ -137,7 +136,6 @@ export function Layout() {
                 <SidebarLink to="/duplicates" icon={<Copy size={18} />} label="重复文件" />
                 <SidebarLink to="/strm" icon={<Link2 size={18} />} label="STRM 管理" />
                 <SidebarLink to="/tools" icon={<Wrench size={18} />} label="运维工具" />
-                <SidebarLink to="/license" icon={<KeySquare size={18} />} label="许可证" />
                 <SidebarLink to="/assistant" icon={<MessageSquare size={18} />} label="AI 对话" />
                 <SidebarLink to="/settings" icon={<Sliders size={18} />} label="系统设置" />
                 <SidebarLink to="/recycle" icon={<Trash2 size={18} />} label="回收站" />

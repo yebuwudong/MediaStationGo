@@ -323,6 +323,24 @@ export interface Site {
   cookie?: string       // decrypted only in detail view
   api_key?: string      // decrypted only in detail view
   auth_header?: string  // decrypted only in detail view
+
+  // 高级设置
+  user_agent?: string         // 自定义 User-Agent
+  rss_url?: string            // RSS 订阅地址
+  timeout?: number            // 请求超时(秒), 默认 15
+  priority?: number           // 优先级, 越小越优先, 默认 50
+  use_proxy?: boolean         // 是否使用代理
+  rate_limit?: boolean        // 是否限制访问频率
+  browser_emulation?: boolean // 浏览器仿真(防爬)
+
+  // 状态与统计
+  login_status?: string       // unknown / ok / fail
+  upload_bytes?: number       // 上传字节统计
+  download_bytes?: number     // 下载字节统计
+
+  // 关联下载器
+  downloader?: string         // qbittorrent / transmission / aria2
+
   enabled: boolean
   is_default: boolean
   extra?: string

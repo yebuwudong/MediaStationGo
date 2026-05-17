@@ -161,10 +161,14 @@ export function SitesPage() {
   const handleTest = async (id: string) => {
     setTestingId(id)
     try {
-      await sitesAPI.test(id)
-      toast.success('连接测试成功')
-    } catch {
-      toast.error('连接测试失败')
+      const res = await sitesAPI.test(id)
+      const msg = res?.message || '连接测试成功'
+      toast.success(msg)
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ??
+        '连接测试失败'
+      toast.error(msg)
     } finally {
       setTestingId(null)
     }

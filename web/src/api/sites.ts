@@ -1,27 +1,8 @@
 import { api } from './client'
 
 // ─── TypeScript interfaces ──────────────────────────────────────────────
-
-export interface Site {
-  id: string
-  name: string
-  base_url: string
-  site_type: string
-  auth_type: string
-  cookie?: string
-  api_key?: string
-  auth_header?: string
-  user_agent?: string
-  rss_url?: string
-  timeout: number
-  priority: number
-  use_proxy: boolean
-  enabled: boolean
-  login_status: string
-  downloader?: string
-  created_at: string
-  updated_at: string
-}
+// Note: the canonical Site type lives in ../types/index.ts
+// The backend uses json:"url" (not base_url) and json:"type" (not site_type).
 
 export interface SiteSearchResult {
   site_name: string
@@ -37,19 +18,15 @@ export interface SiteSearchResult {
 
 export interface CreateSiteInput {
   name: string
-  base_url: string
-  site_type?: string
+  url: string
+  type?: string
   auth_type?: string
   cookie?: string
   api_key?: string
   auth_header?: string
-  user_agent?: string
-  rss_url?: string
-  timeout?: number
-  priority?: number
-  use_proxy?: boolean
   enabled?: boolean
-  downloader?: string
+  is_default?: boolean
+  extra?: string
 }
 
 // ─── API client ─────────────────────────────────────────────────────────

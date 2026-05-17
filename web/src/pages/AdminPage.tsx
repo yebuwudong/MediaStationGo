@@ -8,12 +8,11 @@ import type { Library, User } from '../types'
 import { APIConfigsPanel } from '../components/APIConfigsPanel'
 
 export function AdminPage() {
-  const [tab, setTab] = useState<'library' | 'users' | 'settings' | 'api'>('library')
+  const [tab, setTab] = useState<'library' | 'users' | 'api'>('library')
   const tabs = [
     { key: 'library' as const, label: '媒体库' },
     { key: 'users' as const, label: '用户' },
     { key: 'api' as const, label: '外部API' },
-    { key: 'settings' as const, label: '系统设置' },
   ]
   return (
     <div className="space-y-6">
@@ -38,7 +37,6 @@ export function AdminPage() {
       {tab === 'library' && <LibraryPanel />}
       {tab === 'users' && <UsersPanel />}
       {tab === 'api' && <APIConfigsPanel />}
-      {tab === 'settings' && <SettingsPanel />}
     </div>
   )
 }
@@ -188,68 +186,6 @@ function UsersPanel() {
           ))}
         </tbody>
       </table>
-    </div>
-  )
-}
-
-function SettingsPanel() {
-  const [items, setItems] = useState<{ key: string; value: string }[]>([])
-  const [k, setK] = useState('')
-  const [v, setV] = useState('')
-
-  const refresh = () => adminAPI.listSettings().then(setItems)
-  useEffect(() => {
-    refresh().catch(() => undefined)
-  }, [])
-
-  const onSave = async (e: FormEvent) => {
-    e.preventDefault()
-    await adminAPI.updateSetting(k, v)
-    toast.success('已保存')
-    setK('')
-    setV('')
-    await refresh()
-  }
-
-  return (
-    <div className="space-y-4">
-      <form onSubmit={onSave} className="glass-panel grid gap-3 md:grid-cols-3">
-        <input
-          required
-          className="input-base"
-          placeholder="键 (如 tmdb_api_key)"
-          value={k}
-          onChange={(e) => setK(e.target.value)}
-        />
-        <input
-          required
-          className="input-base"
-          placeholder="值"
-          value={v}
-          onChange={(e) => setV(e.target.value)}
-        />
-        <button type="submit" className="neon-button">
-          保存
-        </button>
-      </form>
-      <div className="glass-panel">
-        <table className="w-full text-left text-sm">
-          <thead className="text-xs uppercase tracking-wider text-slate-500">
-            <tr>
-              <th className="py-2">键</th>
-              <th>值</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((it) => (
-              <tr key={it.key} className="border-t border-white/5">
-                <td className="py-2 text-white">{it.key}</td>
-                <td className="text-slate-300">{it.value}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
     </div>
   )
 }

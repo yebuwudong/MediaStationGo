@@ -115,14 +115,25 @@ func (s *SiteService) TestConnection(ctx context.Context, id string) (bool, stri
 	var ok bool
 	var msg string
 	switch {
-	case resp.StatusCode == 200:
-		ok, msg = true, "连接成功"
-	case resp.StatusCode == 403:
-		ok, msg = false, "认证失败 (HTTP 403)"
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		ok, msg = true, "连接成功 ("+resp.Status+")"
+	case resp.StatusCode == 301 || resp.StatusCode == 302 || resp.StatusCode == 307 || resp.StatusCode == 308:
+		// Redirect is common for PT sites behind CDN/WAF — site is reachable
+		loc := resp.Header.Get("Location")
+		if loc == "" {
+			loc = "(unknown)"
+		}
+		ok, msg = true, "站点可达，但返回重定向至 "+loc
 	case resp.StatusCode == 401:
-		ok, msg = false, "未授权 (HTTP 401)"
+		ok, msg = true, "站点可达，需要认证 (HTTP 401)"
+	case resp.StatusCode == 403:
+		ok, msg = true, "站点可达，但访问被拒绝 — 可能被 Cloudflare/WAF 拦截 (HTTP 403)"
+	case resp.StatusCode == 429:
+		ok, msg = true, "站点可达，但被限流 (HTTP 429)"
+	case resp.StatusCode == 503:
+		ok, msg = true, "站点可达，服务暂时不可用 (HTTP 503)"
 	default:
-		ok, msg = resp.StatusCode < 400, "HTTP "+resp.Status
+		ok, msg = resp.StatusCode >= 400 && resp.StatusCode < 500, resp.Status
 	}
 
 	loginStatus := "ok"

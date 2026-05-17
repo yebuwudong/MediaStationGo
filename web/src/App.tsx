@@ -96,9 +96,6 @@ const AssistantChatPage = lazy(() =>
 const DownloadClientsPage = lazy(() =>
   import('./pages/DownloadClientsPage').then((m) => ({ default: m.DownloadClientsPage })),
 )
-const LicensePage = lazy(() =>
-  import('./pages/LicensePage').then((m) => ({ default: m.LicensePage })),
-)
 const StorageConfigPage = lazy(() =>
   import('./pages/StorageConfigPage').then((m) => ({ default: m.StorageConfigPage })),
 )
@@ -246,11 +243,7 @@ export default function App() {
           />
           <Route
             path="license"
-            element={
-              <RequireAdmin>
-                <LicensePage />
-              </RequireAdmin>
-            }
+            element={<Navigate to="/admin" replace />}
           />
           <Route
             path="storage-config"
