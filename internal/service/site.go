@@ -21,13 +21,14 @@ import (
 
 // SiteService manages PT/BT site configurations.
 type SiteService struct {
-	log  *zap.Logger
-	repo *repository.Container
+	log            *zap.Logger
+	repo           *repository.Container
+	flareSolverrURL string
 }
 
 // NewSiteService is the constructor.
-func NewSiteService(log *zap.Logger, repo *repository.Container) *SiteService {
-	return &SiteService{log: log, repo: repo}
+func NewSiteService(log *zap.Logger, repo *repository.Container, flareSolverrURL string) *SiteService {
+	return &SiteService{log: log, repo: repo, flareSolverrURL: flareSolverrURL}
 }
 
 // Create persists a new site.
@@ -88,9 +89,8 @@ func (s *SiteService) TestConnection(ctx context.Context, id string) (bool, stri
 		timeout = 15
 	}
 
-	// TODO: Get flareSolverrURL from config (e.g. from config.yaml)
-	// For now, pass empty string to skip FlareSolverr
-	flareSolverrURL := "" // TODO: load from config
+	// Use configured FlareSolverr URL (may be empty if not configured)
+	flareSolverrURL := s.flareSolverrURL
 
 	ok, msg, err := helper.TestSiteConnectivity(site, flareSolverrURL, timeout, s.log)
 	if err != nil {

@@ -118,7 +118,13 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 	apiConfigSvc := NewApiConfigService(cfg, log, repos, crypto)
 	downloadMgr := NewDownloadManager(log, repos, crypto)
 	notifySvc := NewNotifyService(log, repos, crypto)
-	siteSvc := NewSiteService(log, repos)
+	
+	// 构建 FlareSolverr URL（如果启用）
+	flareSolverrURL := ""
+	if cfg.FlareSolverr.Enabled && cfg.FlareSolverr.URL != "" {
+		flareSolverrURL = cfg.FlareSolverr.URL
+	}
+	siteSvc := NewSiteService(log, repos, flareSolverrURL)
 
 	ctx, cancel := context.WithCancel(context.Background())
 

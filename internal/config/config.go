@@ -31,6 +31,7 @@ type Config struct {
 	Media      MediaConfig      `mapstructure:"media"`
 	Transcoder TranscoderConfig `mapstructure:"transcoder"`
 	AI         AIConfig         `mapstructure:"ai"`
+	FlareSolverr FlareSolverrConfig `mapstructure:"flaresolverr"`
 	ApiConfig  ApiConfigConfig  `mapstructure:"api_config"`
 }
 
@@ -129,6 +130,14 @@ type AIConfig struct {
 	MaxConcurrent int    `mapstructure:"max_concurrent"`
 }
 
+// FlareSolverrConfig 配置 FlareSolverr 服务（用于绕过 Cloudflare/WAF）。
+type FlareSolverrConfig struct {
+	Enabled bool   `mapstructure:"enabled"`
+	URL     string `mapstructure:"url"`
+	Session string `mapstructure:"session"`
+	Timeout int    `mapstructure:"timeout"`
+}
+
 // Load 从默认值 / 文件 / 环境读取配置。
 //
 // 即使没有文件也始终返回可用的 Config。
@@ -211,6 +220,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("ai.model", "gpt-4o-mini")
 	v.SetDefault("ai.timeout", 30)
 	v.SetDefault("ai.max_concurrent", 3)
+
+	v.SetDefault("flaresolverr.enabled", false)
+	v.SetDefault("flaresolverr.url", "http://localhost:8191")
+	v.SetDefault("flaresolverr.session", "mediastation")
+	v.SetDefault("flaresolverr.timeout", 60)
 
 	v.SetDefault("transcoder.encoder", "")
 	v.SetDefault("transcoder.preset", "veryfast")

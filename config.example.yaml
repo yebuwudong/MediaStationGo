@@ -86,3 +86,10 @@ ai:
   model: gpt-4o-mini
   timeout: 30
   max_concurrent: 3
+
+# FlareSolverr 配置（用于绕过 Cloudflare/WAF 保护）
+flaresolverr:
+  enabled: false
+  url: "http://localhost:8191"  # FlareSolverr 服务地址
+  session: "mediastation"        # 会话名称（可选，保持 cookie 持久化）
+  timeout: 60                   # 请求超时（秒）
