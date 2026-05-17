@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { Film } from 'lucide-react'
 
+import { AppFooter } from '../components/AppFooter'
 import { authAPI } from '../api/auth'
 import { useAuthStore } from '../stores/auth'
 
@@ -79,6 +80,8 @@ export function LoginPage() {
           首次部署默认账号:<code className="text-primary-400">admin / admin123</code>
         </p>
       </form>
+
+      <AppFooter className="mt-8" />
     </div>
   )
 }

@@ -150,23 +150,6 @@ func Register(r *gin.Engine, cfg *config.Config, log *zap.Logger, svc *service.C
 		// SSE event stream.
 		authed.GET("/events", sseHandler(svc))
 
-		// Download clients.
-		authed.GET("/download-clients", listDownloadClientsHandler(svc))
-		authed.POST("/download-clients", middleware.AdminRequired(), createDownloadClientHandler(svc))
-		authed.GET("/download-clients/:id", getDownloadClientHandler(svc))
-		authed.PUT("/download-clients/:id", middleware.AdminRequired(), updateDownloadClientHandler(svc))
-		authed.DELETE("/download-clients/:id", middleware.AdminRequired(), deleteDownloadClientHandler(svc))
-		authed.POST("/download-clients/:id/test", middleware.AdminRequired(), testDownloadClientHandler(svc))
-
-		// Notify channels.
-		authed.GET("/notify-channels", listNotifyChannelsHandler(svc))
-		authed.GET("/notify-channels/types", getNotifyChannelTypesHandler(svc))
-		authed.POST("/notify-channels", middleware.AdminRequired(), createNotifyChannelHandler(svc))
-		authed.GET("/notify-channels/:id", getNotifyChannelHandler(svc))
-		authed.PUT("/notify-channels/:id", middleware.AdminRequired(), updateNotifyChannelHandler(svc))
-		authed.DELETE("/notify-channels/:id", middleware.AdminRequired(), deleteNotifyChannelHandler(svc))
-		authed.POST("/notify-channels/:id/test", middleware.AdminRequired(), testNotifyChannelHandler(svc))
-
 		// Scheduler.
 		authed.GET("/scheduler/tasks", schedulerListTasksHandler(svc))
 		authed.POST("/scheduler/tasks/:id/run", middleware.AdminRequired(), schedulerRunTaskHandler(svc))
@@ -263,7 +246,6 @@ func Register(r *gin.Engine, cfg *config.Config, log *zap.Logger, svc *service.C
 		authed.POST("/download/sync", middleware.AdminRequired(), downloadSyncHandler(svc))
 		authed.POST("/download/start-auto-sync", middleware.AdminRequired(), downloadAutoSyncHandler(svc))
 		authed.GET("/download/tasks", downloadTasksAliasHandler(svc))
-		authed.POST("/download/add", addDownloadHandler(svc))
 
 		// ── Assistant (multi-turn AI chat) ──
 		authed.GET("/admin/assistant/sessions", listAssistantSessionsHandler(svc))

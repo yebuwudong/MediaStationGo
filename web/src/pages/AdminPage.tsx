@@ -4,26 +4,16 @@ import { Trash2 } from 'lucide-react'
 
 import { adminAPI } from '../api/admin'
 import { libraryAPI } from '../api/library'
-import { schedulerAPI, type JobStatus } from '../api/scheduler'
 import type { Library, User } from '../types'
-import { DownloadClientCard } from '../components/DownloadClientCard'
-import { NotifyChannelCard } from '../components/NotifyChannelCard'
 import { APIConfigsPanel } from '../components/APIConfigsPanel'
-import { SitesPage } from './SitesPage'
 
 export function AdminPage() {
-  const [tab, setTab] = useState<
-    'sites' | 'library' | 'users' | 'settings' | 'api' | 'downloads' | 'notify' | 'scheduler'
-  >('sites')
+  const [tab, setTab] = useState<'library' | 'users' | 'settings' | 'api'>('library')
   const tabs = [
-    { key: 'sites' as const, label: '站点管理' },
     { key: 'library' as const, label: '媒体库' },
     { key: 'users' as const, label: '用户' },
     { key: 'api' as const, label: '外部API' },
     { key: 'settings' as const, label: '系统设置' },
-    { key: 'downloads' as const, label: '下载客户端' },
-    { key: 'notify' as const, label: '通知渠道' },
-    { key: 'scheduler' as const, label: '定时任务' },
   ]
   return (
     <div className="space-y-6">
@@ -45,14 +35,10 @@ export function AdminPage() {
         ))}
       </div>
 
-      {tab === 'sites' && <SitesPage />}
       {tab === 'library' && <LibraryPanel />}
       {tab === 'users' && <UsersPanel />}
       {tab === 'api' && <APIConfigsPanel />}
       {tab === 'settings' && <SettingsPanel />}
-      {tab === 'downloads' && <DownloadClientCard />}
-      {tab === 'notify' && <NotifyChannelCard />}
-      {tab === 'scheduler' && <SchedulerPanel />}
     </div>
   )
 }
@@ -264,67 +250,6 @@ function SettingsPanel() {
           </tbody>
         </table>
       </div>
-    </div>
-  )
-}
-
-function SchedulerPanel() {
-  const [tasks, setTasks] = useState<JobStatus[]>([])
-  const [loading, setLoading] = useState(false)
-
-  const refresh = () => {
-    setLoading(true)
-    schedulerAPI.status().then(setTasks).finally(() => setLoading(false))
-  }
-  useEffect(() => {
-    refresh()
-  }, [])
-
-  return (
-    <div className="glass-panel">
-      {loading && <p className="py-4 text-center text-slate-400">加载中...</p>}
-      {!loading && tasks.length === 0 && (
-        <p className="py-4 text-center text-slate-400">暂无定时任务</p>
-      )}
-      {!loading && tasks.length > 0 && (
-        <table className="w-full text-left text-sm">
-          <thead className="text-xs uppercase tracking-wider text-slate-500">
-            <tr>
-              <th className="py-2">名称</th>
-              <th>间隔</th>
-              <th>上次运行</th>
-              <th className="text-right">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tasks.map((t) => (
-              <tr key={t.name} className="border-t border-white/5">
-                <td className="py-2 text-white">{t.name}</td>
-                <td className="text-slate-300">{t.interval}</td>
-                <td className="text-slate-400">
-                  {t.last_run ? new Date(t.last_run).toLocaleString() : '-'}
-                </td>
-                <td className="py-2 text-right">
-                  <button
-                    className="rounded border border-amber-400/40 px-2 py-1 text-xs text-amber-400 hover:bg-amber-400/10"
-                    onClick={async () => {
-                      try {
-                        await schedulerAPI.run(t.name)
-                        toast.success('任务已触发')
-                        refresh()
-                      } catch {
-                        toast.error('触发失败')
-                      }
-                    }}
-                  >
-                    手动运行
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
     </div>
   )
 }

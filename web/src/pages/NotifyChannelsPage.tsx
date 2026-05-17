@@ -125,6 +125,7 @@ const TYPE_LABELS: Record<NotifyChannel['channel_type'], string> = {
   wechat: '企业微信',
   bark: 'Bark',
   webhook: 'Webhook',
+  email: 'Email',
 }
 
 function ChannelCard({
@@ -188,6 +189,8 @@ function channelSummary(ch: NotifyChannel): string {
       return `Device ${String(cfg.device_key ?? '').slice(0, 10)}…`
     case 'webhook':
       return `${cfg.method ?? 'POST'} ${cfg.url ?? ''}`
+    case 'email':
+      return `SMTP ${cfg.smtp_host ?? '-'}:${cfg.smtp_port ?? '-'} → ${cfg.to ?? '-'}`
     default:
       return ''
   }
@@ -200,6 +203,7 @@ const EMPTY_CONFIG: Record<NotifyChannel['channel_type'], Record<string, string>
   wechat: { sendkey: '' },
   bark: { device_key: '', server: '' },
   webhook: { url: '', method: 'POST', headers: '', body_template: '' },
+  email: { smtp_host: '', smtp_port: '465', username: '', password: '', from: '', to: '', tls: 'true' },
 }
 
 function ChannelFormModal({
@@ -282,6 +286,7 @@ function ChannelFormModal({
               <option value="wechat">企业微信 / Server酱</option>
               <option value="bark">Bark (iOS)</option>
               <option value="webhook">Webhook</option>
+              <option value="email">Email (SMTP)</option>
             </select>
           </Field>
 
@@ -378,6 +383,78 @@ function ChannelFormModal({
                   placeholder='{"title":"{{title}}","message":"{{message}}"}'
                   value={config.body_template ?? ''}
                   onChange={(e) => updateConfig('body_template', e.target.value)}
+                />
+              </Field>
+            </>
+          )}
+
+          {type === 'email' && (
+            <>
+              <Field label="SMTP 地址">
+                <input
+                  required
+                  className="input-base"
+                  placeholder="smtp.gmail.com"
+                  value={config.smtp_host ?? ''}
+                  onChange={(e) => updateConfig('smtp_host', e.target.value)}
+                />
+              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="SMTP 端口">
+                  <input
+                    required
+                    className="input-base"
+                    placeholder="465"
+                    value={config.smtp_port ?? ''}
+                    onChange={(e) => updateConfig('smtp_port', e.target.value)}
+                  />
+                </Field>
+                <Field label="TLS">
+                  <select
+                    className="input-base"
+                    value={config.tls ?? 'true'}
+                    onChange={(e) => updateConfig('tls', e.target.value)}
+                  >
+                    <option value="true">启用</option>
+                    <option value="false">关闭</option>
+                  </select>
+                </Field>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="用户名">
+                  <input
+                    required
+                    className="input-base"
+                    value={config.username ?? ''}
+                    onChange={(e) => updateConfig('username', e.target.value)}
+                  />
+                </Field>
+                <Field label="密码">
+                  <input
+                    type="password"
+                    required
+                    className="input-base"
+                    value={config.password ?? ''}
+                    onChange={(e) => updateConfig('password', e.target.value)}
+                  />
+                </Field>
+              </div>
+              <Field label="发件人">
+                <input
+                  required
+                  className="input-base"
+                  placeholder="noreply@example.com"
+                  value={config.from ?? ''}
+                  onChange={(e) => updateConfig('from', e.target.value)}
+                />
+              </Field>
+              <Field label="收件人 (多个用逗号分隔)">
+                <input
+                  required
+                  className="input-base"
+                  placeholder="user@example.com"
+                  value={config.to ?? ''}
+                  onChange={(e) => updateConfig('to', e.target.value)}
                 />
               </Field>
             </>

@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="README_EN.md"><img src="https://img.shields.io/badge/English-README-blue?style=flat-square" alt="English"></a>
+  <a href="https://t.me/MediaStationGo"><img src="https://img.shields.io/badge/Telegram-群组-26A5E4?style=flat-square&logo=telegram&logoColor=white" alt="Telegram 群组"></a>
 </p>
 
 <p align="center">

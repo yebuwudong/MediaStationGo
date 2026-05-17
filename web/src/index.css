@@ -13,35 +13,150 @@ body,
 }
 
 body {
-  background: radial-gradient(
-      ellipse at 20% 50%,
-      rgba(0, 240, 255, 0.08) 0%,
-      transparent 50%
-    ),
-    radial-gradient(
-      ellipse at 80% 20%,
-      rgba(168, 85, 247, 0.08) 0%,
-      transparent 50%
-    ),
-    #060a13;
-  color: #f5f7fa;
+  background-color: #111110;
+  color: #e8e4d9;
   margin: 0;
 }
 
+/* ─── SVG 噪点纹理 ─── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 256px 256px;
+}
+
+/* ─── Scrollbar ─── */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #2e2e2a;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3a35;
+}
+
+/* ─── Selection ─── */
+::selection {
+  background: rgba(201, 149, 74, 0.3);
+  color: #e8e4d9;
+}
+
+/* ─── Focus ring ─── */
+*:focus-visible {
+  outline: 2px solid #c9954a;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 @layer components {
+  /* ─── Surface Card — 替代 glass-panel ─── */
+  .surface-card {
+    @apply rounded-lg border border-cream-900/20 bg-surface-400 px-4 py-3;
+    /* No shadow, no blur. Pure material feel. */
+  }
+  .surface-card-elevated {
+    @apply surface-card;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  }
+
+  /* ─── 暖色分割线 ─── */
+  .warm-divider {
+    @apply border-t border-cream-900/15;
+  }
+
+  /* ─── 琥珀色按钮 — 替代 neon-button ─── */
+  .amber-btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-brand-500/30
+      bg-brand-500/10 px-4 py-2 text-sm font-medium text-brand-400 transition-all
+      hover:border-brand-500/50 hover:bg-brand-500/20 hover:text-brand-300
+      active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .amber-btn--solid {
+    @apply amber-btn border-transparent bg-brand-600 text-cream-100
+      hover:bg-brand-500 hover:text-white;
+  }
+  .amber-btn--ghost {
+    @apply amber-btn border-transparent bg-transparent hover:bg-cream-900/10;
+  }
+
+  /* ─── 鼠尾草按钮 ─── */
+  .sage-btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-sage-400/20
+      bg-sage-400/10 px-4 py-2 text-sm font-medium text-sage-300 transition-all
+      hover:border-sage-400/40 hover:bg-sage-400/20 hover:text-sage-200
+      active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  /* ─── 表单输入 ─── */
+  .field-input {
+    @apply w-full rounded-lg border border-cream-900/20 bg-surface-600 px-4 py-2.5
+      text-sm text-cream-200 placeholder:text-cream-500/40
+      transition-colors
+      focus:border-brand-500/50 focus:bg-surface-500 focus:outline-none
+      disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .field-label {
+    @apply block text-xs font-medium uppercase tracking-wider text-cream-400 mb-1.5;
+  }
+
+  /* ─── 标签/徽章 ─── */
+  .badge {
+    @apply inline-flex items-center rounded-full px-2 py-0.5 text-2xs font-medium;
+  }
+  .badge--brand {
+    @apply badge bg-brand-500/15 text-brand-400;
+  }
+  .badge--sage {
+    @apply badge bg-sage-400/15 text-sage-300;
+  }
+  .badge--neutral {
+    @apply badge bg-cream-900/20 text-cream-400;
+  }
+
+  /* ─── 页面标题 ─── */
+  .page-heading {
+    @apply font-display text-2xl font-bold tracking-tight text-cream-100;
+  }
+  .page-subtitle {
+    @apply mt-1 text-sm text-cream-400;
+  }
+
+  /* ─── 表格（管理面板用） ─── */
+  .data-table {
+    @apply w-full text-left text-sm;
+  }
+  .data-table thead {
+    @apply border-b border-cream-900/20;
+  }
+  .data-table th {
+    @apply px-4 py-3 text-xs font-medium uppercase tracking-wider text-cream-400;
+  }
+  .data-table td {
+    @apply px-4 py-3 text-cream-300;
+  }
+  .data-table tbody tr {
+    @apply border-b border-cream-900/10 transition-colors hover:bg-cream-900/5;
+  }
+
+  /* ─── 旧版兼容别名（逐步废弃） ─── */
   .glass-panel {
-    @apply rounded-2xl border border-white/10 bg-surface-800/60 p-6 shadow-lg backdrop-blur-md;
+    @apply surface-card;
   }
-
   .neon-button {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-primary-400/40
-      bg-primary-400/10 px-4 py-2 font-medium text-primary-400 transition
-      hover:border-primary-400 hover:bg-primary-400/20 hover:text-white
-      active:scale-95 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply amber-btn;
   }
-
   .input-base {
-    @apply w-full rounded-lg border border-white/10 bg-surface-900/60 px-4 py-2 text-sm
-      text-white placeholder:text-slate-500 focus:border-primary-400 focus:outline-none;
+    @apply field-input;
   }
 }
