@@ -277,6 +277,18 @@ git ls-files | grep -E 'data/|cache/|\\.db|\\.log|jwt_secret|config.yaml|\\.env'
 ## 开发群组
 
 # TG https://t.me/MediaStationGo 
+## 赞赏
+<img width="1152" height="1152" alt="微信图片_20260528191337_3_983" src="https://github.com/user-attachments/assets/d6077de5-8305-400d-8b82-470ef05d926e" />
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=ShukeBta%2FMediaStationGo&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=ShukeBta/MediaStationGo&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=ShukeBta/MediaStationGo&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=ShukeBta/MediaStationGo&type=date&legend=top-left" />
+ </picture>
+</a>
 
 ## 许可证
 
