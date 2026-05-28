@@ -348,6 +348,29 @@ then add libraries in the web UI using container paths:
 | Adult | `/media/Adult` |
 | Downloaded media | `/downloads/Movies`, `/downloads/TV`, etc. |
 
+#### NAS Absolute Path Syntax
+
+On NAS systems, media folders are usually absolute host paths. In compose, use paths starting from the filesystem root, such as `/vol1/...`, `/volume1/...`, or `/mnt/...`; do not use `./vol1/...` unless that directory really exists under the compose project directory.
+
+```yaml
+# Correct: absolute host paths
+- /vol1/1000/Docker/moviepilot-v2/media:/media:ro
+- /vol1/1000/qBittorrent/downloads:/downloads
+
+# Wrong: relative to the compose directory
+- ./vol1/1000/Docker/moviepilot-v2/media:/media:ro
+- ./vol1/1000/qBittorrent/downloads:/downloads
+```
+
+You can also keep the paths in `.env`:
+
+```env
+MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
+MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
+```
+
+Inside MediaStationGo, still use container paths such as `/media/Movies` for libraries and `/downloads/Movies` for download targets.
+
 ### Download Client Paths
 
 If qBittorrent also runs in Docker, make sure qBittorrent and MediaStationGo share the same host directory and use consistent container paths.
@@ -619,6 +642,50 @@ movie.nfo
 tvshow.nfo
 episode.nfo
 ```
+
+### Organization and Scraping Naming Templates
+
+Use separate organization templates by media type. TV shows, anime, and variety shows should keep title, year, season folder, season/episode number, and episode title. Movies should keep title, year, part marker, and video format.
+
+Recommended template for TV / anime / variety:
+
+```jinja
+{{title}}{% if year %} ({{year}}){% endif %}/Season {{season}}/{{title}} - {{season_episode}}{% if part %}-{{part}}{% endif %}{% if episode %} - 第 {{episode}} 集{% endif %}{{fileExt}}
+```
+
+Example output:
+
+```text
+Some Show (2024)/Season 01/Some Show - S01E01 - 第 1 集.mkv
+Some Anime (2025)/Season 02/Some Anime - S02E03 - 第 3 集.mkv
+Some Variety (2026)/Season 2026/Some Variety - S2026E01 - 第 1 集.mp4
+```
+
+Recommended template for movies:
+
+```jinja
+{{title}}{% if year %} ({{year}}){% endif %}/{{title}}{% if year %} ({{year}}){% endif %}{% if part %}-{{part}}{% endif %}{% if videoFormat %} - {{videoFormat}}{% endif %}{{fileExt}}
+```
+
+Example output:
+
+```text
+Inception (2010)/Inception (2010) - 1080p.mkv
+Dune (2021)/Dune (2021)-CD1 - 2160p.mkv
+```
+
+Common variables:
+
+| Variable | Description |
+| --- | --- |
+| `title` | Media title, preferably from local NFO or online metadata |
+| `year` | Year, appended when available |
+| `season` | Season number, used for `Season 01` folders |
+| `season_episode` | Season/episode code, such as `S01E01` or `S2026E01` |
+| `episode` | Episode number, used for Chinese episode titles |
+| `part` | Part marker, such as `CD1` or `Part1` |
+| `videoFormat` | Video format, such as `1080p`, `2160p`, or `WEB-DL` |
+| `fileExt` | Original file extension, such as `.mkv` or `.mp4` |
 
 ---
 

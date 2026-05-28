@@ -479,6 +479,29 @@ docker compose up -d
 | 成人内容 | `/media/Adult` |
 | 下载入库 | `/downloads/Movies`、`/downloads/TV` 等 |
 
+#### NAS 绝对路径写法
+
+NAS、飞牛、绿联、群晖、威联通等系统里，媒体目录通常是系统绝对路径。compose 中必须写 `/vol1/...`、`/volume1/...`、`/mnt/...` 这类从根目录开始的路径，不要写成 `./vol1/...`。
+
+```yaml
+# 正确：宿主机绝对路径
+- /vol1/1000/Docker/moviepilot-v2/media:/media:ro
+- /vol1/1000/qBittorrent/downloads:/downloads
+
+# 错误：这是相对当前 compose 目录的路径
+- ./vol1/1000/Docker/moviepilot-v2/media:/media:ro
+- ./vol1/1000/qBittorrent/downloads:/downloads
+```
+
+也可以放到 `.env` 里统一管理：
+
+```env
+MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
+MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
+```
+
+容器内路径仍然填写 `/media` 和 `/downloads`，例如媒体库添加 `/media/Movies`，下载器保存路径填写 `/downloads/Movies`。
+
 ### 下载器路径怎么填
 
 如果 qBittorrent 也运行在 Docker 中，必须让 qBittorrent 与 MediaStationGo 看到同一份下载目录。
@@ -751,6 +774,50 @@ movie.nfo
 tvshow.nfo
 episode.nfo
 ```
+
+### 整理与刮削命名模板
+
+整理规则建议按媒体类型拆分。剧集、动漫、综艺都属于连续剧集类，应保留剧名、年份、季目录、季集号和分集标题；电影类则保留片名、年份、分段和视频规格。
+
+剧集 / 动漫 / 综艺推荐模板：
+
+```jinja
+{{title}}{% if year %} ({{year}}){% endif %}/Season {{season}}/{{title}} - {{season_episode}}{% if part %}-{{part}}{% endif %}{% if episode %} - 第 {{episode}} 集{% endif %}{{fileExt}}
+```
+
+输出示例：
+
+```text
+孤独的美食家 (2024)/Season 01/孤独的美食家 - S01E01 - 第 1 集.mkv
+某动画 (2025)/Season 02/某动画 - S02E03 - 第 3 集.mkv
+某综艺 (2026)/Season 2026/某综艺 - S2026E01 - 第 1 集.mp4
+```
+
+电影推荐模板：
+
+```jinja
+{{title}}{% if year %} ({{year}}){% endif %}/{{title}}{% if year %} ({{year}}){% endif %}{% if part %}-{{part}}{% endif %}{% if videoFormat %} - {{videoFormat}}{% endif %}{{fileExt}}
+```
+
+输出示例：
+
+```text
+盗梦空间 (2010)/盗梦空间 (2010) - 1080p.mkv
+沙丘 (2021)/沙丘 (2021)-CD1 - 2160p.mkv
+```
+
+常用变量说明：
+
+| 变量 | 说明 |
+| --- | --- |
+| `title` | 媒体标题，优先使用本地 NFO / 在线元数据识别后的标题 |
+| `year` | 年份，存在时追加到目录和文件名中 |
+| `season` | 季号，剧集/动漫/综艺用于生成 `Season 01` 等目录 |
+| `season_episode` | 季集号，例如 `S01E01`、`S2026E01` |
+| `episode` | 分集序号，用于中文分集标题 |
+| `part` | 分段标记，例如 `CD1`、`Part1` |
+| `videoFormat` | 视频规格，例如 `1080p`、`2160p`、`WEB-DL` |
+| `fileExt` | 原始文件扩展名，例如 `.mkv`、`.mp4` |
 
 ---
 
