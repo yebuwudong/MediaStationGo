@@ -12,7 +12,7 @@
 #
 # 镜像版本：
 #   默认拉取 latest；如需固定版本，创建 .env 并写入：
-#     MEDIASTATION_IMAGE_TAG=MediaStationGo-v0.0.7
+#     MEDIASTATION_IMAGE_TAG=MediaStationGo-v0.0.8
 #
 # 路径映射总览：
 #   /data      程序数据目录。保存 SQLite 数据库、JWT secret、系统配置等，必须持久化。
@@ -67,7 +67,9 @@ services:
       # NAS / 飞牛等系统请写绝对路径，例如：
       #   MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
       # 不要写 ./vol1/...，否则会变成当前部署目录下的 vol1 子目录。
-      - ${MEDIASTATION_MEDIA_DIR:-./media}:/media:ro
+      # 默认映射到容器 /media；如需在网页中直接填写宿主机绝对路径，可将
+      # MEDIASTATION_MEDIA_CONTAINER_DIR 设置为同一个 /vol1/... 路径。
+      - ${MEDIASTATION_MEDIA_DIR:-./media}:${MEDIASTATION_MEDIA_CONTAINER_DIR:-/media}:ro
 
       # 下载保存目录。订阅/站点下载的保存路径建议使用：
       #   /downloads/Movies
@@ -78,7 +80,9 @@ services:
       # NAS / 飞牛等系统请写绝对路径，例如：
       #   MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
       # 不要写 ./vol1/...，否则下载目录会被映射到当前部署目录下面。
-      - ${MEDIASTATION_DOWNLOAD_DIR:-./downloads}:/downloads
+      # 默认映射到容器 /downloads；如需下载器和应用都使用宿主机绝对路径，可将
+      # MEDIASTATION_DOWNLOAD_CONTAINER_DIR 设置为同一个 /vol1/... 路径。
+      - ${MEDIASTATION_DOWNLOAD_DIR:-./downloads}:${MEDIASTATION_DOWNLOAD_CONTAINER_DIR:-/downloads}
 
     environment:
       # Web 服务监听配置。容器内固定监听 8080，对外端口由上方 ports 控制。
@@ -95,9 +99,9 @@ services:
       #   /vol1/1000/Docker/moviepilot-v2/media/电视剧 -> /media/电视剧
       #   /vol1/1000/qBittorrent/downloads/国产剧 -> /downloads/国产剧
       MEDIASTATION_MEDIA_DIR: ${MEDIASTATION_MEDIA_DIR:-./media}
-      MEDIASTATION_MEDIA_CONTAINER_DIR: /media
+      MEDIASTATION_MEDIA_CONTAINER_DIR: ${MEDIASTATION_MEDIA_CONTAINER_DIR:-/media}
       MEDIASTATION_DOWNLOAD_DIR: ${MEDIASTATION_DOWNLOAD_DIR:-./downloads}
-      MEDIASTATION_DOWNLOAD_CONTAINER_DIR: /downloads
+      MEDIASTATION_DOWNLOAD_CONTAINER_DIR: ${MEDIASTATION_DOWNLOAD_CONTAINER_DIR:-/downloads}
 
       # 日志级别：debug / info / warn / error。
       MEDIASTATION_LOGGING_LEVEL: ${MEDIASTATION_LOGGING_LEVEL:-info}

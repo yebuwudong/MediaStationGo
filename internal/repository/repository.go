@@ -276,6 +276,9 @@ func (r *MediaRepository) Upsert(ctx context.Context, m *model.Media) error {
 	if m.EpisodeNum > 0 && existing.EpisodeNum != m.EpisodeNum {
 		updates["episode_num"] = m.EpisodeNum
 	}
+	if m.STRMURL != "" {
+		updates["strm_url"] = m.STRMURL
+	}
 
 	if err := r.db.WithContext(ctx).Unscoped().Model(&model.Media{}).
 		Where("id = ?", existing.ID).Updates(updates).Error; err != nil {

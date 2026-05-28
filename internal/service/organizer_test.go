@@ -232,3 +232,64 @@ func TestOrganizeMediaDoesNotRepeatCategoryWhenLibraryIsCategoryRoot(t *testing.
 		t.Fatalf("repeated category path exists or stat failed unexpectedly: %v", err)
 	}
 }
+
+func TestOrganizeLibrarySkipsFilesAlreadyInsideLibrary(t *testing.T) {
+	root := t.TempDir()
+	libraryRoot := filepath.Join(root, "media", "电视剧", "国产剧")
+	sourceDir := filepath.Join(libraryRoot, "Existing Show")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(sourceDir, "Existing Show S01E02.mkv")
+	if err := os.WriteFile(source, []byte("episode"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	if err := repos.Setting.Set(t.Context(), "organizer.smart_classify", "true"); err != nil {
+		t.Fatal(err)
+	}
+	lib := model.Library{Name: "国产剧", Path: libraryRoot, Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "Existing Show",
+		Path:         source,
+		Container:    "mkv",
+		Countries:    "CN",
+		SeasonNum:    1,
+		EpisodeNum:   2,
+		ScrapeStatus: "matched",
+	}
+	if err := repos.Media.Upsert(t.Context(), &media); err != nil {
+		t.Fatal(err)
+	}
+
+	organizer := NewOrganizerService(&config.Config{}, zap.NewNop(), repos)
+	result, err := organizer.OrganizeLibrary(t.Context(), lib.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Organized != 0 || result.Skipped != 1 {
+		t.Fatalf("result = %+v, want organized=0 skipped=1", result)
+	}
+	if _, err := os.Stat(source); err != nil {
+		t.Fatalf("source should remain untouched: %v", err)
+	}
+	var refreshed model.Media
+	if err := db.First(&refreshed, "id = ?", media.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.Path != source {
+		t.Fatalf("media path = %q, want unchanged %q", refreshed.Path, source)
+	}
+}

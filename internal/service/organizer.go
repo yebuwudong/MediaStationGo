@@ -150,6 +150,10 @@ func (o *OrganizerService) OrganizeMedia(ctx context.Context, mediaID string) (s
 // OrganizeLibrary organizes every media row in a library whose file is
 // not already in the expected path structure.
 func (o *OrganizerService) OrganizeLibrary(ctx context.Context, libraryID string) (*OrganizeResult, error) {
+	lib, err := o.repo.Library.FindByID(ctx, libraryID)
+	if err != nil || lib == nil {
+		return nil, errors.New("library not found")
+	}
 	var rows []model.Media
 	if err := o.repo.DB.WithContext(ctx).
 		Where("library_id = ? AND deleted_at IS NULL", libraryID).
@@ -158,6 +162,10 @@ func (o *OrganizerService) OrganizeLibrary(ctx context.Context, libraryID string
 	}
 	res := &OrganizeResult{}
 	for i := range rows {
+		if pathWithin(rows[i].Path, lib.Path) {
+			res.Skipped++
+			continue
+		}
 		dst, err := o.OrganizeMedia(ctx, rows[i].ID)
 		if err != nil {
 			res.Errors = append(res.Errors, fmt.Sprintf("%s: %s", rows[i].Title, err.Error()))
@@ -288,6 +296,19 @@ func categoryRoot(root, category string) string {
 		return root
 	}
 	return filepath.Join(root, category)
+}
+
+func pathWithin(path, root string) bool {
+	cleanPath := filepath.Clean(path)
+	cleanRoot := filepath.Clean(root)
+	if strings.EqualFold(cleanPath, cleanRoot) {
+		return true
+	}
+	rel, err := filepath.Rel(cleanRoot, cleanPath)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func mediaTypeRootDir(mediaType string) string {

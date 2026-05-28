@@ -320,7 +320,7 @@ For production, pin a specific release tag instead of using `latest`:
 
 ```bash
 cat > .env <<'EOF'
-MEDIASTATION_IMAGE_TAG=MediaStationGo-v0.0.7
+MEDIASTATION_IMAGE_TAG=MediaStationGo-v0.0.8
 MEDIASTATION_HTTP_PORT=18080
 MEDIASTATION_MEDIA_DIR=/mnt/nas/media
 MEDIASTATION_DOWNLOAD_DIR=/mnt/nas/downloads
@@ -347,6 +347,26 @@ The left side of a Docker Compose volume is the real host directory, and the rig
 Inside the app, use only `/media` and `/downloads`. If you see `/vol1/1000/Docker/MediaStationGo/vol1/...`, your `.env` or compose file probably uses `./vol1/...`; remove the dot and use `/vol1/...`.
 
 > If adding `/vol1/1000/Docker/moviepilot-v2/media/电视剧/国产剧` as a library reports inaccessible, the app is running inside the container and normally sees `/media/电视剧/国产剧`. The updated compose passes host-path hints so the backend can auto-convert common mistakes, but `/media/...` remains the recommended and most stable input.
+
+If you prefer entering the NAS absolute path directly in the web UI, map the host path to the exact same container path. This does not copy files or use extra disk space:
+
+```env
+MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
+MEDIASTATION_MEDIA_CONTAINER_DIR=/vol1/1000/Docker/moviepilot-v2/media
+MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
+MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/vol1/1000/qBittorrent/downloads
+```
+
+Equivalent compose mounts:
+
+```yaml
+- /vol1/1000/Docker/moviepilot-v2/media:/vol1/1000/Docker/moviepilot-v2/media:ro
+- /vol1/1000/qBittorrent/downloads:/vol1/1000/qBittorrent/downloads
+```
+
+With this mode, add libraries using paths such as `/vol1/1000/Docker/moviepilot-v2/media/电视剧/国产剧`.
+
+> Safety policy: scanning and playback read the original directory. “Organize entire library” no longer moves files already inside the library root, protecting local NFO, posters, subtitles, and other sidecar metadata. Auto-organize after downloads remains disabled by default.
 
 If your compose mounts are:
 
@@ -432,7 +452,9 @@ The repository includes a heavily commented `docker-compose.yml`. Common variabl
 | `MEDIASTATION_DATA_DIR` | `./data` | Persistent data directory |
 | `MEDIASTATION_CACHE_DIR` | `./cache` | Image and transcoding cache |
 | `MEDIASTATION_MEDIA_DIR` | `./media` | Host media library root; on NAS use an absolute path such as `/vol1/1000/Docker/moviepilot-v2/media` |
+| `MEDIASTATION_MEDIA_CONTAINER_DIR` | `/media` | Container media path; set it equal to `MEDIASTATION_MEDIA_DIR` if you want to enter `/vol1/...` directly in the web UI |
 | `MEDIASTATION_DOWNLOAD_DIR` | `./downloads` | Host download target; on NAS use an absolute path such as `/vol1/1000/qBittorrent/downloads` |
+| `MEDIASTATION_DOWNLOAD_CONTAINER_DIR` | `/downloads` | Container download path; set it equal to `MEDIASTATION_DOWNLOAD_DIR` if your downloader save path should also be `/vol1/...` |
 | `PUID` / `PGID` | `1000` / `1000` | Linux/NAS file permission mapping |
 | `TZ` | `Asia/Shanghai` | Container timezone |
 
@@ -500,25 +522,25 @@ Each release provides multi-platform archives:
 
 | Platform | Package example |
 | --- | --- |
-| Linux x86_64 | `MediaStationGo-v0.0.7-linux-amd64.tar.gz` |
-| Linux ARM64 | `MediaStationGo-v0.0.7-linux-arm64.tar.gz` |
-| Windows x86_64 | `MediaStationGo-v0.0.7-windows-amd64.zip` |
-| macOS Intel | `MediaStationGo-v0.0.7-darwin-amd64.tar.gz` |
-| macOS Apple Silicon | `MediaStationGo-v0.0.7-darwin-arm64.tar.gz` |
+| Linux x86_64 | `MediaStationGo-v0.0.8-linux-amd64.tar.gz` |
+| Linux ARM64 | `MediaStationGo-v0.0.8-linux-arm64.tar.gz` |
+| Windows x86_64 | `MediaStationGo-v0.0.8-windows-amd64.zip` |
+| macOS Intel | `MediaStationGo-v0.0.8-darwin-amd64.tar.gz` |
+| macOS Apple Silicon | `MediaStationGo-v0.0.8-darwin-arm64.tar.gz` |
 
 Linux example:
 
 ```bash
-tar -xzf MediaStationGo-v0.0.7-linux-amd64.tar.gz
-cd MediaStationGo-v0.0.7-linux-amd64
+tar -xzf MediaStationGo-v0.0.8-linux-amd64.tar.gz
+cd MediaStationGo-v0.0.8-linux-amd64
 MEDIASTATION_APP_PORT=18080 ./mediastation-go
 ```
 
 Windows example:
 
 ```powershell
-Expand-Archive .\MediaStationGo-v0.0.7-windows-amd64.zip
-cd .\MediaStationGo-v0.0.7-windows-amd64
+Expand-Archive .\MediaStationGo-v0.0.8-windows-amd64.zip
+cd .\MediaStationGo-v0.0.8-windows-amd64
 $env:MEDIASTATION_APP_PORT = "18080"
 .\mediastation-go.exe
 ```

@@ -84,7 +84,7 @@ func importSTRMHandler(svc *service.Container) gin.HandlerFunc {
 			STRMURL:   req.URL,
 			Container: "strm",
 		}
-		if err := svc.Repo.DB.WithContext(c.Request.Context()).Create(m).Error; err != nil {
+		if err := svc.Repo.Media.Upsert(c.Request.Context(), m); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
