@@ -92,10 +92,14 @@ function LibraryPanel() {
         <input
           required
           className="input-base md:col-span-2"
-          placeholder="服务器路径,如 /media/movies"
+          placeholder="容器路径，如 /media/电视剧/国产剧"
           value={path}
           onChange={(e) => setPath(e.target.value)}
         />
+        <p className="md:col-span-4 -mt-2 text-xs text-sand-500">
+          Docker 部署时请优先填写容器内路径，例如 /media/电影、/media/电视剧/国产剧；如果误填 NAS
+          宿主机路径，系统会尝试按 compose 挂载自动转换。
+        </p>
         <select className="input-base" value={type} onChange={(e) => setType(e.target.value)}>
           <option value="movie">电影</option>
           <option value="tv">电视剧</option>

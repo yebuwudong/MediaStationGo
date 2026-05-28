@@ -346,6 +346,8 @@ The left side of a Docker Compose volume is the real host directory, and the rig
 
 Inside the app, use only `/media` and `/downloads`. If you see `/vol1/1000/Docker/MediaStationGo/vol1/...`, your `.env` or compose file probably uses `./vol1/...`; remove the dot and use `/vol1/...`.
 
+> If adding `/vol1/1000/Docker/moviepilot-v2/media/电视剧/国产剧` as a library reports inaccessible, the app is running inside the container and normally sees `/media/电视剧/国产剧`. The updated compose passes host-path hints so the backend can auto-convert common mistakes, but `/media/...` remains the recommended and most stable input.
+
 If your compose mounts are:
 
 ```yaml

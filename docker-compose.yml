@@ -91,6 +91,14 @@ services:
       MEDIASTATION_DATABASE_DB_PATH: /data/mediastation.db
       MEDIASTATION_CACHE_CACHE_DIR: /cache
 
+      # 宿主机到容器的路径映射提示。用于用户误填宿主机路径时自动转换为容器路径：
+      #   /vol1/1000/Docker/moviepilot-v2/media/电视剧 -> /media/电视剧
+      #   /vol1/1000/qBittorrent/downloads/国产剧 -> /downloads/国产剧
+      MEDIASTATION_MEDIA_DIR: ${MEDIASTATION_MEDIA_DIR:-./media}
+      MEDIASTATION_MEDIA_CONTAINER_DIR: /media
+      MEDIASTATION_DOWNLOAD_DIR: ${MEDIASTATION_DOWNLOAD_DIR:-./downloads}
+      MEDIASTATION_DOWNLOAD_CONTAINER_DIR: /downloads
+
       # 日志级别：debug / info / warn / error。
       MEDIASTATION_LOGGING_LEVEL: ${MEDIASTATION_LOGGING_LEVEL:-info}
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"go.uber.org/zap"
 
@@ -32,12 +33,9 @@ func (s *MediaService) CreateLibrary(ctx context.Context, name, path, kind strin
 	if name == "" || path == "" {
 		return nil, errors.New("name and path required")
 	}
-	abs, err := filepath.Abs(path)
+	abs, err := resolveAccessibleLibraryPath(path)
 	if err != nil {
-		return nil, fmt.Errorf("invalid path: %w", err)
-	}
-	if info, err := os.Stat(abs); err != nil || !info.IsDir() {
-		return nil, fmt.Errorf("path is not an accessible directory: %s", abs)
+		return nil, err
 	}
 	if kind == "" {
 		kind = "movie"
@@ -47,6 +45,86 @@ func (s *MediaService) CreateLibrary(ctx context.Context, name, path, kind strin
 		return nil, err
 	}
 	return lib, nil
+}
+
+func resolveAccessibleLibraryPath(path string) (string, error) {
+	abs, err := filepath.Abs(strings.TrimSpace(path))
+	if err != nil {
+		return "", fmt.Errorf("invalid path: %w", err)
+	}
+	if isAccessibleDir(abs) {
+		return abs, nil
+	}
+	for _, candidate := range dockerVolumePathCandidates(abs) {
+		if isAccessibleDir(candidate) {
+			return filepath.Clean(candidate), nil
+		}
+	}
+	return "", fmt.Errorf("path is not an accessible directory: %s", abs)
+}
+
+func isAccessibleDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+func dockerVolumePathCandidates(path string) []string {
+	normalized := filepath.ToSlash(filepath.Clean(path))
+	var candidates []string
+	addCandidate := func(candidate string) {
+		candidate = filepath.Clean(filepath.FromSlash(candidate))
+		for _, existing := range candidates {
+			if sameLibraryPath(existing, candidate) {
+				return
+			}
+		}
+		candidates = append(candidates, candidate)
+	}
+
+	for _, mapping := range []struct {
+		env       string
+		container string
+	}{
+		{env: "MEDIASTATION_MEDIA_DIR", container: envOrDefault("MEDIASTATION_MEDIA_CONTAINER_DIR", "/media")},
+		{env: "MEDIASTATION_DOWNLOAD_DIR", container: envOrDefault("MEDIASTATION_DOWNLOAD_CONTAINER_DIR", "/downloads")},
+	} {
+		host := filepath.ToSlash(filepath.Clean(os.Getenv(mapping.env)))
+		if host == "." || host == "" || strings.HasPrefix(host, ".") {
+			continue
+		}
+		if normalized == host {
+			addCandidate(mapping.container)
+			continue
+		}
+		if strings.HasPrefix(normalized, host+"/") {
+			addCandidate(mapping.container + strings.TrimPrefix(normalized, host))
+		}
+	}
+
+	for _, marker := range []struct {
+		part      string
+		container string
+	}{
+		{part: "/media/", container: "/media/"},
+		{part: "/downloads/", container: "/downloads/"},
+	} {
+		if idx := strings.Index(normalized, marker.part); idx >= 0 {
+			addCandidate(marker.container + strings.TrimPrefix(normalized[idx+len(marker.part):], "/"))
+		}
+	}
+
+	return candidates
+}
+
+func sameLibraryPath(a, b string) bool {
+	return filepath.Clean(a) == filepath.Clean(b)
+}
+
+func envOrDefault(key, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
 }
 
 // ListLibraries returns every library configured on the server.
