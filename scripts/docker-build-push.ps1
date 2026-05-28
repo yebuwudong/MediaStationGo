@@ -6,6 +6,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $false
 $Builder = "mediastation-builder"
 
 docker buildx inspect $Builder *> $null
