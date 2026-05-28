@@ -1,17 +1,37 @@
-# MediaStationGo default Docker Compose install file.
+# MediaStationGo 默认 Docker Compose 部署文件。
 #
-# Quick start:
-#   1. docker compose pull
-#   2. docker compose up -d
-#   3. Open http://<host-ip>:18080
+# 快速开始：
+#   1. 按需修改下方 volumes 的宿主机路径。
+#   2. docker compose pull
+#   3. docker compose up -d
+#   4. 浏览器打开 http://<服务器IP>:18080
 #
-# Default account:
+# 默认账号：
 #   admin / admin123
+#   首次部署后请立即到「个人资料/用户管理」修改密码。
 #
-# Local persistent folders created next to this file:
-#   ./data   SQLite database, JWT secret, runtime configuration
-#   ./cache  posters, scraped artwork, transcode cache
-#   ./media  optional local media mount; replace with your NAS path if needed
+# 镜像版本：
+#   默认拉取 latest；如需固定版本，创建 .env 并写入：
+#     MEDIASTATION_IMAGE_TAG=MediaStationGo-v0.0.4
+#
+# 路径映射总览：
+#   /data      程序数据目录。保存 SQLite 数据库、JWT secret、系统配置等，必须持久化。
+#   /cache     缓存目录。保存海报、刮削图片、转码缓存等，建议放在空间较大的磁盘。
+#   /media     媒体库只读挂载目录。网页中添加媒体库时填写容器内路径，例如 /media/Movies。
+#   /downloads 下载目录。下载器保存路径建议填写容器内路径，例如 /downloads/Movies。
+#
+# 宿主机路径建议：
+#   MEDIASTATION_DATA_DIR=./data
+#   MEDIASTATION_CACHE_DIR=./cache
+#   MEDIASTATION_MEDIA_DIR=/mnt/nas/media
+#   MEDIASTATION_DOWNLOAD_DIR=/mnt/nas/downloads
+#
+# 注意：
+#   1. 如果 qBittorrent/Transmission/Aria2 不在本 compose 内，请确保它们能访问同一份
+#      下载目录；容器内保存路径和下载器实际保存路径需要保持一致或可被媒体库扫描到。
+#   2. 媒体库默认以只读方式挂载，避免误删原始媒体；如果需要整理/移动文件，可将
+#      /media 的 :ro 改为 :rw，或把整理目标放到 /downloads 后再手动迁移。
+#   3. PUID/PGID 用于匹配 NAS/Linux 宿主机用户权限，避免下载或缓存文件权限异常。
 
 services:
   mediastation-go:
@@ -21,39 +41,71 @@ services:
     restart: unless-stopped
 
     ports:
+      # 宿主机端口:容器端口。默认访问 http://<服务器IP>:18080
       - "${MEDIASTATION_HTTP_PORT:-18080}:8080"
 
     volumes:
+      # 程序持久化数据：数据库、JWT secret、运行时配置。
       - ${MEDIASTATION_DATA_DIR:-./data}:/data
+
+      # 海报/背景图/转码缓存。可删除重建，但会重新下载图片和生成缓存。
       - ${MEDIASTATION_CACHE_DIR:-./cache}:/cache
+
+      # 媒体库根目录。添加媒体库时使用容器内路径：
+      #   电影：/media/Movies
+      #   剧集：/media/TV
+      #   动漫：/media/Anime
+      #   综艺：/media/Variety
+      # 如宿主机目录不同，请在 .env 中设置 MEDIASTATION_MEDIA_DIR。
       - ${MEDIASTATION_MEDIA_DIR:-./media}:/media:ro
 
+      # 下载保存目录。订阅/站点下载的保存路径建议使用：
+      #   /downloads/Movies
+      #   /downloads/TV
+      #   /downloads/Anime
+      #   /downloads/Variety
+      # 如果外部下载器也运行在 Docker 中，请给下载器挂载同一个宿主机目录。
+      - ${MEDIASTATION_DOWNLOAD_DIR:-./downloads}:/downloads
+
     environment:
+      # Web 服务监听配置。容器内固定监听 8080，对外端口由上方 ports 控制。
       MEDIASTATION_APP_HOST: 0.0.0.0
       MEDIASTATION_APP_PORT: 8080
-      MEDIASTATION_APP_DATA_DIR: /data
       MEDIASTATION_APP_WEB_DIR: /app/web/dist
+
+      # 数据与缓存目录。需与 volumes 中的容器路径一致。
+      MEDIASTATION_APP_DATA_DIR: /data
       MEDIASTATION_DATABASE_DB_PATH: /data/mediastation.db
       MEDIASTATION_CACHE_CACHE_DIR: /cache
+
+      # 日志级别：debug / info / warn / error。
       MEDIASTATION_LOGGING_LEVEL: ${MEDIASTATION_LOGGING_LEVEL:-info}
+
+      # 转码配置。留空表示自动/软件转码；硬件加速见下方 Intel/NVIDIA 示例。
       MEDIASTATION_TRANSCODER_ENCODER: ${MEDIASTATION_TRANSCODER_ENCODER:-}
       MEDIASTATION_TRANSCODER_MAX_HEIGHT: ${MEDIASTATION_TRANSCODER_MAX_HEIGHT:-1080}
+
+      # 跨域来源。通常无需设置；反向代理或三端客户端异常时再按需填写。
       MEDIASTATION_APP_CORS_ORIGINS: ${MEDIASTATION_APP_CORS_ORIGINS:-}
+
+      # 宿主机文件权限映射。Linux/NAS 常用 1000:1000，可用 id 命令查看。
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
       TZ: ${TZ:-Asia/Shanghai}
 
-    # Optional Intel QSV / VAAPI hardware acceleration.
-    # Uncomment on Linux/NAS hosts with /dev/dri available, then set:
-    #   MEDIASTATION_TRANSCODER_ENCODER=vaapi
+    # Intel QSV / VAAPI 硬件加速示例：
+    #   1. Linux/NAS 宿主机存在 /dev/dri。
+    #   2. 在 .env 中设置 MEDIASTATION_TRANSCODER_ENCODER=vaapi。
+    #   3. 取消下方 devices/group_add 注释。
     # devices:
     #   - /dev/dri:/dev/dri
     # group_add:
     #   - "${RENDER_GID:-989}"
 
-    # Optional NVIDIA NVENC hardware acceleration.
-    # Install NVIDIA Container Toolkit on the host, then set:
-    #   MEDIASTATION_TRANSCODER_ENCODER=nvenc
+    # NVIDIA NVENC 硬件加速示例：
+    #   1. 宿主机安装 NVIDIA Container Toolkit。
+    #   2. 在 .env 中设置 MEDIASTATION_TRANSCODER_ENCODER=nvenc。
+    #   3. 取消下方 gpus 注释。
     # gpus: all
 
     healthcheck:

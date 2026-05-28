@@ -45,3 +45,7 @@ jobs:
             dist-release/*.zip
             dist-release/SHA256SUMS.txt
           generate_release_notes: true
+          # GitHub immutable releases reject deleting/replacing existing assets.
+          # Keep reruns idempotent by skipping same-name assets instead of
+          # deleting them first.
+          overwrite_files: false
