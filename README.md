@@ -28,6 +28,9 @@
 | 运维 | 任务、统计、存储、重复文件、回收站、NFO 导出 |
 | AI | OpenAI 兼容 Base URL/API Key，智能搜索与推荐 |
 
+**演示站**
+
+[**Demo**](https://mgo.3jzs.com) 账号 ：admin 密码：admin123
 
 ## 界面预览
 
@@ -271,6 +274,9 @@ M-Team 站点请使用「控制台 → 实验室 → 存取令牌」生成 API A
 git status --short
 git ls-files | grep -E 'data/|cache/|\\.db|\\.log|jwt_secret|config.yaml|\\.env' || true
 ```
+## 开发群组
+
+# TG https://t.me/MediaStationGo 
 
 ## 许可证
 
