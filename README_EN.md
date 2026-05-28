@@ -191,12 +191,96 @@ Docker is the most stable and portable deployment option. The default compose fi
 | `./media` | `/media` | Media library root, mounted read-only by default |
 | `./downloads` | `/downloads` | Subscription/site download target |
 
-```bash
-git clone https://github.com/ShukeBta/MediaStationGo.git
-cd MediaStationGo
+#### Linux / NAS Zero-to-One Deployment Without Cloning Source
 
+This path is friendly for Ubuntu, Debian, CentOS, AlmaLinux, Rocky Linux, and most Linux-based NAS hosts.
+
+1. Install Docker:
+
+```bash
+bash <(curl -sSL https://cdn.jsdelivr.net/gh/SuperManito/LinuxMirrors@main/DockerInstallation.sh)
+
+docker --version
+```
+
+2. Install Docker Compose:
+
+```bash
+curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+chmod +x /usr/local/bin/docker-compose
+
+docker-compose version
+```
+
+> If writing to `/usr/local/bin/docker-compose` fails with a permission error, prefix the `curl` and `chmod` commands with `sudo`.
+
+> If your system already supports `docker compose version`, keep using `docker compose`. If you installed only the standalone binary above, replace later `docker compose` commands with `docker-compose`.
+
+3. Create the deployment directory:
+
+```bash
+mkdir -p ~/MediaStationGo
+cd ~/MediaStationGo
+mkdir -p data cache media downloads
+```
+
+4. Create `.env` and adjust paths as needed:
+
+```bash
+cat > .env <<'EOF'
+MEDIASTATION_IMAGE_TAG=latest
+MEDIASTATION_HTTP_PORT=18080
+MEDIASTATION_DATA_DIR=./data
+MEDIASTATION_CACHE_DIR=./cache
+MEDIASTATION_MEDIA_DIR=./media
+MEDIASTATION_DOWNLOAD_DIR=./downloads
+TZ=Asia/Shanghai
+PUID=1000
+PGID=1000
+EOF
+```
+
+For an existing NAS media folder, use paths like:
+
+```env
+MEDIASTATION_MEDIA_DIR=/mnt/nas/media
+MEDIASTATION_DOWNLOAD_DIR=/mnt/nas/downloads
+```
+
+5. Download the default compose file:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ShukeBta/MediaStationGo/main/docker-compose.yml -o docker-compose.yml
+```
+
+If GitHub Raw is unavailable, create it manually and paste the template from `docker-compose.yml` in this repository:
+
+```bash
+vi docker-compose.yml
+# or
+vim docker-compose.yml
+```
+
+6. Start MediaStationGo:
+
+```bash
 docker compose pull
 docker compose up -d
+
+# If only docker-compose is available:
+# docker-compose pull
+# docker-compose up -d
+```
+
+7. Check status and logs:
+
+```bash
+docker compose ps
+docker compose logs -f mediastation-go
+
+# Or:
+# docker-compose ps
+# docker-compose logs -f mediastation-go
 ```
 
 Open:
@@ -212,7 +296,19 @@ Username: admin
 Password: admin123
 ```
 
-> Change the administrator password immediately after first login.
+> Change the administrator password immediately after first login. If LAN access fails, check the server firewall, NAS firewall, security group, and the `18080:8080` port mapping.
+
+#### Quick Start from Source Checkout
+
+Developers or users who already cloned the repository can use the built-in compose file directly:
+
+```bash
+git clone https://github.com/ShukeBta/MediaStationGo.git
+cd MediaStationGo
+
+docker compose pull
+docker compose up -d
+```
 
 ### Pin a Release Version
 
