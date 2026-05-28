@@ -226,32 +226,43 @@ cd ~/MediaStationGo
 mkdir -p data cache media downloads
 ```
 
-4. 创建 `.env`，按需修改媒体库和下载目录：
+4. 创建 `.env`，按你的 NAS 路径填写。推荐使用“NAS 绝对路径直读模式”，网页里就可以直接填写 `/vol1/...` 原始路径：
 
 ```bash
 cat > .env <<'EOF'
-MEDIASTATION_IMAGE_TAG=latest
+# 固定版本；需要升级时改成新的 MediaStationGo-vX.Y.Z 后执行 docker compose pull && docker compose up -d
+MEDIASTATION_IMAGE_TAG=MediaStationGo-v0.0.8
 MEDIASTATION_HTTP_PORT=18080
+
+# 程序数据和缓存建议放在 MediaStationGo 部署目录下，便于备份和迁移。
 MEDIASTATION_DATA_DIR=./data
 MEDIASTATION_CACHE_DIR=./cache
-# 如果只想使用部署目录下的 media/downloads 子目录，可以保留下面两行。
-# 如果媒体和下载目录已经在 NAS 绝对路径中，请改成 /vol1/...、/volume1/... 或 /mnt/...。
-MEDIASTATION_MEDIA_DIR=./media
-MEDIASTATION_DOWNLOAD_DIR=./downloads
+
+# NAS / 飞牛直读模式：左侧宿主机路径与右侧容器路径保持一致。
+# 这样添加媒体库时直接填写 /vol1/1000/Docker/moviepilot-v2/media/电视剧/国产剧。
+MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
+MEDIASTATION_MEDIA_CONTAINER_DIR=/vol1/1000/Docker/moviepilot-v2/media
+
+# 下载目录同样保持一致，方便 qBittorrent、MediaStationGo、站点订阅共用同一个保存路径。
+MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
+MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/vol1/1000/qBittorrent/downloads
+
 TZ=Asia/Shanghai
 PUID=1000
 PGID=1000
 EOF
 ```
 
-如果你的媒体文件已经在 NAS 路径中，必须改成宿主机绝对路径，例如：
+> 重点：不要写 `./vol1/1000/...`。`./vol1` 代表当前部署目录下的 `vol1` 子目录，最终会变成类似 `/vol1/1000/Docker/MediaStationGo/vol1/...` 这种错误路径。正确写法必须以 `/vol1/...` 开头。
+
+如果你只是本地测试，没有现成 NAS 媒体目录，也可以改回部署目录下的测试目录：
 
 ```env
-MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
-MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
+MEDIASTATION_MEDIA_DIR=./media
+MEDIASTATION_MEDIA_CONTAINER_DIR=/media
+MEDIASTATION_DOWNLOAD_DIR=./downloads
+MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/downloads
 ```
-
-> 重点：不要写 `./vol1/1000/...`。`./vol1` 代表当前部署目录下的 `vol1` 子目录，最终会变成类似 `/vol1/1000/Docker/MediaStationGo/vol1/...` 这种错误路径。正确写法必须以 `/vol1/...` 开头。
 
 5. 下载默认 `docker-compose.yml`：
 
@@ -470,19 +481,24 @@ docker compose up -d
 
 ### 固定版本部署
 
-建议生产环境固定版本，避免 `latest` 自动变化：
+建议生产环境固定版本，避免 `latest` 自动变化。NAS 直读推荐 `.env`：
 
 ```bash
 cat > .env <<'EOF'
 MEDIASTATION_IMAGE_TAG=MediaStationGo-v0.0.8
 MEDIASTATION_HTTP_PORT=18080
-MEDIASTATION_MEDIA_DIR=/mnt/nas/media
-MEDIASTATION_DOWNLOAD_DIR=/mnt/nas/downloads
 MEDIASTATION_DATA_DIR=./data
 MEDIASTATION_CACHE_DIR=./cache
+MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
+MEDIASTATION_MEDIA_CONTAINER_DIR=/vol1/1000/Docker/moviepilot-v2/media
+MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
+MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/vol1/1000/qBittorrent/downloads
 TZ=Asia/Shanghai
+PUID=1000
+PGID=1000
 EOF
 
+docker compose pull
 docker compose up -d
 ```
 
@@ -519,6 +535,16 @@ MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/vol1/1000/qBittorrent/downloads
 ```
 
 这样添加媒体库时就可以直接填写 `/vol1/1000/Docker/moviepilot-v2/media/电视剧/国产剧`。
+
+推荐添加媒体库路径示例：
+
+| 媒体库 | 页面填写路径 | 类型 |
+| --- | --- | --- |
+| 华语电影 / 外语电影 / 动画电影 | `/vol1/1000/Docker/moviepilot-v2/media/电影` | 电影 |
+| 国产剧 / 欧美剧 / 日韩剧 / 国漫 / 日番 / 综艺 | `/vol1/1000/Docker/moviepilot-v2/media/电视剧` | 电视剧 / 动漫 / 综艺 |
+| 下载根目录 | `/vol1/1000/qBittorrent/downloads` | 下载器保存路径 |
+
+如果你只想添加更细的分类目录，也可以填 `/vol1/1000/Docker/moviepilot-v2/media/电视剧/国产剧`；系统会直接扫描这个目录，不会复制、不搬家。
 
 > 安全策略：扫描和播放只读取原目录；“整理整个库”不会再搬动已经位于媒体库目录内的文件，避免本地 NFO、海报、字幕等元数据被迁移后丢失。下载完成后的自动整理仍然默认关闭，只有你手动打开后才会移动下载目录中的新文件。
 

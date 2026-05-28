@@ -224,32 +224,34 @@ cd ~/MediaStationGo
 mkdir -p data cache media downloads
 ```
 
-4. Create `.env` and adjust paths as needed:
+4. Create `.env`. For NAS deployments, the recommended mode is mapping the host absolute path to the exact same container path, so the web UI can use `/vol1/...` directly:
 
 ```bash
 cat > .env <<'EOF'
-MEDIASTATION_IMAGE_TAG=latest
+MEDIASTATION_IMAGE_TAG=MediaStationGo-v0.0.8
 MEDIASTATION_HTTP_PORT=18080
 MEDIASTATION_DATA_DIR=./data
 MEDIASTATION_CACHE_DIR=./cache
-# Keep the following two lines only if you want to use media/downloads under the deploy directory.
-# For existing NAS folders, use absolute paths such as /vol1/..., /volume1/..., or /mnt/....
-MEDIASTATION_MEDIA_DIR=./media
-MEDIASTATION_DOWNLOAD_DIR=./downloads
+MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
+MEDIASTATION_MEDIA_CONTAINER_DIR=/vol1/1000/Docker/moviepilot-v2/media
+MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
+MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/vol1/1000/qBittorrent/downloads
 TZ=Asia/Shanghai
 PUID=1000
 PGID=1000
 EOF
 ```
 
-For an existing NAS media folder, use absolute host paths, for example:
+> Important: do not write `./vol1/1000/...`. `./vol1` means a `vol1` subdirectory under the current compose project, which can become a wrong path such as `/vol1/1000/Docker/MediaStationGo/vol1/...`. Correct NAS paths must start with `/vol1/...`.
+
+For local testing without existing NAS folders, use the deploy-directory mounts instead:
 
 ```env
-MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
-MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
+MEDIASTATION_MEDIA_DIR=./media
+MEDIASTATION_MEDIA_CONTAINER_DIR=/media
+MEDIASTATION_DOWNLOAD_DIR=./downloads
+MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/downloads
 ```
-
-> Important: do not write `./vol1/1000/...`. `./vol1` means a `vol1` subdirectory under the current compose project, which can become a wrong path such as `/vol1/1000/Docker/MediaStationGo/vol1/...`. Correct NAS paths must start with `/vol1/...`.
 
 5. Download the default compose file:
 
@@ -316,19 +318,24 @@ docker compose up -d
 
 ### Pin a Release Version
 
-For production, pin a specific release tag instead of using `latest`:
+For production, pin a specific release tag instead of using `latest`. Recommended NAS `.env`:
 
 ```bash
 cat > .env <<'EOF'
 MEDIASTATION_IMAGE_TAG=MediaStationGo-v0.0.8
 MEDIASTATION_HTTP_PORT=18080
-MEDIASTATION_MEDIA_DIR=/mnt/nas/media
-MEDIASTATION_DOWNLOAD_DIR=/mnt/nas/downloads
 MEDIASTATION_DATA_DIR=./data
 MEDIASTATION_CACHE_DIR=./cache
+MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
+MEDIASTATION_MEDIA_CONTAINER_DIR=/vol1/1000/Docker/moviepilot-v2/media
+MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
+MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/vol1/1000/qBittorrent/downloads
 TZ=Asia/Shanghai
+PUID=1000
+PGID=1000
 EOF
 
+docker compose pull
 docker compose up -d
 ```
 

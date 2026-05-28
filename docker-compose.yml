@@ -20,11 +20,23 @@
 #   /media     媒体库只读挂载目录。网页中添加媒体库时填写容器内路径，例如 /media/Movies。
 #   /downloads 下载目录。下载器保存路径建议填写容器内路径，例如 /downloads/Movies。
 #
-# 宿主机路径建议：
+# NAS / 飞牛推荐直读模式：
+#   如果你希望网页里直接填写 NAS 原始路径，例如
+#   /vol1/1000/Docker/moviepilot-v2/media/电视剧/国产剧，
+#   请在 .env 中把宿主机路径和容器路径设置成完全相同：
+#
+#   MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
+#   MEDIASTATION_MEDIA_CONTAINER_DIR=/vol1/1000/Docker/moviepilot-v2/media
+#   MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
+#   MEDIASTATION_DOWNLOAD_CONTAINER_DIR=/vol1/1000/qBittorrent/downloads
+#
+#   这只是 Docker bind mount，不会复制文件，不会占用双倍空间。
+#
+# 本地测试模式：
 #   MEDIASTATION_DATA_DIR=./data
 #   MEDIASTATION_CACHE_DIR=./cache
-#   MEDIASTATION_MEDIA_DIR=/mnt/nas/media
-#   MEDIASTATION_DOWNLOAD_DIR=/mnt/nas/downloads
+#   MEDIASTATION_MEDIA_DIR=./media
+#   MEDIASTATION_DOWNLOAD_DIR=./downloads
 #
 # NAS / 飞牛路径必须使用绝对路径，例如：
 #   MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
@@ -58,11 +70,10 @@ services:
       # 海报/背景图/转码缓存。可删除重建，但会重新下载图片和生成缓存。
       - ${MEDIASTATION_CACHE_DIR:-./cache}:/cache
 
-      # 媒体库根目录。添加媒体库时使用容器内路径：
-      #   电影：/media/Movies
-      #   剧集：/media/TV
-      #   动漫：/media/Anime
-      #   综艺：/media/Variety
+      # 媒体库根目录。
+      # 默认：宿主机目录映射到容器 /media，添加媒体库时填写 /media/电影、/media/电视剧。
+      # NAS 直读：把 MEDIASTATION_MEDIA_CONTAINER_DIR 设置成与 MEDIASTATION_MEDIA_DIR 相同，
+      # 添加媒体库时即可直接填写 /vol1/.../media/电影、/vol1/.../media/电视剧。
       # 如宿主机目录不同，请在 .env 中设置 MEDIASTATION_MEDIA_DIR。
       # NAS / 飞牛等系统请写绝对路径，例如：
       #   MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
@@ -71,11 +82,10 @@ services:
       # MEDIASTATION_MEDIA_CONTAINER_DIR 设置为同一个 /vol1/... 路径。
       - ${MEDIASTATION_MEDIA_DIR:-./media}:${MEDIASTATION_MEDIA_CONTAINER_DIR:-/media}:ro
 
-      # 下载保存目录。订阅/站点下载的保存路径建议使用：
-      #   /downloads/Movies
-      #   /downloads/TV
-      #   /downloads/Anime
-      #   /downloads/Variety
+      # 下载保存目录。
+      # 默认：宿主机目录映射到容器 /downloads，订阅保存根目录填写 /downloads。
+      # NAS 直读：把 MEDIASTATION_DOWNLOAD_CONTAINER_DIR 设置成与 MEDIASTATION_DOWNLOAD_DIR 相同，
+      # 下载器保存根目录可直接填写 /vol1/1000/qBittorrent/downloads。
       # 如果外部下载器也运行在 Docker 中，请给下载器挂载同一个宿主机目录。
       # NAS / 飞牛等系统请写绝对路径，例如：
       #   MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
