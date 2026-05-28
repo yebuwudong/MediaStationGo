@@ -273,32 +273,8 @@ func (a *QBitAdapter) loginLocked(ctx context.Context) error {
 	if a.cfg.Host == "" {
 		return fmt.Errorf("qbittorrent host not configured")
 	}
-	form := url.Values{}
-	form.Set("username", a.cfg.Username)
-	form.Set("password", a.cfg.Password)
-	baseURL := strings.TrimRight(a.cfg.Host, "/")
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		baseURL+"/api/v2/auth/login", strings.NewReader(form.Encode()))
-	if err != nil {
+	if err := qbitLogin(ctx, a.client, a.cfg.Host, a.cfg.Username, a.cfg.Password); err != nil {
 		return err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Referer", baseURL)
-	req.Header.Set("Origin", baseURL)
-	req.Header.Set("User-Agent", "MediaStationGo/0.1")
-
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	text := strings.TrimSpace(string(body))
-	if resp.StatusCode == http.StatusForbidden {
-		return fmt.Errorf("qbittorrent login forbidden: check username/password, WebUI IP ban, CSRF/Host header validation, and allowed subnets")
-	}
-	if resp.StatusCode >= 400 || text != "Ok." {
-		return fmt.Errorf("qbittorrent login failed: status=%d body=%s", resp.StatusCode, text)
 	}
 	a.LoggedIn = true
 	return nil

@@ -5,6 +5,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
@@ -13,6 +14,68 @@ import (
 
 	"go.uber.org/zap"
 )
+
+func TestQBitLoginUsesMinimalRequestFirst(t *testing.T) {
+	var loginAttempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			loginAttempts.Add(1)
+			if r.Header.Get("Origin") != "" || r.Header.Get("Referer") != "" {
+				http.Error(w, "unexpected csrf headers", http.StatusForbidden)
+				return
+			}
+			_, _ = w.Write([]byte("Ok."))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewQBitClient(zap.NewNop(), QBitConfig{
+		BaseURL:  server.URL,
+		Username: "admin",
+		Password: "adminadmin",
+	})
+
+	if err := client.Login(context.Background()); err != nil {
+		t.Fatalf("expected minimal login to succeed: %v", err)
+	}
+	if loginAttempts.Load() != 1 {
+		t.Fatalf("login attempts = %d, want 1", loginAttempts.Load())
+	}
+}
+
+func TestQBitLoginRetriesWithRefererWhenRequired(t *testing.T) {
+	var loginAttempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			loginAttempts.Add(1)
+			if r.Header.Get("Referer") == "" {
+				http.Error(w, "missing referer", http.StatusForbidden)
+				return
+			}
+			if r.Header.Get("Origin") != "" {
+				http.Error(w, "origin blocked", http.StatusForbidden)
+				return
+			}
+			_, _ = w.Write([]byte("Ok."))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	jar, _ := cookiejar.New(nil)
+	httpClient := &http.Client{Jar: jar}
+	if err := qbitLogin(context.Background(), httpClient, server.URL, "admin", "adminadmin"); err != nil {
+		t.Fatalf("expected referer retry to succeed: %v", err)
+	}
+	if loginAttempts.Load() != 2 {
+		t.Fatalf("login attempts = %d, want 2", loginAttempts.Load())
+	}
+}
 
 func TestQBitAddTorrentRequiresVisibleNewTask(t *testing.T) {
 	oldAttempts := qbitAddVerifyAttempts

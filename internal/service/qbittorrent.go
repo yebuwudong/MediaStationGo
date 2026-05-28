@@ -96,36 +96,7 @@ func (q *QBitClient) Login(ctx context.Context) error {
 	if q.cfg.BaseURL == "" {
 		return errors.New("qbittorrent base url not configured")
 	}
-	form := url.Values{}
-	form.Set("username", q.cfg.Username)
-	form.Set("password", q.cfg.Password)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		strings.TrimRight(q.cfg.BaseURL, "/")+"/api/v2/auth/login",
-		strings.NewReader(form.Encode()),
-	)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	baseURL := strings.TrimRight(q.cfg.BaseURL, "/")
-	req.Header.Set("Referer", baseURL)
-	req.Header.Set("Origin", baseURL)
-	req.Header.Set("User-Agent", "MediaStationGo/0.1")
-
-	resp, err := q.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	text := strings.TrimSpace(string(body))
-	if resp.StatusCode == http.StatusForbidden {
-		return errors.New("qbittorrent login forbidden: check username/password, WebUI IP ban, CSRF/Host header validation, and allowed subnets")
-	}
-	if resp.StatusCode >= 400 || text != "Ok." {
-		return fmt.Errorf("qbittorrent login failed: status=%d body=%s", resp.StatusCode, text)
-	}
-	return nil
+	return qbitLogin(ctx, q.client, q.cfg.BaseURL, q.cfg.Username, q.cfg.Password)
 }
 
 // AddTorrent submits a magnet URL or HTTP(S) URL to qBittorrent.
