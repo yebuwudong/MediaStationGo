@@ -189,6 +189,15 @@ type Subscription struct {
 	MediaType     string     `gorm:"size:16" json:"media_type,omitempty"`
 	MediaCategory string     `gorm:"size:128" json:"media_category,omitempty"`
 	SavePath      string     `gorm:"size:1024" json:"save_path,omitempty"`
+	SearchMode    string     `gorm:"size:16;default:keyword" json:"search_mode,omitempty"` // keyword / imdb
+	IMDBID        string     `gorm:"size:32" json:"imdb_id,omitempty"`
+	Resolution    string     `gorm:"size:32" json:"resolution,omitempty"`      // 2160p / 1080p / 720p / best
+	Quality       string     `gorm:"size:64" json:"quality,omitempty"`         // remux / bluray / web-dl / hdtv
+	Effects       string     `gorm:"size:128" json:"effects,omitempty"`        // hdr,dolby-vision,atmos
+	ReleaseGroups string     `gorm:"size:255" json:"release_groups,omitempty"` // comma separated
+	ExcludeWords  string     `gorm:"size:255" json:"exclude_words,omitempty"`  // comma separated
+	WashPriority  string     `gorm:"size:32" json:"wash_priority,omitempty"`   // balanced / resolution / quality / effects / seeders
+	Priority      int        `gorm:"default:50" json:"priority,omitempty"`     // lower is earlier when schedulers sort later
 	Enabled       bool       `gorm:"default:true" json:"enabled"`
 	LastRunAt     *time.Time `json:"last_run_at,omitempty"`
 }

@@ -18,6 +18,15 @@ type subscriptionReq struct {
 	MediaType     string `json:"media_type"`
 	MediaCategory string `json:"media_category"`
 	SavePath      string `json:"save_path"`
+	SearchMode    string `json:"search_mode"`
+	IMDBID        string `json:"imdb_id"`
+	Resolution    string `json:"resolution"`
+	Quality       string `json:"quality"`
+	Effects       string `json:"effects"`
+	ReleaseGroups string `json:"release_groups"`
+	ExcludeWords  string `json:"exclude_words"`
+	WashPriority  string `json:"wash_priority"`
+	Priority      int    `json:"priority"`
 	Enabled       *bool  `json:"enabled"`
 }
 
@@ -41,6 +50,15 @@ func createSubscriptionHandler(svc *service.Container) gin.HandlerFunc {
 			MediaType:     req.MediaType,
 			MediaCategory: req.MediaCategory,
 			SavePath:      req.SavePath,
+			SearchMode:    req.SearchMode,
+			IMDBID:        req.IMDBID,
+			Resolution:    req.Resolution,
+			Quality:       req.Quality,
+			Effects:       req.Effects,
+			ReleaseGroups: req.ReleaseGroups,
+			ExcludeWords:  req.ExcludeWords,
+			WashPriority:  req.WashPriority,
+			Priority:      req.Priority,
 			Enabled:       enabled,
 		}
 		if err := svc.Subscription.Create(c.Request.Context(), s); err != nil {

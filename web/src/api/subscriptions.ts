@@ -12,9 +12,21 @@ export const subscriptionsAPI = {
     media_type?: string
     media_category?: string
     save_path?: string
+    search_mode?: string
+    imdb_id?: string
+    resolution?: string
+    quality?: string
+    effects?: string
+    release_groups?: string
+    exclude_words?: string
+    wash_priority?: string
+    priority?: number
     enabled?: boolean
   }) =>
     api.post<Subscription>('/subscriptions', input).then((r) => r.data),
+
+  update: (id: string, input: Partial<Subscription>) =>
+    api.put(`/subscriptions/${id}`, input).then((r) => r.data),
 
   remove: (id: string) => api.delete(`/subscriptions/${id}`).then((r) => r.data),
 

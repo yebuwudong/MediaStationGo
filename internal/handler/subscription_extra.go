@@ -10,31 +10,100 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
 
+type subscriptionPatchReq struct {
+	Name          *string `json:"name"`
+	FeedURL       *string `json:"feed_url"`
+	Filter        *string `json:"filter"`
+	MediaType     *string `json:"media_type"`
+	MediaCategory *string `json:"media_category"`
+	SavePath      *string `json:"save_path"`
+	SearchMode    *string `json:"search_mode"`
+	IMDBID        *string `json:"imdb_id"`
+	Resolution    *string `json:"resolution"`
+	Quality       *string `json:"quality"`
+	Effects       *string `json:"effects"`
+	ReleaseGroups *string `json:"release_groups"`
+	ExcludeWords  *string `json:"exclude_words"`
+	WashPriority  *string `json:"wash_priority"`
+	Priority      *int    `json:"priority"`
+	Enabled       *bool   `json:"enabled"`
+}
+
 // updateSubscriptionHandler patches a subscription row.
 func updateSubscriptionHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var patch model.Subscription
+		var patch subscriptionPatchReq
 		if err := c.ShouldBindJSON(&patch); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		updates := subscriptionPatchUpdates(patch)
+		if len(updates) == 0 {
+			c.Status(http.StatusNoContent)
 			return
 		}
 		if err := svc.Repo.DB.WithContext(c.Request.Context()).
 			Model(&model.Subscription{}).
 			Where("id = ?", c.Param("id")).
-			Updates(map[string]any{
-				"name":           patch.Name,
-				"feed_url":       patch.FeedURL,
-				"filter":         patch.Filter,
-				"media_type":     patch.MediaType,
-				"media_category": patch.MediaCategory,
-				"save_path":      patch.SavePath,
-				"enabled":        patch.Enabled,
-			}).Error; err != nil {
+			Updates(updates).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		c.Status(http.StatusNoContent)
 	}
+}
+
+func subscriptionPatchUpdates(patch subscriptionPatchReq) map[string]any {
+	updates := map[string]any{}
+	if patch.Name != nil {
+		updates["name"] = *patch.Name
+	}
+	if patch.FeedURL != nil {
+		updates["feed_url"] = *patch.FeedURL
+	}
+	if patch.Filter != nil {
+		updates["filter"] = *patch.Filter
+	}
+	if patch.MediaType != nil {
+		updates["media_type"] = *patch.MediaType
+	}
+	if patch.MediaCategory != nil {
+		updates["media_category"] = *patch.MediaCategory
+	}
+	if patch.SavePath != nil {
+		updates["save_path"] = *patch.SavePath
+	}
+	if patch.SearchMode != nil {
+		updates["search_mode"] = *patch.SearchMode
+	}
+	if patch.IMDBID != nil {
+		updates["imdb_id"] = *patch.IMDBID
+	}
+	if patch.Resolution != nil {
+		updates["resolution"] = *patch.Resolution
+	}
+	if patch.Quality != nil {
+		updates["quality"] = *patch.Quality
+	}
+	if patch.Effects != nil {
+		updates["effects"] = *patch.Effects
+	}
+	if patch.ReleaseGroups != nil {
+		updates["release_groups"] = *patch.ReleaseGroups
+	}
+	if patch.ExcludeWords != nil {
+		updates["exclude_words"] = *patch.ExcludeWords
+	}
+	if patch.WashPriority != nil {
+		updates["wash_priority"] = *patch.WashPriority
+	}
+	if patch.Priority != nil {
+		updates["priority"] = *patch.Priority
+	}
+	if patch.Enabled != nil {
+		updates["enabled"] = *patch.Enabled
+	}
+	return updates
 }
 
 // searchSubscriptionHandler runs a one-off keyword search against the

@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
-import { Play, Plus, Trash2 } from 'lucide-react'
+import { Pencil, Play, Plus, Save, Trash2 } from 'lucide-react'
 
 import { subscriptionsAPI } from '../api/subscriptions'
 import type { Subscription } from '../types'
@@ -13,6 +13,15 @@ export function SubscriptionsPage() {
   const [mediaType, setMediaType] = useState('')
   const [mediaCategory, setMediaCategory] = useState('')
   const [savePath, setSavePath] = useState('')
+  const [searchMode, setSearchMode] = useState('keyword')
+  const [imdbID, setImdbID] = useState('')
+  const [resolution, setResolution] = useState('best')
+  const [quality, setQuality] = useState('')
+  const [effects, setEffects] = useState('')
+  const [releaseGroups, setReleaseGroups] = useState('')
+  const [excludeWords, setExcludeWords] = useState('cam,ts,tc,枪版')
+  const [washPriority, setWashPriority] = useState('balanced')
+  const [editingId, setEditingId] = useState('')
   const [loading, setLoading] = useState(true)
 
   const refresh = () =>
@@ -28,27 +37,74 @@ export function SubscriptionsPage() {
   const onCreate = async (e: FormEvent) => {
     e.preventDefault()
     try {
-      await subscriptionsAPI.create({
+      const payload = {
         name,
         feed_url: feed,
         filter,
         media_type: mediaType || undefined,
         media_category: mediaCategory || undefined,
         save_path: savePath || undefined,
-      })
-      toast.success('已创建订阅')
-      setName('')
-      setFeed('')
-      setFilter('')
-      setMediaType('')
-      setMediaCategory('')
-      setSavePath('')
+        search_mode: searchMode,
+        imdb_id: imdbID || undefined,
+        resolution,
+        quality: quality || undefined,
+        effects: effects || undefined,
+        release_groups: releaseGroups || undefined,
+        exclude_words: excludeWords || undefined,
+        wash_priority: washPriority,
+        priority: 50,
+      }
+      if (editingId) {
+        await subscriptionsAPI.update(editingId, payload)
+        toast.success('已更新订阅')
+      } else {
+        await subscriptionsAPI.create(payload)
+        toast.success('已创建订阅')
+      }
+      resetForm()
       await refresh()
     } catch (err: unknown) {
       const msg =
         (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? '创建失败'
       toast.error(msg)
     }
+  }
+
+  const resetForm = () => {
+    setEditingId('')
+    setName('')
+    setFeed('')
+    setFilter('')
+    setMediaType('')
+    setMediaCategory('')
+    setSavePath('')
+    setSearchMode('keyword')
+    setImdbID('')
+    setResolution('best')
+    setQuality('')
+    setEffects('')
+    setReleaseGroups('')
+    setExcludeWords('cam,ts,tc,枪版')
+    setWashPriority('balanced')
+  }
+
+  const startEdit = (s: Subscription) => {
+    setEditingId(s.id)
+    setName(s.name)
+    setFeed(s.feed_url)
+    setFilter(s.filter || '')
+    setMediaType(s.media_type || '')
+    setMediaCategory(s.media_category || '')
+    setSavePath(s.save_path || '')
+    setSearchMode(s.search_mode || 'keyword')
+    setImdbID(s.imdb_id || '')
+    setResolution(s.resolution || 'best')
+    setQuality(s.quality || '')
+    setEffects(s.effects || '')
+    setReleaseGroups(s.release_groups || '')
+    setExcludeWords(s.exclude_words || '')
+    setWashPriority(s.wash_priority || 'balanced')
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   return (
@@ -98,9 +154,43 @@ export function SubscriptionsPage() {
           value={savePath}
           onChange={(e) => setSavePath(e.target.value)}
         />
+        <select className="input-base" value={searchMode} onChange={(e) => setSearchMode(e.target.value)}>
+          <option value="keyword">标题关键词搜索</option>
+          <option value="imdb">IMDB ID 搜索</option>
+        </select>
+        <input className="input-base" placeholder="IMDB ID，如 tt1160419" value={imdbID} onChange={(e) => setImdbID(e.target.value)} />
+        <select className="input-base" value={resolution} onChange={(e) => setResolution(e.target.value)}>
+          <option value="best">分辨率自动择优</option>
+          <option value="2160p">2160p / 4K</option>
+          <option value="1080p">1080p</option>
+          <option value="720p">720p</option>
+        </select>
+        <select className="input-base" value={quality} onChange={(e) => setQuality(e.target.value)}>
+          <option value="">质量不限</option>
+          <option value="remux">REMUX</option>
+          <option value="bluray">BluRay</option>
+          <option value="web-dl">WEB-DL</option>
+          <option value="hdtv">HDTV</option>
+        </select>
+        <input className="input-base" placeholder="特效/音轨 hdr,dolby-vision,atmos" value={effects} onChange={(e) => setEffects(e.target.value)} />
+        <select className="input-base" value={washPriority} onChange={(e) => setWashPriority(e.target.value)}>
+          <option value="balanced">洗版：均衡</option>
+          <option value="resolution">洗版：分辨率优先</option>
+          <option value="quality">洗版：片源质量优先</option>
+          <option value="effects">洗版：HDR/DV/Atmos 优先</option>
+          <option value="seeders">洗版：做种数优先</option>
+        </select>
+        <input className="input-base" placeholder="发布组白名单，如 FRDS,OurTV" value={releaseGroups} onChange={(e) => setReleaseGroups(e.target.value)} />
+        <input className="input-base" placeholder="排除词，如 cam,ts,tc" value={excludeWords} onChange={(e) => setExcludeWords(e.target.value)} />
         <button type="submit" className="neon-button md:col-span-1">
-          <Plus size={16} /> 添加
+          {editingId ? <Save size={16} /> : <Plus size={16} />}
+          {editingId ? '保存' : '添加'}
         </button>
+        {editingId && (
+          <button type="button" onClick={resetForm} className="rounded-xl border border-gray-200 px-3 py-2 text-sm text-ink-100 hover:bg-gray-50">
+            取消编辑
+          </button>
+        )}
       </form>
 
       {loading && <p className="text-sand-500">加载中…</p>}
@@ -115,6 +205,7 @@ export function SubscriptionsPage() {
                 <th>RSS</th>
                 <th>过滤器</th>
                 <th>分类</th>
+                <th>规则</th>
                 <th>最近运行</th>
                 <th className="text-right">操作</th>
               </tr>
@@ -130,10 +221,21 @@ export function SubscriptionsPage() {
                   <td className="text-ink-100">
                     {[s.media_type, s.media_category].filter(Boolean).join(' / ') || '自动'}
                   </td>
+                  <td className="max-w-xs text-xs text-ink-100">
+                    {[s.search_mode === 'imdb' ? `IMDB:${s.imdb_id || '未填'}` : '', s.resolution, s.quality, s.effects, s.wash_priority]
+                      .filter(Boolean)
+                      .join(' · ') || '默认'}
+                  </td>
                   <td className="text-sand-500">
                     {s.last_run_at ? new Date(s.last_run_at).toLocaleString() : '—'}
                   </td>
                   <td className="space-x-2 py-2 text-right">
+                    <button
+                      className="rounded-lg border border-gray-300 px-2 py-1 text-xs text-ink-100 hover:bg-gray-50"
+                      onClick={() => startEdit(s)}
+                    >
+                      <Pencil size={12} />
+                    </button>
                     <button
                       className="rounded-lg border border-primary-400/40 px-2 py-1 text-xs text-brand-500 hover:bg-primary-400/10"
                       onClick={async () => {

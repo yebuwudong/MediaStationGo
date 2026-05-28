@@ -176,6 +176,15 @@ export interface Subscription {
   media_type?: string
   media_category?: string
   save_path?: string
+  search_mode?: string
+  imdb_id?: string
+  resolution?: string
+  quality?: string
+  effects?: string
+  release_groups?: string
+  exclude_words?: string
+  wash_priority?: string
+  priority?: number
   enabled: boolean
   last_run_at?: string
   created_at: string

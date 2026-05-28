@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -37,6 +38,7 @@ type siteSearchCandidate struct {
 	Season   int
 	Episode  int
 	Pack     bool
+	Score    int
 }
 
 // SubscriptionService runs the polling loop.
@@ -92,6 +94,7 @@ func (s *SubscriptionService) Create(ctx context.Context, sub *model.Subscriptio
 	if sub.Name == "" || sub.FeedURL == "" {
 		return errors.New("name and feed_url required")
 	}
+	normalizeSubscriptionDefaults(sub)
 	enabled := sub.Enabled
 	if err := s.repo.Subscription.Create(ctx, sub); err != nil {
 		return err
@@ -103,6 +106,21 @@ func (s *SubscriptionService) Create(ctx context.Context, sub *model.Subscriptio
 		sub.Enabled = false
 	}
 	return nil
+}
+
+func normalizeSubscriptionDefaults(sub *model.Subscription) {
+	if strings.TrimSpace(sub.SearchMode) == "" {
+		sub.SearchMode = "keyword"
+	}
+	if strings.TrimSpace(sub.Resolution) == "" {
+		sub.Resolution = "best"
+	}
+	if strings.TrimSpace(sub.WashPriority) == "" {
+		sub.WashPriority = "balanced"
+	}
+	if sub.Priority == 0 {
+		sub.Priority = 50
+	}
 }
 
 // List returns every subscription rule.
@@ -318,6 +336,9 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 func selectSiteSearchCandidates(results []SearchResult, sub *model.Subscription, seenSet map[string]struct{}) []siteSearchCandidate {
 	candidates := make([]siteSearchCandidate, 0, len(results))
 	for _, item := range results {
+		if !matchesSubscriptionRules(sub, item.Title) {
+			continue
+		}
 		download := strings.TrimSpace(item.DownloadURL)
 		if download == "" {
 			download = strings.TrimSpace(item.TorrentURL)
@@ -330,6 +351,7 @@ func selectSiteSearchCandidates(results []SearchResult, sub *model.Subscription,
 			continue
 		}
 		season, episode := ParseEpisode(item.Title)
+		score := subscriptionCandidateScore(sub, item)
 		candidates = append(candidates, siteSearchCandidate{
 			Item:     item,
 			Download: download,
@@ -337,11 +359,21 @@ func selectSiteSearchCandidates(results []SearchResult, sub *model.Subscription,
 			Season:   season,
 			Episode:  episode,
 			Pack:     isSeriesPackTitle(item.Title),
+			Score:    score,
 		})
 	}
 	if len(candidates) <= 1 {
 		return candidates
 	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].Score != candidates[j].Score {
+			return candidates[i].Score > candidates[j].Score
+		}
+		if candidates[i].Item.Seeders != candidates[j].Item.Seeders {
+			return candidates[i].Item.Seeders > candidates[j].Item.Seeders
+		}
+		return candidates[i].Item.Size > candidates[j].Item.Size
+	})
 
 	mediaType := normalizeMediaType(sub.MediaType, sub.Name+" "+sub.Filter, "")
 	if !isSubscriptionSeriesType(mediaType) {
@@ -365,7 +397,10 @@ func selectSiteSearchCandidates(results []SearchResult, sub *model.Subscription,
 			season = 1
 		}
 		key := fmt.Sprintf("%02dE%03d", season, candidate.Episode)
-		if _, ok := byEpisode[key]; ok {
+		if current, ok := byEpisode[key]; ok {
+			if current.Score < candidate.Score {
+				byEpisode[key] = candidate
+			}
 			continue
 		}
 		byEpisode[key] = candidate
@@ -376,10 +411,169 @@ func selectSiteSearchCandidates(results []SearchResult, sub *model.Subscription,
 	}
 
 	selected := make([]siteSearchCandidate, 0, len(order))
+	sort.Strings(order)
 	for _, key := range order {
 		selected = append(selected, byEpisode[key])
 	}
 	return selected
+}
+
+func matchesSubscriptionRules(sub *model.Subscription, title string) bool {
+	if sub == nil {
+		return true
+	}
+	titleFold := strings.ToLower(title)
+	if sub.ExcludeWords != "" && containsAnyToken(titleFold, sub.ExcludeWords) {
+		return false
+	}
+	if sub.ReleaseGroups != "" && !containsAnyToken(titleFold, sub.ReleaseGroups) {
+		return false
+	}
+	if sub.Resolution != "" && sub.Resolution != "best" && !titleMatchesResolution(titleFold, sub.Resolution) {
+		return false
+	}
+	if sub.Quality != "" && sub.Quality != "best" && !titleMatchesQuality(titleFold, sub.Quality) {
+		return false
+	}
+	if sub.Effects != "" && !containsAnyEffect(titleFold, sub.Effects) {
+		return false
+	}
+	return true
+}
+
+func subscriptionCandidateScore(sub *model.Subscription, item SearchResult) int {
+	title := strings.ToLower(item.Title)
+	score := item.Seeders
+	resolutionScore := detectResolutionScore(title)
+	qualityScore := detectQualityScore(title)
+	effectScore := detectEffectScore(title)
+
+	priority := "balanced"
+	if sub != nil && strings.TrimSpace(sub.WashPriority) != "" {
+		priority = strings.ToLower(strings.TrimSpace(sub.WashPriority))
+	}
+	switch priority {
+	case "resolution":
+		score += resolutionScore*1000 + qualityScore*100 + effectScore*50
+	case "quality":
+		score += qualityScore*1000 + resolutionScore*200 + effectScore*50
+	case "effects":
+		score += effectScore*1000 + resolutionScore*200 + qualityScore*100
+	case "seeders":
+		score += qualityScore*3 + resolutionScore*2 + effectScore
+	default:
+		score += resolutionScore*500 + qualityScore*300 + effectScore*150
+	}
+	if item.Free {
+		score += 25
+	}
+	return score
+}
+
+func containsAnyToken(titleFold, csv string) bool {
+	for _, token := range strings.FieldsFunc(strings.ToLower(csv), func(r rune) bool {
+		return r == ',' || r == '/' || r == '|' || r == ';' || r == '，'
+	}) {
+		token = strings.TrimSpace(token)
+		if token != "" && strings.Contains(titleFold, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAnyEffect(titleFold, csv string) bool {
+	for _, token := range strings.FieldsFunc(strings.ToLower(csv), func(r rune) bool {
+		return r == ',' || r == '/' || r == '|' || r == ';' || r == '，'
+	}) {
+		token = strings.TrimSpace(token)
+		if token == "" {
+			continue
+		}
+		switch token {
+		case "dolby-vision", "dolby vision", "dv":
+			if strings.Contains(titleFold, "dolby vision") || strings.Contains(titleFold, "dovi") || regexp.MustCompile(`\bdv\b`).MatchString(titleFold) {
+				return true
+			}
+		default:
+			if strings.Contains(titleFold, token) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func titleMatchesResolution(titleFold, resolution string) bool {
+	switch strings.ToLower(strings.TrimSpace(resolution)) {
+	case "2160p", "4k", "uhd":
+		return strings.Contains(titleFold, "2160p") || strings.Contains(titleFold, "4k") || strings.Contains(titleFold, "uhd")
+	case "1080p":
+		return strings.Contains(titleFold, "1080p") || strings.Contains(titleFold, "fhd")
+	case "720p":
+		return strings.Contains(titleFold, "720p")
+	default:
+		return strings.Contains(titleFold, strings.ToLower(strings.TrimSpace(resolution)))
+	}
+}
+
+func titleMatchesQuality(titleFold, quality string) bool {
+	switch strings.ToLower(strings.TrimSpace(quality)) {
+	case "webdl", "web-dl":
+		return strings.Contains(titleFold, "web-dl") || strings.Contains(titleFold, "webdl")
+	case "bluray", "blu-ray":
+		return strings.Contains(titleFold, "bluray") || strings.Contains(titleFold, "blu-ray") || strings.Contains(titleFold, "bdrip")
+	case "remux":
+		return strings.Contains(titleFold, "remux")
+	case "hdtv":
+		return strings.Contains(titleFold, "hdtv")
+	default:
+		return strings.Contains(titleFold, strings.ToLower(strings.TrimSpace(quality)))
+	}
+}
+
+func detectResolutionScore(titleFold string) int {
+	switch {
+	case titleMatchesResolution(titleFold, "2160p"):
+		return 4
+	case titleMatchesResolution(titleFold, "1080p"):
+		return 3
+	case titleMatchesResolution(titleFold, "720p"):
+		return 2
+	default:
+		return 1
+	}
+}
+
+func detectQualityScore(titleFold string) int {
+	switch {
+	case titleMatchesQuality(titleFold, "remux"):
+		return 5
+	case titleMatchesQuality(titleFold, "bluray"):
+		return 4
+	case titleMatchesQuality(titleFold, "web-dl"):
+		return 3
+	case titleMatchesQuality(titleFold, "hdtv"):
+		return 2
+	default:
+		return 1
+	}
+}
+
+func detectEffectScore(titleFold string) int {
+	score := 0
+	if containsAnyEffect(titleFold, "dolby-vision") {
+		score += 4
+	}
+	if strings.Contains(titleFold, "hdr10+") {
+		score += 3
+	} else if strings.Contains(titleFold, "hdr") {
+		score += 2
+	}
+	if strings.Contains(titleFold, "atmos") {
+		score += 2
+	}
+	return score
 }
 
 func isSubscriptionSeriesType(mediaType string) bool {
@@ -416,6 +610,9 @@ func (s *SubscriptionService) shouldSkipExistingTorrent(ctx context.Context, med
 func siteSearchKeyword(sub *model.Subscription) string {
 	if sub == nil {
 		return ""
+	}
+	if strings.EqualFold(strings.TrimSpace(sub.SearchMode), "imdb") && strings.TrimSpace(sub.IMDBID) != "" {
+		return strings.TrimSpace(sub.IMDBID)
 	}
 	if u, err := url.Parse(sub.FeedURL); err == nil {
 		if keyword := strings.TrimSpace(u.Query().Get("keyword")); keyword != "" {

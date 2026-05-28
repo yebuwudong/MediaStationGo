@@ -24,7 +24,7 @@ func TestSelectSiteSearchCandidatesPrefersSeriesPack(t *testing.T) {
 }
 
 func TestSelectSiteSearchCandidatesQueuesDistinctEpisodesWhenNoPack(t *testing.T) {
-	sub := &model.Subscription{Name: "葬送的芙莉莲 自动订阅", Filter: "葬送的芙莉莲", MediaType: "anime"}
+	sub := &model.Subscription{Name: "葬送的芙莉莲 自动订阅", Filter: "葬送的芙莉莲", MediaType: "anime", WashPriority: "resolution"}
 	results := []SearchResult{
 		{Title: "葬送的芙莉莲 S01E01 1080p", DownloadURL: "https://pt/download/1a", Seeders: 90},
 		{Title: "葬送的芙莉莲 S01E01 2160p", DownloadURL: "https://pt/download/1b", Seeders: 80},
@@ -39,13 +39,13 @@ func TestSelectSiteSearchCandidatesQueuesDistinctEpisodesWhenNoPack(t *testing.T
 	if got[0].Episode != 1 || got[1].Episode != 2 || got[2].Episode != 3 {
 		t.Fatalf("episodes = %d,%d,%d; want 1,2,3", got[0].Episode, got[1].Episode, got[2].Episode)
 	}
-	if got[0].Download != "https://pt/download/1a" {
-		t.Fatalf("duplicate episode should keep first/best result, got %q", got[0].Download)
+	if got[0].Download != "https://pt/download/1b" {
+		t.Fatalf("duplicate episode should keep wash-priority best result, got %q", got[0].Download)
 	}
 }
 
 func TestSelectSiteSearchCandidatesKeepsMovieSingleBest(t *testing.T) {
-	sub := &model.Subscription{Name: "Inception 自动订阅", Filter: "Inception 2010", MediaType: "movie"}
+	sub := &model.Subscription{Name: "Inception 自动订阅", Filter: "Inception 2010", MediaType: "movie", WashPriority: "seeders"}
 	results := []SearchResult{
 		{Title: "Inception 2010 1080p", DownloadURL: "https://pt/download/1080", Seeders: 90},
 		{Title: "Inception 2010 2160p", DownloadURL: "https://pt/download/2160", Seeders: 80},
@@ -54,5 +54,34 @@ func TestSelectSiteSearchCandidatesKeepsMovieSingleBest(t *testing.T) {
 	got := selectSiteSearchCandidates(results, sub, map[string]struct{}{})
 	if len(got) != 1 || got[0].Download != "https://pt/download/1080" {
 		t.Fatalf("selected %#v, want movie best only", got)
+	}
+}
+
+func TestSelectSiteSearchCandidatesAppliesQualityRules(t *testing.T) {
+	sub := &model.Subscription{
+		Name:         "Dune 自动订阅",
+		Filter:       "Dune 2021",
+		MediaType:    "movie",
+		Resolution:   "2160p",
+		Quality:      "remux",
+		Effects:      "hdr",
+		ExcludeWords: "cam,ts",
+	}
+	results := []SearchResult{
+		{Title: "Dune 2021 2160p WEB-DL HDR", DownloadURL: "https://pt/download/web", Seeders: 100},
+		{Title: "Dune 2021 2160p UHD BluRay REMUX HDR", DownloadURL: "https://pt/download/remux", Seeders: 30},
+		{Title: "Dune 2021 2160p REMUX HDR CAM", DownloadURL: "https://pt/download/cam", Seeders: 200},
+	}
+
+	got := selectSiteSearchCandidates(results, sub, map[string]struct{}{})
+	if len(got) != 1 || got[0].Download != "https://pt/download/remux" {
+		t.Fatalf("selected %#v, want filtered remux", got)
+	}
+}
+
+func TestSiteSearchKeywordCanUseIMDB(t *testing.T) {
+	sub := &model.Subscription{Name: "沙丘 自动订阅", Filter: "Dune 2021", SearchMode: "imdb", IMDBID: "tt1160419"}
+	if got := siteSearchKeyword(sub); got != "tt1160419" {
+		t.Fatalf("keyword = %q, want imdb id", got)
 	}
 }
