@@ -6,15 +6,19 @@ import { imageURL } from '../api/client'
 import type { Media } from '../types'
 
 export const MediaCard = ({
-  media, progress, count, rating, linkTo,
+  media, progress, count, rating, linkTo, onClick,
 }: {
-  media: Media; progress?: number; count?: number; rating?: number; linkTo?: string
+  media: Media
+  progress?: number
+  count?: number
+  rating?: number
+  linkTo?: string
+  onClick?: () => void
 }) => {
   const ref = useRef<HTMLDivElement>(null)
   const href = linkTo ?? `/media/${media.id}`
 
-  return (
-    <Link to={href} className="group block">
+  const card = (
       <motion.div
         ref={ref}
         whileHover={{ scale: 1.04, y: -6 }}
@@ -98,6 +102,19 @@ export const MediaCard = ({
           </div>
         </div>
       </motion.div>
+  )
+
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className="group block w-full text-left">
+        {card}
+      </button>
+    )
+  }
+
+  return (
+    <Link to={href} className="group block">
+      {card}
     </Link>
   )
 }

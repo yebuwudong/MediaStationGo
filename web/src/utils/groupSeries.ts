@@ -16,20 +16,23 @@ import type { Media } from '../types'
  *
  * 同一组内取最早 created_at 的那条作为代表卡片，并带 count 表示集数。
  */
-export type SeriesCard = { rep: Media; count: number }
+export type SeriesCard = { key: string; rep: Media; count: number }
+
+export function getSeriesKey(media: Media): string {
+  if (media.tmdb_id && media.tmdb_id > 0) return `tmdb:${media.tmdb_id}`
+  if (media.bangumi_id && media.bangumi_id > 0) return `bgm:${media.bangumi_id}`
+  if (media.series_id) return `series:${media.series_id}`
+  return `lib:${media.library_id}|${(media.title ?? '').toLowerCase().trim()}`
+}
 
 export function groupSeries(items: Media[]): SeriesCard[] {
   const groups = new Map<string, SeriesCard>()
   for (const m of items) {
-    let key = ''
-    if (m.tmdb_id && m.tmdb_id > 0) key = `tmdb:${m.tmdb_id}`
-    else if (m.bangumi_id && m.bangumi_id > 0) key = `bgm:${m.bangumi_id}`
-    else if (m.series_id) key = `series:${m.series_id}`
-    else key = `lib:${m.library_id}|${(m.title ?? '').toLowerCase().trim()}`
+    const key = getSeriesKey(m)
 
     const g = groups.get(key)
     if (!g) {
-      groups.set(key, { rep: m, count: 1 })
+      groups.set(key, { key, rep: m, count: 1 })
     } else {
       g.count += 1
       const repHasPoster = !!g.rep.poster_url

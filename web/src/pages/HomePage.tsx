@@ -228,7 +228,7 @@ export function HomePage() {
                   key={s.rep.id}
                   media={s.rep}
                   count={s.count}
-                  linkTo={s.count > 1 ? `/library/${row.library.id}` : undefined}
+                  linkTo={s.count > 1 ? `/library/${row.library.id}?series=${encodeURIComponent(s.key)}` : undefined}
                 />
               ))}
             </div>

@@ -108,7 +108,7 @@ func CleanQuery(raw string) (title string, year int) {
 	for _, t := range noiseTokens {
 		lower = strings.ReplaceAll(lower, t, " ")
 	}
-	for _, sep := range []string{".", "_", "-", "[", "]", "(", ")", "×", "x"} {
+	for _, sep := range []string{".", "_", "-", "[", "]", "(", ")", "×"} {
 		lower = strings.ReplaceAll(lower, sep, " ")
 	}
 	// 拆分后丢掉过短（≤1）且全为 ASCII 数字 / 字母的"碎片"，避免

@@ -1,19 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useParams, useNavigate } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import toast from 'react-hot-toast'
-import { ArrowLeft, Play, Film, Layers } from 'lucide-react'
+import { ArrowLeft, Play, Film } from 'lucide-react'
 
 import { libraryAPI } from '../api/library'
 import type { Library, Media } from '../types'
 import { MediaCard } from '../components/MediaCard'
 import { imageURL } from '../api/client'
 import { useAuthStore } from '../stores/auth'
-import { groupSeries, type SeriesCard } from '../utils/groupSeries'
+import { getSeriesKey, groupSeries, type SeriesCard } from '../utils/groupSeries'
 
 export function LibraryPage() {
   const { id = '' } = useParams()
-  const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const role = useAuthStore((s) => s.user?.role)
 
   const [library, setLibrary] = useState<Library | null>(null)
@@ -37,10 +37,7 @@ export function LibraryPage() {
   // 选中的剧集：所有集按季分组
   const selectedEpisodes = useMemo(() => {
     if (!selectedSeries || items.length === 0) return []
-    const title = selectedSeries.rep.title.toLowerCase()
-    const eps = items.filter(
-      (m) => (m.title ?? '').toLowerCase() === title || m.tmdb_id === selectedSeries.rep.tmdb_id,
-    )
+    const eps = items.filter((m) => getSeriesKey(m) === selectedSeries.key)
     // 按季分组，按集排序
     const seasons = new Map<number, Media[]>()
     for (const ep of eps) {
@@ -78,6 +75,22 @@ export function LibraryPage() {
       .finally(() => setLoading(false))
   }, [id, library])
 
+  useEffect(() => {
+    if (!isSeries) {
+      setSelectedSeries(null)
+      return
+    }
+
+    const key = searchParams.get('series')
+    if (!key) {
+      setSelectedSeries(null)
+      return
+    }
+
+    const next = seriesCards.find((card) => card.key === key)
+    if (next) setSelectedSeries(next)
+  }, [isSeries, searchParams, seriesCards])
+
   const handleScan = async () => {
     setScanning(true)
     try {
@@ -100,7 +113,17 @@ export function LibraryPage() {
 
   const handleSeriesClick = (card: SeriesCard) => {
     setSelectedSeries(card)
+    const next = new URLSearchParams(searchParams)
+    next.set('series', card.key)
+    setSearchParams(next)
     window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const clearSelectedSeries = () => {
+    setSelectedSeries(null)
+    const next = new URLSearchParams(searchParams)
+    next.delete('series')
+    setSearchParams(next)
   }
 
   if (loading) {
@@ -153,9 +176,7 @@ export function LibraryPage() {
       {isSeries && seriesCards.length > 0 && !selectedSeries && (
         <div className="grid grid-cols-3 gap-4 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8">
           {seriesCards.map((s) => (
-            <button key={s.rep.id} onClick={() => handleSeriesClick(s)} className="text-left">
-              <MediaCard media={s.rep} count={s.count} />
-            </button>
+            <MediaCard key={s.key} media={s.rep} count={s.count} onClick={() => handleSeriesClick(s)} />
           ))}
         </div>
       )}
@@ -172,7 +193,7 @@ export function LibraryPage() {
             {/* 返回按钮 + 标题 */}
             <div className="flex items-center gap-4">
               <button
-                onClick={() => setSelectedSeries(null)}
+                onClick={clearSelectedSeries}
                 className="btn-ghost gap-2"
               >
                 <ArrowLeft size={16} />
@@ -200,7 +221,12 @@ export function LibraryPage() {
 
                 {/* 从第一集开始 */}
                 {(() => {
-                  const firstEps = selectedEpisodes.flatMap((s) => s.episodes).filter((e) => e.episode_num > 0).sort((a, b) => (a.episode_num || 0) - (b.episode_num || 0))
+                  const firstEps = selectedEpisodes
+                    .flatMap((s) => s.episodes)
+                    .sort((a, b) =>
+                      (a.season_num || 0) - (b.season_num || 0)
+                      || (a.episode_num || 0) - (b.episode_num || 0),
+                    )
                   const first = firstEps.length > 0 ? firstEps[0] : null
                   return first ? (
                     <Link to={`/play/${first.id}`} className="btn-primary inline-flex">
