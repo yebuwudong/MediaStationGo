@@ -42,6 +42,9 @@ trap cleanup EXIT
 ok()   { printf "  \033[32m✓\033[0m %s\n" "$1"; PASS=$((PASS+1)); }
 fail() { printf "  \033[31m✗\033[0m %s\n" "$1"; FAIL=$((FAIL+1)); }
 hdr()  { printf "\n\033[1;36m==> %s\033[0m\n" "$1"; }
+json_token() {
+  python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("token") or d.get("access_token") or (d.get("tokens") or {}).get("access_token") or "")'
+}
 
 require() {
   command -v "$1" >/dev/null || { echo "missing dependency: $1"; exit 2; }
@@ -111,7 +114,7 @@ curl -s "http://127.0.0.1:$PORT/api/health" | grep -q '"ok"' && ok "/api/health"
 hdr "Auth"
 TOKEN=$(curl -s -X POST -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"smoketest12345"}' \
-  "http://127.0.0.1:$PORT/api/auth/login" | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])')
+  "http://127.0.0.1:$PORT/api/auth/login" | json_token)
 [ -n "$TOKEN" ] && ok "login as admin" || fail "login as admin"
 H="Authorization: Bearer $TOKEN"
 curl -s -o /dev/null -w "%{http_code}" -H "$H" "http://127.0.0.1:$PORT/api/me" | grep -q 200 \
@@ -207,7 +210,7 @@ curl -s -X POST -H 'Content-Type: application/json' \
 ATOK=$(curl -s -X POST -H 'Content-Type: application/json' \
        -d '{"username":"alice","password":"alice12345"}' \
        "http://127.0.0.1:$PORT/api/auth/login" \
-       | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])')
+       | json_token)
 curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $ATOK" \
   -X POST -H 'Content-Type: application/json' \
   -d "{\"name\":\"x\",\"path\":\"$MEDIA\",\"type\":\"movie\"}" \

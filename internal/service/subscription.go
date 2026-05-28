@@ -25,6 +25,20 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
+var (
+	seriesPackRE = regexp.MustCompile(`(?i)(complete|batch|合集|全集|全\s*\d+\s*[集话話期]|整季|全季|s\d{1,2}\s*(?:complete|batch|pack)|season\s*\d{1,2}\s*(?:complete|batch|pack)|s\d{1,2}e\d{1,3}\s*[-~–—]\s*(?:e)?\d{1,3}|第\s*\d+\s*[-~–—]\s*\d+\s*[集话話期])`)
+	seasonOnlyRE = regexp.MustCompile(`(?i)(?:^|[\s._-])(?:s|season)\s*\d{1,2}(?:[\s._-]|$)|第\s*\d+\s*季`)
+)
+
+type siteSearchCandidate struct {
+	Item     SearchResult
+	Download string
+	GUID     string
+	Season   int
+	Episode  int
+	Pack     bool
+}
+
 // SubscriptionService runs the polling loop.
 type SubscriptionService struct {
 	cfg       *config.Config
@@ -248,39 +262,19 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 		seenSet[g] = struct{}{}
 	}
 
+	candidates := selectSiteSearchCandidates(results, sub, seenSet)
 	var lastEnqueueErr error
-	for _, item := range results {
-		download := strings.TrimSpace(item.DownloadURL)
-		if download == "" {
-			download = strings.TrimSpace(item.TorrentURL)
-		}
-		if download == "" {
-			continue
-		}
-		guid := download
-		if _, ok := seenSet[guid]; ok {
-			continue
-		}
-		if s.downloads != nil && s.downloads.TorrentExistsByName(ctx, item.Title) {
-			seen = append(seen, guid)
-			if len(seen) > 200 {
-				seen = seen[len(seen)-200:]
-			}
-			_ = s.repo.Setting.Set(ctx, guidKey, strings.Join(seen, "\n"))
-			now := time.Now()
-			_ = s.repo.DB.Model(sub).Updates(map[string]any{"last_run_at": &now}).Error
-			s.hub.Publish("subscription", map[string]any{
-				"id":       sub.ID,
-				"name":     sub.Name,
-				"queued":   0,
-				"keyword":  keyword,
-				"resource": item.Title,
-				"existing": true,
-			})
-			return 0, nil
-		}
-		realURL := s.site.ResolveDownloadURL(ctx, download)
+	queued := 0
+	var resources []string
+	for _, candidate := range candidates {
+		item := candidate.Item
 		mediaType, mediaCategory := s.classifySubscriptionItem(ctx, sub, item.Title, item.Category)
+		if s.shouldSkipExistingTorrent(ctx, mediaType, candidate) {
+			seen = append(seen, candidate.GUID)
+			seenSet[candidate.GUID] = struct{}{}
+			continue
+		}
+		realURL := s.site.ResolveDownloadURL(ctx, candidate.Download)
 		savePath := s.resolveSubscriptionSavePath(ctx, sub, mediaType, mediaCategory)
 		if _, err := s.downloads.AddDownload(ctx, sub.UserID, realURL, savePath); err != nil {
 			lastEnqueueErr = err
@@ -294,29 +288,129 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 				zap.Error(err))
 			continue
 		}
-		seen = append(seen, guid)
-		if len(seen) > 200 {
-			seen = seen[len(seen)-200:]
-		}
-		_ = s.repo.Setting.Set(ctx, guidKey, strings.Join(seen, "\n"))
-		now := time.Now()
-		_ = s.repo.DB.Model(sub).Updates(map[string]any{"last_run_at": &now}).Error
-		s.hub.Publish("subscription", map[string]any{
-			"id":       sub.ID,
-			"name":     sub.Name,
-			"queued":   1,
-			"keyword":  keyword,
-			"resource": item.Title,
-		})
-		return 1, nil
+		queued++
+		resources = append(resources, item.Title)
+		seen = append(seen, candidate.GUID)
+		seenSet[candidate.GUID] = struct{}{}
 	}
-
+	if len(seen) > 200 {
+		seen = seen[len(seen)-200:]
+	}
+	_ = s.repo.Setting.Set(ctx, guidKey, strings.Join(seen, "\n"))
 	now := time.Now()
 	_ = s.repo.DB.Model(sub).Updates(map[string]any{"last_run_at": &now}).Error
+	if queued > 0 {
+		s.hub.Publish("subscription", map[string]any{
+			"id":        sub.ID,
+			"name":      sub.Name,
+			"queued":    queued,
+			"keyword":   keyword,
+			"resources": resources,
+		})
+		return queued, nil
+	}
 	if lastEnqueueErr != nil {
 		return 0, fmt.Errorf("找到 PT 资源但加入下载器失败: %w", lastEnqueueErr)
 	}
 	return 0, nil
+}
+
+func selectSiteSearchCandidates(results []SearchResult, sub *model.Subscription, seenSet map[string]struct{}) []siteSearchCandidate {
+	candidates := make([]siteSearchCandidate, 0, len(results))
+	for _, item := range results {
+		download := strings.TrimSpace(item.DownloadURL)
+		if download == "" {
+			download = strings.TrimSpace(item.TorrentURL)
+		}
+		if download == "" {
+			continue
+		}
+		guid := download
+		if _, ok := seenSet[guid]; ok {
+			continue
+		}
+		season, episode := ParseEpisode(item.Title)
+		candidates = append(candidates, siteSearchCandidate{
+			Item:     item,
+			Download: download,
+			GUID:     guid,
+			Season:   season,
+			Episode:  episode,
+			Pack:     isSeriesPackTitle(item.Title),
+		})
+	}
+	if len(candidates) <= 1 {
+		return candidates
+	}
+
+	mediaType := normalizeMediaType(sub.MediaType, sub.Name+" "+sub.Filter, "")
+	if !isSubscriptionSeriesType(mediaType) {
+		return candidates[:1]
+	}
+
+	for _, candidate := range candidates {
+		if candidate.Pack {
+			return []siteSearchCandidate{candidate}
+		}
+	}
+
+	byEpisode := make(map[string]siteSearchCandidate)
+	order := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Episode <= 0 {
+			continue
+		}
+		season := candidate.Season
+		if season <= 0 {
+			season = 1
+		}
+		key := fmt.Sprintf("%02dE%03d", season, candidate.Episode)
+		if _, ok := byEpisode[key]; ok {
+			continue
+		}
+		byEpisode[key] = candidate
+		order = append(order, key)
+	}
+	if len(order) == 0 {
+		return candidates[:1]
+	}
+
+	selected := make([]siteSearchCandidate, 0, len(order))
+	for _, key := range order {
+		selected = append(selected, byEpisode[key])
+	}
+	return selected
+}
+
+func isSubscriptionSeriesType(mediaType string) bool {
+	switch normalizeMediaType(mediaType, "", "") {
+	case "tv", "anime", "variety":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSeriesPackTitle(title string) bool {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return false
+	}
+	if seriesPackRE.MatchString(title) {
+		return true
+	}
+	_, episode := ParseEpisode(title)
+	return episode == 0 && seasonOnlyRE.MatchString(title)
+}
+
+func (s *SubscriptionService) shouldSkipExistingTorrent(ctx context.Context, mediaType string, candidate siteSearchCandidate) bool {
+	if s == nil || s.downloads == nil {
+		return false
+	}
+	if isSubscriptionSeriesType(mediaType) && !candidate.Pack && candidate.Episode > 0 {
+		return false
+	}
+	return s.downloads.TorrentExistsByName(ctx, candidate.Item.Title)
 }
 
 func siteSearchKeyword(sub *model.Subscription) string {

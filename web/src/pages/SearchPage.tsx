@@ -223,7 +223,7 @@ function ExternalResults({
       <div>
         <h2 className="font-display text-xl font-semibold text-ink-600">外部数据源</h2>
         <p className="text-xs text-ink-50">
-          来自 TMDb / 豆瓣 / Bangumi。订阅后会定期搜索已配置 PT 站点，并只入队最佳新资源。
+          来自 TMDb / 豆瓣 / Bangumi。电影入队最佳资源；剧集/动漫优先整季或全集包，否则按集批量入队。
         </p>
       </div>
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
