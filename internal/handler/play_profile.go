@@ -1,7 +1,7 @@
 // Package handler — multi-persona play profile CRUD endpoints.
 //
-// Non-admin users see / mutate only their own profiles. Admins see
-// every profile so they can manage child accounts, etc.
+// Every user sees / mutates only their own profiles. Admin user
+// management belongs in a separate admin surface, not this switcher.
 package handler
 
 import (
@@ -19,21 +19,10 @@ type verifyPlayProfilePINReq struct {
 	PIN string `json:"pin"`
 }
 
-// listPlayProfilesHandler returns the caller's profiles, or every
-// profile when the caller is an admin AND ?all=true is set.
+// listPlayProfilesHandler returns only the caller's own profiles.
 func listPlayProfilesHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, _ := c.Get(middleware.CtxUserID)
-		role, _ := c.Get(middleware.CtxUserRole)
-		if c.Query("all") == "true" && role == "admin" {
-			rows, err := svc.PlayProfiles.List(c.Request.Context())
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-			c.JSON(http.StatusOK, rows)
-			return
-		}
 		rows, err := svc.PlayProfiles.ListByUser(c.Request.Context(), toString(uid))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -50,13 +39,13 @@ func createPlayProfileHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		// Default the user_id to the caller; admins can override.
 		uid, _ := c.Get(middleware.CtxUserID)
-		role, _ := c.Get(middleware.CtxUserRole)
-		if in.UserID == "" || role != "admin" {
-			in.UserID = toString(uid)
-		}
+		in.UserID = toString(uid)
 		row, err := svc.PlayProfiles.Create(c.Request.Context(), in)
+		if errors.Is(err, service.ErrPlayProfileLimit) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "每个用户最多只能创建 3 个观影 Profile"})
+			return
+		}
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
@@ -72,7 +61,16 @@ func updatePlayProfileHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		row, err := svc.PlayProfiles.Update(c.Request.Context(), c.Param("id"), in)
+		uid, _ := c.Get(middleware.CtxUserID)
+		row, err := svc.PlayProfiles.UpdateForUser(c.Request.Context(), c.Param("id"), toString(uid), in)
+		if errors.Is(err, service.ErrPlayProfileNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "profile not found"})
+			return
+		}
+		if errors.Is(err, service.ErrPlayProfileForbidden) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "profile forbidden"})
+			return
+		}
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
@@ -83,7 +81,14 @@ func updatePlayProfileHandler(svc *service.Container) gin.HandlerFunc {
 
 func deletePlayProfileHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if err := svc.PlayProfiles.Delete(c.Request.Context(), c.Param("id")); err != nil {
+		uid, _ := c.Get(middleware.CtxUserID)
+		if err := svc.PlayProfiles.DeleteForUser(c.Request.Context(), c.Param("id"), toString(uid)); errors.Is(err, service.ErrPlayProfileNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "profile not found"})
+			return
+		} else if errors.Is(err, service.ErrPlayProfileForbidden) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "profile forbidden"})
+			return
+		} else if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}

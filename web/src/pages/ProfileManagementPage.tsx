@@ -10,14 +10,15 @@ import { confirmAction } from '../components/ConfirmDialog'
 import { requestPIN } from '../components/PinDialog'
 import type { Library, PlayProfile } from '../types'
 
+const MAX_PLAY_PROFILES = 3
+
 // ProfileManagementPage replicates the Vue ProfileManagementView. It
-// lets a user (or admin) define multiple "viewing personas" with
+// lets each user define private "viewing personas" with
 // different content-rating gates, library access, and player defaults.
 //
 // All persistence is real: data is written to /api/play-profiles which
 // is backed by the Go PlayProfileService.
 export function ProfileManagementPage() {
-  const isAdmin = useAuthStore((s) => s.user?.role === 'admin')
   const userID = useAuthStore((s) => s.user?.id ?? '')
   const activeProfileId = usePlayProfileStore((s) => s.activeProfileId)
   const setActiveProfile = usePlayProfileStore((s) => s.setActiveProfile)
@@ -32,7 +33,7 @@ export function ProfileManagementPage() {
     setLoading(true)
     try {
       const [p, l] = await Promise.all([
-        playProfilesAPI.list(isAdmin),
+        playProfilesAPI.list(),
         libraryAPI.list().catch(() => [] as Library[]),
       ])
       setProfiles(p)
@@ -44,7 +45,7 @@ export function ProfileManagementPage() {
 
   useEffect(() => {
     refresh().catch(() => undefined)
-  }, [isAdmin])
+  }, [])
 
   const onDelete = async (p: PlayProfile) => {
     if (!(await confirmAction({ title: '删除播放档案', message: `确定删除 Profile「${p.name}」?`, confirmText: '删除' }))) return
@@ -60,6 +61,10 @@ export function ProfileManagementPage() {
   }
 
   const openCreate = () => {
+    if (profiles.length >= MAX_PLAY_PROFILES) {
+      toast.error(`每个用户最多只能创建 ${MAX_PLAY_PROFILES} 个观影 Profile`)
+      return
+    }
     setEditing(null)
     setShowForm(true)
   }
@@ -105,9 +110,17 @@ export function ProfileManagementPage() {
             </p>
           </div>
         </div>
-        <button onClick={openCreate} className="neon-button">
+        <button
+          onClick={openCreate}
+          disabled={profiles.length >= MAX_PLAY_PROFILES}
+          className="neon-button disabled:cursor-not-allowed disabled:opacity-50"
+          title={`每个用户最多 ${MAX_PLAY_PROFILES} 个 Profile`}
+        >
           <Plus size={16} /> 创建 Profile
         </button>
+      </div>
+      <div className="rounded-2xl border border-primary-400/15 bg-primary-400/5 px-4 py-3 text-sm text-ink-100">
+        当前账号已创建 {profiles.length}/{MAX_PLAY_PROFILES} 个 Profile。Profile 仅当前用户可见，不会与其他用户共享。
       </div>
 
       {loading && (
@@ -145,7 +158,6 @@ export function ProfileManagementPage() {
           editing={editing}
           libraries={libraries}
           defaultUserID={userID}
-          isAdmin={isAdmin}
           onClose={() => setShowForm(false)}
           onSaved={async () => {
             setShowForm(false)
@@ -216,7 +228,6 @@ function ProfileCard({
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-50">
             {profile.content_rating_limit && <span>分级: {profile.content_rating_limit}</span>}
             <span>媒体库: {libNames}</span>
-            <span>用户: {profile.user_id.slice(0, 8)}…</span>
           </div>
           <div className="text-xs text-sand-500">
             观看时长 {Math.round(profile.total_watch_time / 3600)} 小时
@@ -252,14 +263,12 @@ function ProfileFormModal({
   editing,
   libraries,
   defaultUserID,
-  isAdmin,
   onClose,
   onSaved,
 }: {
   editing: PlayProfile | null
   libraries: Library[]
   defaultUserID: string
-  isAdmin: boolean
   onClose: () => void
   onSaved: () => void | Promise<void>
 }) {
@@ -315,15 +324,6 @@ function ProfileFormModal({
           {editing ? '编辑 Profile' : '创建 Profile'}
         </h2>
         <form onSubmit={onSubmit} className="space-y-4">
-          {!editing && isAdmin && (
-            <Field label="用户 ID">
-              <input
-                className="input-base"
-                value={form.user_id ?? ''}
-                onChange={(e) => update({ user_id: e.target.value })}
-              />
-            </Field>
-          )}
           <Field label="名称">
             <input
               required

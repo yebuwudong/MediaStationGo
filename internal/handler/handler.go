@@ -196,7 +196,7 @@ func Register(r *gin.Engine, cfg *config.Config, log *zap.Logger, svc *service.C
 			authed.GET("/stats/libraries", statsLibrariesHandler(svc))
 			authed.GET("/stats/monitor", statsMonitorHandler(svc))
 
-			// Multi-persona play profiles (caller-scoped, admins via ?all=true).
+			// Multi-persona play profiles (caller-scoped).
 			authed.GET("/play-profiles", listPlayProfilesHandler(svc))
 			authed.POST("/play-profiles", createPlayProfileHandler(svc))
 			authed.PUT("/play-profiles/:id", updatePlayProfileHandler(svc))

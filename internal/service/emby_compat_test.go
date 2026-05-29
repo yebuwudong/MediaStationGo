@@ -127,13 +127,47 @@ func TestEmbyRootItemsExposeLibraries(t *testing.T) {
 	}
 }
 
+func TestEmbyUserPolicyDisablesDownloadsForViewers(t *testing.T) {
+	svc := newTestEmbyService(t)
+	viewer := &model.User{Username: "viewer", Role: "user", Tier: "free", IsActive: true}
+	admin := &model.User{Username: "admin", Role: "admin", Tier: "plus", IsActive: true}
+	if err := svc.repo.User.Create(t.Context(), viewer); err != nil {
+		t.Fatalf("create viewer: %v", err)
+	}
+	if err := svc.repo.User.Create(t.Context(), admin); err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+
+	viewerPayload, err := svc.FindUser(t.Context(), viewer.ID)
+	if err != nil {
+		t.Fatalf("viewer payload: %v", err)
+	}
+	adminPayload, err := svc.FindUser(t.Context(), admin.ID)
+	if err != nil {
+		t.Fatalf("admin payload: %v", err)
+	}
+	viewerPolicy := viewerPayload["Policy"].(map[string]any)
+	adminPolicy := adminPayload["Policy"].(map[string]any)
+	if viewerPolicy["EnableMediaPlayback"] != true {
+		t.Fatalf("viewer must keep playback enabled: %#v", viewerPolicy)
+	}
+	if viewerPolicy["EnableContentDownloading"] != false ||
+		viewerPolicy["EnableSyncTranscoding"] != false ||
+		viewerPolicy["EnableMediaConversion"] != false {
+		t.Fatalf("viewer must not be allowed to download/sync media: %#v", viewerPolicy)
+	}
+	if adminPolicy["EnableContentDownloading"] != true {
+		t.Fatalf("admin should keep downloading capability: %#v", adminPolicy)
+	}
+}
+
 func newTestEmbyService(t *testing.T) *EmbyService {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Series{}, &model.Media{}, &model.Favorite{}, &model.PlaybackHistory{}); err != nil {
+	if err := db.AutoMigrate(&model.Library{}, &model.Series{}, &model.Media{}, &model.Favorite{}, &model.PlaybackHistory{}, &model.User{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	repos := repository.New(db)

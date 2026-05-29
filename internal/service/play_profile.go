@@ -29,10 +29,13 @@ type PlayProfileService struct {
 	repo *repository.Container
 }
 
+const MaxPlayProfilesPerUser = 3
+
 var (
 	ErrPlayProfileNotFound   = errors.New("profile not found")
 	ErrPlayProfileForbidden  = errors.New("profile forbidden")
 	ErrPlayProfilePINInvalid = errors.New("pin invalid")
+	ErrPlayProfileLimit      = errors.New("profile limit reached")
 )
 
 // NewPlayProfileService is the constructor.
@@ -108,6 +111,13 @@ func (s *PlayProfileService) Create(ctx context.Context, in PlayProfileInput) (*
 	if err := validateProfileInput(in, true); err != nil {
 		return nil, err
 	}
+	count, err := s.repo.PlayProfile.CountByUser(ctx, in.UserID)
+	if err != nil {
+		return nil, err
+	}
+	if count >= MaxPlayProfilesPerUser {
+		return nil, ErrPlayProfileLimit
+	}
 	libsBlob, _ := json.Marshal(in.AllowedLibraryIDs)
 	p := &model.PlayProfile{
 		UserID:                in.UserID,
@@ -137,6 +147,21 @@ func (s *PlayProfileService) Create(ctx context.Context, in PlayProfileInput) (*
 	return &v, nil
 }
 
+// UpdateForUser applies a patch only when the profile belongs to userID.
+func (s *PlayProfileService) UpdateForUser(ctx context.Context, id, userID string, in PlayProfileInput) (*ProfileView, error) {
+	row, err := s.repo.PlayProfile.FindByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if row == nil {
+		return nil, ErrPlayProfileNotFound
+	}
+	if row.UserID != userID {
+		return nil, ErrPlayProfileForbidden
+	}
+	return s.updateExisting(ctx, row, in)
+}
+
 // Update applies a patch to an existing profile.
 func (s *PlayProfileService) Update(ctx context.Context, id string, in PlayProfileInput) (*ProfileView, error) {
 	row, err := s.repo.PlayProfile.FindByID(ctx, id)
@@ -146,6 +171,10 @@ func (s *PlayProfileService) Update(ctx context.Context, id string, in PlayProfi
 	if row == nil {
 		return nil, ErrPlayProfileNotFound
 	}
+	return s.updateExisting(ctx, row, in)
+}
+
+func (s *PlayProfileService) updateExisting(ctx context.Context, row *model.PlayProfile, in PlayProfileInput) (*ProfileView, error) {
 	if err := validateProfileInput(in, false); err != nil {
 		return nil, err
 	}
@@ -175,10 +204,10 @@ func (s *PlayProfileService) Update(ctx context.Context, id string, in PlayProfi
 			return nil, err
 		}
 	}
-	if err := s.repo.PlayProfile.Update(ctx, id, patch); err != nil {
+	if err := s.repo.PlayProfile.Update(ctx, row.ID, patch); err != nil {
 		return nil, err
 	}
-	row, err = s.repo.PlayProfile.FindByID(ctx, id)
+	row, err := s.repo.PlayProfile.FindByID(ctx, row.ID)
 	if err != nil || row == nil {
 		return nil, err
 	}
@@ -188,6 +217,21 @@ func (s *PlayProfileService) Update(ctx context.Context, id string, in PlayProfi
 
 // Delete removes a profile.
 func (s *PlayProfileService) Delete(ctx context.Context, id string) error {
+	return s.repo.PlayProfile.Delete(ctx, id)
+}
+
+// DeleteForUser removes a profile only when it belongs to userID.
+func (s *PlayProfileService) DeleteForUser(ctx context.Context, id, userID string) error {
+	row, err := s.repo.PlayProfile.FindByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if row == nil {
+		return ErrPlayProfileNotFound
+	}
+	if row.UserID != userID {
+		return ErrPlayProfileForbidden
+	}
 	return s.repo.PlayProfile.Delete(ctx, id)
 }
 

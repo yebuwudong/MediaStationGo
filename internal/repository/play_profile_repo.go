@@ -45,6 +45,14 @@ func (r *PlayProfileRepository) ListByUser(ctx context.Context, userID string) (
 	return rows, err
 }
 
+// CountByUser returns the number of active profiles owned by a user.
+func (r *PlayProfileRepository) CountByUser(ctx context.Context, userID string) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&model.PlayProfile{}).
+		Where("user_id = ?", userID).Count(&count).Error
+	return count, err
+}
+
 // Update applies a partial update to a profile row.
 func (r *PlayProfileRepository) Update(ctx context.Context, id string, patch map[string]any) error {
 	return r.db.WithContext(ctx).Model(&model.PlayProfile{}).

@@ -67,7 +67,7 @@ export function Layout() {
       return
     }
     playProfilesAPI
-      .list(false)
+      .list()
       .then((rows) => {
         setProfiles(rows)
         const active = rows.find((p) => p.id === activeProfileId)

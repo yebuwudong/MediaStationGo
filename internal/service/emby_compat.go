@@ -122,6 +122,7 @@ func (e *EmbyService) FindUser(ctx context.Context, id string) (map[string]any, 
 }
 
 func (e *EmbyService) userPayload(u *model.User) map[string]any {
+	canDownload := u.Role == "admin"
 	return map[string]any{
 		"Id":                        u.ID,
 		"Name":                      u.Username,
@@ -153,9 +154,9 @@ func (e *EmbyService) userPayload(u *model.User) map[string]any {
 			"EnableVideoPlaybackTranscoding": true,
 			"EnablePlaybackRemuxing":         true,
 			"EnableLiveTvAccess":             false,
-			"EnableContentDownloading":       true,
-			"EnableSyncTranscoding":          true,
-			"EnableMediaConversion":          true,
+			"EnableContentDownloading":       canDownload,
+			"EnableSyncTranscoding":          canDownload,
+			"EnableMediaConversion":          canDownload,
 			"EnableAllChannels":              true,
 			"EnableAllFolders":               true,
 			"EnableAllDevices":               true,

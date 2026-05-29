@@ -23,12 +23,9 @@ export interface PlayProfilePINVerifyResponse {
   expires_at: string
 }
 
-// playProfilesAPI wraps /play-profiles. The admin variant adds ?all=true.
+// playProfilesAPI wraps caller-scoped /play-profiles.
 export const playProfilesAPI = {
-  list: (all = false) =>
-    api
-      .get<PlayProfile[]>('/play-profiles', { params: all ? { all: 'true' } : {} })
-      .then((r) => r.data),
+  list: () => api.get<PlayProfile[]>('/play-profiles').then((r) => r.data),
 
   create: (input: PlayProfileInput) =>
     api.post<PlayProfile>('/play-profiles', input).then((r) => r.data),

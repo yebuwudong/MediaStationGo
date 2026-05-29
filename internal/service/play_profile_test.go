@@ -11,7 +11,8 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestPlayProfileVerifyPIN(t *testing.T) {
+func newPlayProfileTestService(t *testing.T) *PlayProfileService {
+	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
@@ -19,7 +20,11 @@ func TestPlayProfileVerifyPIN(t *testing.T) {
 	if err := db.AutoMigrate(&model.PlayProfile{}); err != nil {
 		t.Fatal(err)
 	}
-	service := NewPlayProfileService(zap.NewNop(), repository.New(db))
+	return NewPlayProfileService(zap.NewNop(), repository.New(db))
+}
+
+func TestPlayProfileVerifyPIN(t *testing.T) {
+	service := newPlayProfileTestService(t)
 	profile, err := service.Create(t.Context(), PlayProfileInput{
 		UserID:     "user-1",
 		Name:       "成人模式",
@@ -43,19 +48,74 @@ func TestPlayProfileVerifyPIN(t *testing.T) {
 }
 
 func TestPlayProfileCreateRequiresPINWhenEnabled(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.PlayProfile{}); err != nil {
-		t.Fatal(err)
-	}
-	service := NewPlayProfileService(zap.NewNop(), repository.New(db))
+	service := newPlayProfileTestService(t)
 	if _, err := service.Create(t.Context(), PlayProfileInput{
 		UserID:     "user-1",
 		Name:       "锁定模式",
 		RequirePIN: true,
 	}); err == nil {
 		t.Fatal("expected PIN-required profile create to fail without PIN")
+	}
+}
+
+func TestPlayProfileCreateLimitIsPerUser(t *testing.T) {
+	service := newPlayProfileTestService(t)
+
+	for i := 1; i <= MaxPlayProfilesPerUser; i++ {
+		if _, err := service.Create(t.Context(), PlayProfileInput{
+			UserID: "user-1",
+			Name:   "模式 " + string(rune('0'+i)),
+		}); err != nil {
+			t.Fatalf("create profile %d: %v", i, err)
+		}
+	}
+
+	if _, err := service.Create(t.Context(), PlayProfileInput{
+		UserID: "user-1",
+		Name:   "超限模式",
+	}); !errors.Is(err, ErrPlayProfileLimit) {
+		t.Fatalf("expected limit error, got %v", err)
+	}
+
+	if _, err := service.Create(t.Context(), PlayProfileInput{
+		UserID: "user-2",
+		Name:   "另一个用户的模式",
+	}); err != nil {
+		t.Fatalf("different user should have independent limit: %v", err)
+	}
+}
+
+func TestPlayProfileUpdateDeleteRequireOwner(t *testing.T) {
+	service := newPlayProfileTestService(t)
+	profile, err := service.Create(t.Context(), PlayProfileInput{
+		UserID: "user-1",
+		Name:   "私人模式",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := service.UpdateForUser(t.Context(), profile.ID, "user-2", PlayProfileInput{
+		Name: "越权修改",
+	}); !errors.Is(err, ErrPlayProfileForbidden) {
+		t.Fatalf("expected forbidden update, got %v", err)
+	}
+
+	if err := service.DeleteForUser(t.Context(), profile.ID, "user-2"); !errors.Is(err, ErrPlayProfileForbidden) {
+		t.Fatalf("expected forbidden delete, got %v", err)
+	}
+
+	updated, err := service.UpdateForUser(t.Context(), profile.ID, "user-1", PlayProfileInput{
+		Name: "已修改",
+	})
+	if err != nil {
+		t.Fatalf("owner update failed: %v", err)
+	}
+	if updated.Name != "已修改" || updated.UserID != "user-1" {
+		t.Fatalf("unexpected updated profile: %+v", updated)
+	}
+
+	if err := service.DeleteForUser(t.Context(), profile.ID, "user-1"); err != nil {
+		t.Fatalf("owner delete failed: %v", err)
 	}
 }
