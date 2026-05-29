@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useCallback, useEffect, useState } from 'react'
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { Rss, Sparkles } from 'lucide-react'
 
@@ -8,6 +8,7 @@ import { mediaAPI } from '../api/library'
 import { subscriptionsAPI } from '../api/subscriptions'
 import { MediaCard } from '../components/MediaCard'
 import type { Media } from '../types'
+import { groupSeries, seriesCardLink } from '../utils/groupSeries'
 
 export function SearchPage() {
   const [q, setQ] = useState('')
@@ -20,6 +21,7 @@ export function SearchPage() {
   const [hasSearched, setHasSearched] = useState(false)
   const [externalItems, setExternalItems] = useState<ExternalMediaResult[]>([])
   const [subscribing, setSubscribing] = useState('')
+  const localCards = useMemo(() => groupSeries(items), [items])
 
   useEffect(() => {
     aiAPI
@@ -84,7 +86,7 @@ export function SearchPage() {
     }
   }
 
-  const showEmpty = !loading && !error && hasSearched && items.length === 0
+  const showEmpty = !loading && !error && hasSearched && localCards.length === 0
   const showIdle = !loading && !error && !hasSearched
 
   return (
@@ -160,12 +162,19 @@ export function SearchPage() {
         </div>
       )}
 
-      {items.length > 0 && (
+      {localCards.length > 0 && (
         <>
-          <div className="text-sm font-semibold text-ink-100">本地媒体库</div>
+          <div className="text-sm font-semibold text-ink-100">
+            本地媒体库 · {localCards.length} 个合集 / {items.length} 个条目
+          </div>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-          {items.map((m) => (
-            <MediaCard key={m.id} media={m} />
+          {localCards.map((card) => (
+            <MediaCard
+              key={card.key}
+              media={card.rep}
+              count={card.count}
+              linkTo={seriesCardLink(card)}
+            />
           ))}
         </div>
         </>

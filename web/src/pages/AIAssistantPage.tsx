@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react'
+import { FormEvent, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Loader2, Rss, Search, Sparkles, Wand2 } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -8,6 +8,7 @@ import { imageURL } from '../api/client'
 import { subscriptionsAPI } from '../api/subscriptions'
 import { MediaCard } from '../components/MediaCard'
 import type { Media } from '../types'
+import { groupSeries, seriesCardLink } from '../utils/groupSeries'
 
 // AIAssistantPage exposes the two AI helpers backed by the Go server:
 //   - smart search: parses a natural-language query into a SearchIntent +
@@ -30,6 +31,7 @@ export function AIAssistantPage() {
   const [items, setItems] = useState<Media[]>([])
   const [externalItems, setExternalItems] = useState<ExternalMediaResult[]>([])
   const [subscribing, setSubscribing] = useState('')
+  const localCards = useMemo(() => groupSeries(items), [items])
 
   const [recs, setRecs] = useState<string[] | null>(null)
   const [recommending, setRecommending] = useState(false)
@@ -186,11 +188,21 @@ export function AIAssistantPage() {
           </div>
         )}
 
-        {items.length > 0 && (
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-            {items.map((m) => (
-              <MediaCard key={m.id} media={m} />
-            ))}
+        {localCards.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-sm font-semibold text-ink-100">
+              本地媒体库 · {localCards.length} 个合集 / {items.length} 个条目
+            </div>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+              {localCards.map((card) => (
+                <MediaCard
+                  key={card.key}
+                  media={card.rep}
+                  count={card.count}
+                  linkTo={seriesCardLink(card)}
+                />
+              ))}
+            </div>
           </div>
         )}
 

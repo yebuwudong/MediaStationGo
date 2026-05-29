@@ -7,7 +7,7 @@ import { imageURL } from '../api/client'
 import { libraryAPI } from '../api/library'
 import { MediaCard } from '../components/MediaCard'
 import type { Library, Media } from '../types'
-import { artworkScore, groupSeries, type SeriesCard } from '../utils/groupSeries'
+import { artworkScore, groupSeries, seriesCardLink, type SeriesCard } from '../utils/groupSeries'
 
 type LibraryPreview = {
   library: Library
@@ -206,7 +206,7 @@ function LibraryShelf({ preview }: { preview: LibraryPreview }) {
               <MediaCard
                 media={card.rep}
                 count={card.count}
-                linkTo={mediaCardLink(card)}
+                linkTo={seriesCardLink(card)}
               />
             </div>
           ))}
@@ -224,13 +224,6 @@ function latestCards(items: Media[]): SeriesCard[] {
   return groupSeries(items)
     .sort((a, b) => mediaTime(b.rep) - mediaTime(a.rep) || artworkScore(b.rep) - artworkScore(a.rep))
     .slice(0, 10)
-}
-
-function mediaCardLink(card: SeriesCard): string {
-  if (card.count > 1) {
-    return `/library/${card.rep.library_id}?series=${encodeURIComponent(card.key)}`
-  }
-  return `/media/${card.rep.id}`
 }
 
 function mediaTime(media: Media): number {

@@ -82,6 +82,13 @@ export function groupSeries(items: Media[]): SeriesCard[] {
   return Array.from(groups.values())
 }
 
+export function seriesCardLink(card: SeriesCard): string {
+  if (card.count > 1) {
+    return `/library/${card.rep.library_id}?series=${encodeURIComponent(card.key)}`
+  }
+  return `/media/${card.rep.id}`
+}
+
 export function artworkScore(media: Media): number {
   const poster = (media.poster_url ?? '').toLowerCase()
   const backdrop = (media.backdrop_url ?? '').toLowerCase()
