@@ -159,6 +159,9 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (*Lo
 
 // ChangePassword updates the user password if the old one matches.
 func (s *AuthService) ChangePassword(ctx context.Context, userID, oldPwd, newPwd string) error {
+	if strings.TrimSpace(newPwd) == "" || len(newPwd) < 6 {
+		return errors.New("new password must be at least 6 characters")
+	}
 	u, err := s.repo.User.FindByID(ctx, userID)
 	if err != nil {
 		return err
@@ -174,6 +177,23 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID, oldPwd, newPwd
 		return err
 	}
 	return s.repo.User.UpdatePassword(ctx, userID, hash)
+}
+
+// VerifyPassword checks a user's current password without mutating account
+// state. It is used for sensitive self-service actions such as hiding adult
+// libraries or deleting play profiles.
+func (s *AuthService) VerifyPassword(ctx context.Context, userID, password string) error {
+	u, err := s.repo.User.FindByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if u == nil || strings.TrimSpace(password) == "" {
+		return ErrInvalidCredentials
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)); err != nil {
+		return ErrInvalidCredentials
+	}
+	return nil
 }
 
 // IssueToken signs a JWT for the given user (60min validity, includes tier).

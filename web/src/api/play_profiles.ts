@@ -38,6 +38,6 @@ export const playProfilesAPI = {
       .post<PlayProfilePINVerifyResponse>(`/play-profiles/${id}/verify-pin`, { pin })
       .then((r) => r.data),
 
-  remove: (id: string) =>
-    api.delete(`/play-profiles/${id}`).then((r) => r.data),
+  remove: (id: string, proof?: { pin?: string; password?: string }) =>
+    api.delete(`/play-profiles/${id}`, { data: proof ?? {} }).then((r) => r.data),
 }

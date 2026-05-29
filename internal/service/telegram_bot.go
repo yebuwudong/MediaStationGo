@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
@@ -24,8 +26,9 @@ import (
 
 // TelegramUpdate 是 Telegram Bot API 推送的 update 对象。
 type TelegramUpdate struct {
-	UpdateID int              `json:"update_id"`
-	Message  *TelegramMessage `json:"message,omitempty"`
+	UpdateID      int                    `json:"update_id"`
+	Message       *TelegramMessage       `json:"message,omitempty"`
+	CallbackQuery *TelegramCallbackQuery `json:"callback_query,omitempty"`
 }
 
 // TelegramMessage 是 Telegram 消息对象。
@@ -35,6 +38,13 @@ type TelegramMessage struct {
 	Chat      TelegramChat `json:"chat"`
 	Text      string       `json:"text,omitempty"`
 	Date      int          `json:"date"`
+}
+
+type TelegramCallbackQuery struct {
+	ID      string           `json:"id"`
+	From    TelegramUser     `json:"from"`
+	Message *TelegramMessage `json:"message,omitempty"`
+	Data    string           `json:"data,omitempty"`
 }
 
 // TelegramUser 是 Telegram 用户对象。
@@ -48,6 +58,16 @@ type TelegramUser struct {
 type TelegramChat struct {
 	ID   int    `json:"id"`
 	Type string `json:"type"`
+}
+
+type telegramCommandReply struct {
+	Text    string
+	Buttons [][]telegramInlineButton
+}
+
+type telegramInlineButton struct {
+	Text string `json:"text"`
+	Data string `json:"callback_data"`
 }
 
 // TelegramBotService 处理 Telegram Bot 的交互命令。
@@ -77,6 +97,10 @@ func (s *TelegramBotService) HandleWebhook(ctx context.Context, body []byte) err
 		return fmt.Errorf("invalid update: %w", err)
 	}
 
+	if update.CallbackQuery != nil {
+		return s.handleCallback(ctx, update.CallbackQuery)
+	}
+
 	if update.Message == nil || update.Message.Text == "" {
 		return nil
 	}
@@ -97,11 +121,11 @@ func (s *TelegramBotService) HandleWebhook(ctx context.Context, body []byte) err
 	reply, err := s.executeCommand(ctx, channel, msg, text)
 	if err != nil {
 		s.log.Error("command failed", zap.Error(err))
-		_ = s.reply(ctx, channel, msg.Chat.ID, "命令执行失败: "+err.Error())
+		_ = s.reply(ctx, channel, msg.Chat.ID, telegramCommandReply{Text: "命令执行失败: " + err.Error()})
 		return nil
 	}
 
-	if reply != "" {
+	if reply.Text != "" {
 		if err := s.reply(ctx, channel, msg.Chat.ID, reply); err != nil {
 			s.log.Error("reply failed", zap.Error(err))
 		}
@@ -111,57 +135,111 @@ func (s *TelegramBotService) HandleWebhook(ctx context.Context, body []byte) err
 }
 
 // executeCommand 解析命令并执行。
-func (s *TelegramBotService) executeCommand(ctx context.Context, channel *model.NotifyChannel, msg *TelegramMessage, text string) (string, error) {
+func (s *TelegramBotService) executeCommand(ctx context.Context, channel *model.NotifyChannel, msg *TelegramMessage, text string) (telegramCommandReply, error) {
 	parts := strings.Fields(text)
 	if len(parts) == 0 {
-		return "", nil
+		return telegramCommandReply{}, nil
 	}
 
 	cmd := strings.ToLower(parts[0])
 	args := parts[1:]
+	if msg.Chat.Type != "" && msg.Chat.Type != "private" && !s.telegramChatAllowed(channel, msg.Chat.ID) {
+		return telegramCommandReply{Text: "此群组/频道未绑定到 Bot 管理入口，请在通知渠道里填写「命令群组/频道 Chat ID」。"}, nil
+	}
 
 	switch cmd {
 	case "/start":
-		return s.cmdStart(msg), nil
+		return s.cmdStart(ctx, msg, args), nil
 	case "/help":
-		return s.cmdHelp(), nil
+		return telegramCommandReply{Text: s.cmdHelp(ctx, msg)}, nil
+	case "/hideadult", "/hide_adult", "/adult":
+		return s.cmdHideAdult(ctx, msg, args), nil
 	case "/status":
+		if !s.telegramUserIsAdmin(ctx, msg.From.ID) {
+			return telegramCommandReply{Text: "此命令仅管理员可用。普通用户只能使用 /start 绑定账号，并通过按钮隐藏成人目录。"}, nil
+		}
 		return s.cmdStatus(ctx)
 	case "/search":
+		if !s.telegramUserIsAdmin(ctx, msg.From.ID) {
+			return telegramCommandReply{Text: "此命令仅管理员可用。"}, nil
+		}
 		return s.cmdSearch(ctx, args)
 	case "/downloads":
+		if !s.telegramUserIsAdmin(ctx, msg.From.ID) {
+			return telegramCommandReply{Text: "此命令仅管理员可用。"}, nil
+		}
 		return s.cmdDownloads(ctx)
 	case "/stats":
+		if !s.telegramUserIsAdmin(ctx, msg.From.ID) {
+			return telegramCommandReply{Text: "此命令仅管理员可用。"}, nil
+		}
 		return s.cmdStats(ctx)
 	default:
-		return fmt.Sprintf("未知命令: %s\n\n输入 /help 查看可用命令列表。", cmd), nil
+		return telegramCommandReply{Text: fmt.Sprintf("未知命令: %s\n\n输入 /help 查看可用命令列表。", cmd)}, nil
 	}
 }
 
 // cmdStart 处理 /start 命令。
-func (s *TelegramBotService) cmdStart(msg *TelegramMessage) string {
+func (s *TelegramBotService) cmdStart(ctx context.Context, msg *TelegramMessage, args []string) telegramCommandReply {
 	name := msg.From.FirstName
 	if msg.From.Username != "" {
 		name = "@" + msg.From.Username
 	}
-	return fmt.Sprintf(
-		"<b>欢迎使用 MediaStationGo</b>\n\n"+
-			"你好 %s！你已成功连接到媒体中心。\n\n"+
-			"<b>可用命令：</b>\n"+
-			"📊 /status — 系统运行状态\n"+
-			"🔍 /search 关键词 — 搜索媒体\n"+
-			"📥 /downloads — 下载进度\n"+
-			"📈 /stats — 媒体库统计\n"+
-			"❓ /help — 帮助信息",
-		name,
-	)
+	if len(args) == 0 {
+		if binding := s.telegramBinding(ctx, msg.From.ID); binding != nil {
+			user, _ := s.repo.User.FindByID(ctx, binding.UserID)
+			status := "未隐藏"
+			if user != nil && user.HideAdult {
+				status = "已隐藏"
+			}
+			return telegramCommandReply{
+				Text: fmt.Sprintf("<b>MediaStationGo 已绑定</b>\n\n你好 %s，当前账号：<b>%s</b>\n成人目录：<b>%s</b>", name, userNameOrFallback(user), status),
+				Buttons: [][]telegramInlineButton{{{
+					Text: map[bool]string{true: "显示成人目录", false: "隐藏成人目录"}[user != nil && user.HideAdult],
+					Data: "adult_toggle",
+				}}},
+			}
+		}
+		return telegramCommandReply{Text: "<b>欢迎使用 MediaStationGo</b>\n\n普通用户请先绑定账号：\n<code>/start 用户名 密码</code>\n或：<code>/start 用户名-密码</code>\n\n如果没有账号，请联系管理员注册。"}
+	}
+	username, password := parseStartCredentials(args)
+	if username == "" || password == "" {
+		return telegramCommandReply{Text: "绑定格式不正确，请使用：\n<code>/start 用户名 密码</code>\n或：<code>/start 用户名-密码</code>"}
+	}
+	user, err := s.repo.User.FindByUsername(ctx, username)
+	if err != nil || user == nil {
+		return telegramCommandReply{Text: "未找到此用户，请联系管理员注册。"}
+	}
+	if !user.IsActive {
+		return telegramCommandReply{Text: "此账号已被禁用，请联系管理员。"}
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+		return telegramCommandReply{Text: "账号或密码错误。"}
+	}
+	if err := s.upsertTelegramBinding(ctx, msg, user.ID); err != nil {
+		return telegramCommandReply{Text: "绑定失败：" + err.Error()}
+	}
+	return telegramCommandReply{
+		Text: fmt.Sprintf("绑定成功：<b>%s</b>\n\n普通用户只能使用此 Bot 管理自己的成人目录隐藏状态；系统状态、搜索、下载和统计命令仅管理员可用。", user.Username),
+		Buttons: [][]telegramInlineButton{{{
+			Text: map[bool]string{true: "显示成人目录", false: "隐藏成人目录"}[user.HideAdult],
+			Data: "adult_toggle",
+		}}},
+	}
 }
 
 // cmdHelp 处理 /help 命令。
-func (s *TelegramBotService) cmdHelp() string {
+func (s *TelegramBotService) cmdHelp(ctx context.Context, msg *TelegramMessage) string {
+	if !s.telegramUserIsAdmin(ctx, msg.From.ID) {
+		return "<b>MediaStationGo 用户命令</b>\n\n" +
+			"<b>/start 用户名 密码</b> — 绑定账号\n" +
+			"<b>/hideadult on|off</b> — 隐藏或显示成人目录\n\n" +
+			"系统状态、搜索、下载列表与统计命令仅管理员可用。"
+	}
 	return "<b>MediaStationGo 命令列表</b>\n\n" +
 		"<b>/start</b> — 开始使用\n" +
 		"<b>/help</b> — 帮助信息\n" +
+		"<b>/hideadult on|off</b> — 隐藏/显示当前绑定账号的成人目录\n" +
 		"<b>/status</b> — 系统运行状态\n" +
 		"<b>/search 关键词</b> — 搜索媒体库\n" +
 		"<b>/downloads</b> — 下载列表\n" +
@@ -174,7 +252,43 @@ func (s *TelegramBotService) cmdHelp() string {
 }
 
 // cmdStatus 处理 /status 命令。
-func (s *TelegramBotService) cmdStatus(ctx context.Context) (string, error) {
+func (s *TelegramBotService) cmdHideAdult(ctx context.Context, msg *TelegramMessage, args []string) telegramCommandReply {
+	binding := s.telegramBinding(ctx, msg.From.ID)
+	if binding == nil {
+		return telegramCommandReply{Text: "请先绑定账号：<code>/start 用户名 密码</code>"}
+	}
+	user, err := s.repo.User.FindByID(ctx, binding.UserID)
+	if err != nil || user == nil {
+		return telegramCommandReply{Text: "绑定用户不存在，请重新 /start 绑定。"}
+	}
+	next := true
+	if len(args) > 0 {
+		switch strings.ToLower(strings.TrimSpace(args[0])) {
+		case "off", "false", "0", "show", "显示", "关闭":
+			next = false
+		case "on", "true", "1", "hide", "隐藏", "开启":
+			next = true
+		default:
+			next = !user.HideAdult
+		}
+	} else {
+		next = !user.HideAdult
+	}
+	if err := s.repo.User.UpdateFields(ctx, user.ID, map[string]any{"hide_adult": next}); err != nil {
+		return telegramCommandReply{Text: "更新失败：" + err.Error()}
+	}
+	status := map[bool]string{true: "已隐藏", false: "已显示"}[next]
+	return telegramCommandReply{
+		Text: "成人目录" + status + "。此设置会同步影响网页与第三方客户端。",
+		Buttons: [][]telegramInlineButton{{{
+			Text: map[bool]string{true: "显示成人目录", false: "隐藏成人目录"}[next],
+			Data: "adult_toggle",
+		}}},
+	}
+}
+
+// cmdStatus 处理 /status 命令。
+func (s *TelegramBotService) cmdStatus(ctx context.Context) (telegramCommandReply, error) {
 	var mediaCount int64
 	s.repo.DB.Model(&model.Media{}).Count(&mediaCount)
 
@@ -182,18 +296,18 @@ func (s *TelegramBotService) cmdStatus(ctx context.Context) (string, error) {
 	s.repo.DB.Raw("SELECT COALESCE(SUM(size_bytes), 0) FROM media").Scan(&totalSize)
 	totalSizeGB := float64(totalSize) / 1024 / 1024 / 1024
 
-	return fmt.Sprintf(
+	return telegramCommandReply{Text: fmt.Sprintf(
 		"<b>系统运行状态</b>\n\n"+
 			"🎬 媒体总数: <b>%d</b>\n"+
 			"💾 存储占用: <b>%.1f GB</b>",
 		mediaCount, totalSizeGB,
-	), nil
+	)}, nil
 }
 
 // cmdSearch 处理 /search 命令。
-func (s *TelegramBotService) cmdSearch(ctx context.Context, args []string) (string, error) {
+func (s *TelegramBotService) cmdSearch(ctx context.Context, args []string) (telegramCommandReply, error) {
 	if len(args) == 0 {
-		return "请提供搜索关键词\n例: <code>/search 哥斯拉</code>", nil
+		return telegramCommandReply{Text: "请提供搜索关键词\n例: <code>/search 哥斯拉</code>"}, nil
 	}
 
 	keyword := strings.Join(args, " ")
@@ -202,11 +316,11 @@ func (s *TelegramBotService) cmdSearch(ctx context.Context, args []string) (stri
 		Order("year DESC").Limit(8).
 		Find(&results).Error
 	if err != nil {
-		return "", err
+		return telegramCommandReply{}, err
 	}
 
 	if len(results) == 0 {
-		return fmt.Sprintf("未找到与 <b>%s</b> 相关的媒体", keyword), nil
+		return telegramCommandReply{Text: fmt.Sprintf("未找到与 <b>%s</b> 相关的媒体", keyword)}, nil
 	}
 
 	var sb strings.Builder
@@ -223,11 +337,11 @@ func (s *TelegramBotService) cmdSearch(ctx context.Context, args []string) (stri
 		sb.WriteString(fmt.Sprintf("%d. <b>%s</b>%s%s — %s\n", i+1, m.Title, year, ep, formatSize(m.SizeBytes)))
 	}
 
-	return sb.String(), nil
+	return telegramCommandReply{Text: sb.String()}, nil
 }
 
 // cmdDownloads 处理 /downloads 命令。
-func (s *TelegramBotService) cmdDownloads(ctx context.Context) (string, error) {
+func (s *TelegramBotService) cmdDownloads(ctx context.Context) (telegramCommandReply, error) {
 	type Row struct {
 		Title  string
 		Status string
@@ -236,11 +350,11 @@ func (s *TelegramBotService) cmdDownloads(ctx context.Context) (string, error) {
 	if err := s.repo.DB.Raw(
 		"SELECT COALESCE(NULLIF(title,''),'下载任务') as title, COALESCE(status,'unknown') as status FROM download_tasks ORDER BY created_at DESC LIMIT 8",
 	).Scan(&rows).Error; err != nil {
-		return "", err
+		return telegramCommandReply{}, err
 	}
 
 	if len(rows) == 0 {
-		return "当前没有下载任务。", nil
+		return telegramCommandReply{Text: "当前没有下载任务。"}, nil
 	}
 
 	var sb strings.Builder
@@ -265,11 +379,11 @@ func (s *TelegramBotService) cmdDownloads(ctx context.Context) (string, error) {
 		sb.WriteString(fmt.Sprintf("%s %s\n", icon, name))
 	}
 
-	return sb.String(), nil
+	return telegramCommandReply{Text: sb.String()}, nil
 }
 
 // cmdStats 处理 /stats 命令。
-func (s *TelegramBotService) cmdStats(ctx context.Context) (string, error) {
+func (s *TelegramBotService) cmdStats(ctx context.Context) (telegramCommandReply, error) {
 	var totalMedia int64
 	s.repo.DB.Model(&model.Media{}).Count(&totalMedia)
 
@@ -307,7 +421,7 @@ func (s *TelegramBotService) cmdStats(ctx context.Context) (string, error) {
 		}
 	}
 
-	return sb.String(), nil
+	return telegramCommandReply{Text: sb.String()}, nil
 }
 
 // ── Polling ──
@@ -421,7 +535,7 @@ func (s *TelegramBotService) pollLoop(ctx context.Context, botToken string) {
 // ── Message Sending ──
 
 // reply 通过 Telegram Bot API 发送回复消息。
-func (s *TelegramBotService) reply(ctx context.Context, channel *model.NotifyChannel, chatID int, text string) error {
+func (s *TelegramBotService) reply(ctx context.Context, channel *model.NotifyChannel, chatID int, reply telegramCommandReply) error {
 	botToken := ""
 	if channel != nil {
 		configStr := channel.Config
@@ -439,8 +553,22 @@ func (s *TelegramBotService) reply(ctx context.Context, channel *model.NotifyCha
 
 	payload := map[string]interface{}{
 		"chat_id":    strconv.Itoa(chatID),
-		"text":       text,
+		"text":       reply.Text,
 		"parse_mode": "HTML",
+	}
+	if len(reply.Buttons) > 0 {
+		keyboard := make([][]map[string]string, 0, len(reply.Buttons))
+		for _, row := range reply.Buttons {
+			buttons := make([]map[string]string, 0, len(row))
+			for _, button := range row {
+				buttons = append(buttons, map[string]string{
+					"text":          button.Text,
+					"callback_data": button.Data,
+				})
+			}
+			keyboard = append(keyboard, buttons)
+		}
+		payload["reply_markup"] = map[string]interface{}{"inline_keyboard": keyboard}
 	}
 	body, _ := json.Marshal(payload)
 
@@ -482,11 +610,119 @@ func (s *TelegramBotService) findChannelByChatID(ctx context.Context, chatID int
 		}
 		var cfg map[string]string
 		json.Unmarshal([]byte(configStr), &cfg)
-		if cfg["chat_id"] == target {
+		if cfg["chat_id"] == target || cfg["command_chat_id"] == target {
 			return &ch
 		}
 	}
+	if len(channels) == 1 && channels[0].Enabled {
+		return &channels[0]
+	}
 	return nil
+}
+
+func (s *TelegramBotService) handleCallback(ctx context.Context, cb *TelegramCallbackQuery) error {
+	if cb == nil || cb.Message == nil {
+		return nil
+	}
+	channel := s.findChannelByChatID(ctx, cb.Message.Chat.ID)
+	switch strings.TrimSpace(cb.Data) {
+	case "adult_toggle":
+		msg := *cb.Message
+		msg.From = cb.From
+		reply := s.cmdHideAdult(ctx, &msg, nil)
+		if reply.Text != "" {
+			return s.reply(ctx, channel, cb.Message.Chat.ID, reply)
+		}
+	}
+	return nil
+}
+
+func (s *TelegramBotService) telegramBinding(ctx context.Context, telegramUserID int) *model.TelegramBinding {
+	if telegramUserID == 0 {
+		return nil
+	}
+	var binding model.TelegramBinding
+	err := s.repo.DB.WithContext(ctx).Where("telegram_user_id = ?", int64(telegramUserID)).First(&binding).Error
+	if err != nil {
+		return nil
+	}
+	return &binding
+}
+
+func (s *TelegramBotService) telegramUserIsAdmin(ctx context.Context, telegramUserID int) bool {
+	binding := s.telegramBinding(ctx, telegramUserID)
+	if binding == nil {
+		return false
+	}
+	user, err := s.repo.User.FindByID(ctx, binding.UserID)
+	return err == nil && user != nil && user.Role == "admin" && user.IsActive
+}
+
+func (s *TelegramBotService) telegramChatAllowed(channel *model.NotifyChannel, chatID int) bool {
+	if channel == nil {
+		return false
+	}
+	configStr := channel.Config
+	if s.crypto != nil && configStr != "" {
+		configStr = s.crypto.Decrypt(configStr)
+	}
+	var cfg map[string]string
+	if err := json.Unmarshal([]byte(configStr), &cfg); err != nil {
+		return false
+	}
+	target := strconv.Itoa(chatID)
+	commandChatID := strings.TrimSpace(cfg["command_chat_id"])
+	if commandChatID != "" {
+		return commandChatID == target
+	}
+	return strings.TrimSpace(cfg["chat_id"]) == target
+}
+
+func (s *TelegramBotService) upsertTelegramBinding(ctx context.Context, msg *TelegramMessage, userID string) error {
+	name := strings.TrimSpace(msg.From.FirstName)
+	if msg.From.Username != "" {
+		name = "@" + strings.TrimSpace(msg.From.Username)
+	}
+	var existing model.TelegramBinding
+	err := s.repo.DB.WithContext(ctx).Where("telegram_user_id = ?", int64(msg.From.ID)).First(&existing).Error
+	if err == nil {
+		return s.repo.DB.WithContext(ctx).Model(&existing).Updates(map[string]any{
+			"telegram_name": name,
+			"chat_id":       int64(msg.Chat.ID),
+			"user_id":       userID,
+		}).Error
+	}
+	if err != nil && err != gorm.ErrRecordNotFound {
+		return err
+	}
+	return s.repo.DB.WithContext(ctx).Create(&model.TelegramBinding{
+		TelegramUserID: int64(msg.From.ID),
+		TelegramName:   name,
+		ChatID:         int64(msg.Chat.ID),
+		UserID:         userID,
+	}).Error
+}
+
+func parseStartCredentials(args []string) (string, string) {
+	if len(args) >= 2 {
+		return strings.TrimSpace(args[0]), strings.TrimSpace(strings.Join(args[1:], " "))
+	}
+	if len(args) == 1 {
+		raw := strings.TrimSpace(args[0])
+		for _, sep := range []string{"-", "：", ":"} {
+			if parts := strings.SplitN(raw, sep, 2); len(parts) == 2 {
+				return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+			}
+		}
+	}
+	return "", ""
+}
+
+func userNameOrFallback(user *model.User) string {
+	if user == nil || strings.TrimSpace(user.Username) == "" {
+		return "未知用户"
+	}
+	return user.Username
 }
 
 // ── Webhook Management ──

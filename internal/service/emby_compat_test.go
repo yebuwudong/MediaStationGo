@@ -87,7 +87,7 @@ func TestEmbyItemsExposeSeriesSeasonEpisodeHierarchy(t *testing.T) {
 		t.Fatalf("latest should be grouped by series: %#v", latest)
 	}
 
-	playback, err := svc.PlaybackInfo(t.Context(), seriesID)
+	playback, err := svc.PlaybackInfo(t.Context(), seriesID, "user-1")
 	if err != nil {
 		t.Fatalf("series playback fallback: %v", err)
 	}
@@ -158,6 +158,44 @@ func TestEmbyUserPolicyDisablesDownloadsForViewers(t *testing.T) {
 	}
 	if adminPolicy["EnableContentDownloading"] != true {
 		t.Fatalf("admin should keep downloading capability: %#v", adminPolicy)
+	}
+}
+
+func TestEmbyHidesAdultLibrariesForUserLock(t *testing.T) {
+	svc := newTestEmbyService(t)
+	viewer := &model.User{Username: "viewer", Role: "user", Tier: "free", IsActive: true, HideAdult: true}
+	if err := svc.repo.User.Create(t.Context(), viewer); err != nil {
+		t.Fatalf("create viewer: %v", err)
+	}
+	safe := model.Library{Name: "电影", Path: `/media/movies`, Type: "movie", Enabled: true}
+	adult := model.Library{Name: "9KG 成人", Path: `/media/9KG`, Type: "movie", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &safe); err != nil {
+		t.Fatalf("create safe library: %v", err)
+	}
+	if err := svc.repo.Library.Create(t.Context(), &adult); err != nil {
+		t.Fatalf("create adult library: %v", err)
+	}
+	if err := svc.repo.DB.Create(&model.Media{LibraryID: safe.ID, Title: "安全电影", Path: `/media/movies/a.mkv`}).Error; err != nil {
+		t.Fatalf("create safe media: %v", err)
+	}
+	if err := svc.repo.DB.Create(&model.Media{LibraryID: adult.ID, Title: "成人电影", Path: `/media/9KG/a.mkv`}).Error; err != nil {
+		t.Fatalf("create adult media: %v", err)
+	}
+
+	root, err := svc.Items(t.Context(), ItemsParams{UserID: viewer.ID, Limit: 50})
+	if err != nil {
+		t.Fatalf("root items: %v", err)
+	}
+	items := root["Items"].([]map[string]any)
+	if len(items) != 1 || items[0]["Name"] != "电影" {
+		t.Fatalf("adult library should be hidden: %#v", items)
+	}
+	adultItems, err := svc.Items(t.Context(), ItemsParams{UserID: viewer.ID, ParentID: adult.ID, Limit: 50})
+	if err != nil {
+		t.Fatalf("adult items: %v", err)
+	}
+	if got := adultItems["TotalRecordCount"]; got != int64(0) {
+		t.Fatalf("adult media should be hidden, total=%#v payload=%#v", got, adultItems)
 	}
 }
 

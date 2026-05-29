@@ -183,7 +183,7 @@ function channelSummary(ch: NotifyChannel): string {
   const cfg = ch.config ?? {}
   switch (ch.type) {
     case 'telegram':
-      return `Bot ${String(cfg.bot_token ?? '').slice(0, 10)}… → chat ${cfg.chat_id ?? '-'}`
+      return `Bot ${String(cfg.bot_token ?? '').slice(0, 10)}… → 通知 ${cfg.chat_id ?? '-'} · 命令 ${cfg.command_chat_id ?? cfg.chat_id ?? '-'}`
     case 'wechat':
       return `SendKey ${String(cfg.sendkey ?? '').slice(0, 10)}…`
     case 'bark':
@@ -200,7 +200,7 @@ function channelSummary(ch: NotifyChannel): string {
 // ─── Form Modal ─────────────────────────────────────────────────────────────
 
 const EMPTY_CONFIG: Record<NotifyChannel['type'], Record<string, string>> = {
-  telegram: { bot_token: '', chat_id: '' },
+  telegram: { bot_token: '', chat_id: '', command_chat_id: '' },
   wechat: { sendkey: '' },
   bark: { device_key: '', server: '' },
   webhook: { url: '', method: 'POST', headers: '', body_template: '' },
@@ -311,6 +311,17 @@ function ChannelFormModal({
                   onChange={(e) => updateConfig('chat_id', e.target.value)}
                 />
               </Field>
+              <Field label="命令群组/频道 Chat ID (可选)">
+                <input
+                  className="input-base"
+                  placeholder="留空则使用上方 Chat ID；填写后只有该群组/频道可唤醒 Bot"
+                  value={config.command_chat_id ?? ''}
+                  onChange={(e) => updateConfig('command_chat_id', e.target.value)}
+                />
+              </Field>
+              <div className="rounded-2xl border border-primary-400/15 bg-primary-400/5 px-4 py-3 text-xs leading-6 text-ink-50">
+                普通用户只能通过 <code>/start 用户名 密码</code> 绑定账号，并使用隐藏成人目录按钮；<code>/status</code>、<code>/search</code>、<code>/downloads</code>、<code>/stats</code> 仅管理员可用。
+              </div>
             </>
           )}
 

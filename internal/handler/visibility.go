@@ -4,7 +4,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -18,8 +17,10 @@ import (
 )
 
 func mediaVisibilityForRequest(c *gin.Context, svc *service.Container) service.MediaVisibility {
-	adultEnabled := settingBool(c, svc, "adult.enabled", false)
-	visibility := service.MediaVisibility{IncludeNSFW: adultEnabled}
+	userID := currentUserID(c)
+	adultEnabled := service.AdultContentEnabled(c.Request.Context(), svc.Repo)
+	userHidesAdult := service.UserHidesAdult(c.Request.Context(), svc.Repo, userID)
+	visibility := service.UserDefaultMediaVisibility(c.Request.Context(), svc.Repo, userID)
 	profile, locked := selectedPlayProfile(c, svc)
 	if locked {
 		return service.MediaVisibility{
@@ -30,7 +31,7 @@ func mediaVisibilityForRequest(c *gin.Context, svc *service.Container) service.M
 	if profile == nil {
 		return visibility
 	}
-	visibility.IncludeNSFW = adultEnabled && profile.AllowAdult
+	visibility.IncludeNSFW = adultEnabled && profile.AllowAdult && !userHidesAdult
 	visibility.AllowedLibraryIDs = profileAllowedLibraryIDs(*profile)
 	return visibility
 }
@@ -99,14 +100,7 @@ func currentUserID(c *gin.Context) string {
 }
 
 func profileAllowedLibraryIDs(profile model.PlayProfile) []string {
-	if strings.TrimSpace(profile.AllowedLibraryIDs) == "" {
-		return nil
-	}
-	var ids []string
-	if err := json.Unmarshal([]byte(profile.AllowedLibraryIDs), &ids); err != nil {
-		return nil
-	}
-	return ids
+	return service.DecodeAllowedLibraryIDs(profile.AllowedLibraryIDs)
 }
 
 func signPlayProfilePINToken(svc *service.Container, userID, profileID string, expiresAt time.Time) string {

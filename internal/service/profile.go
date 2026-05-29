@@ -26,8 +26,12 @@ func NewProfileService(log *zap.Logger, repo *repository.Container) *ProfileServ
 // ProfileUpdate is the patch object accepted by UpdateProfile. Empty
 // fields are ignored so the same payload can be reused across screens.
 type ProfileUpdate struct {
+	Username  *string `json:"username,omitempty"`
+	Nickname  *string `json:"nickname,omitempty"`
 	Email     *string `json:"email,omitempty"`
 	AvatarURL *string `json:"avatar_url,omitempty"`
+	HideAdult *bool   `json:"hide_adult,omitempty"`
+	Password  string  `json:"password,omitempty"`
 }
 
 // UpdateProfile applies a non-credential patch to the user.
@@ -35,13 +39,38 @@ func (p *ProfileService) UpdateProfile(ctx context.Context, userID string, patch
 	if userID == "" {
 		return nil, errors.New("missing user id")
 	}
+	current, err := p.repo.User.FindByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if current == nil {
+		return nil, errors.New("user not found")
+	}
 	updates := map[string]any{}
+	if patch.Username != nil {
+		v := strings.TrimSpace(*patch.Username)
+		if v == "" {
+			return nil, errors.New("username required")
+		}
+		if existing, err := p.repo.User.FindByUsername(ctx, v); err != nil {
+			return nil, err
+		} else if existing != nil && existing.ID != userID {
+			return nil, ErrUsernameTaken
+		}
+		updates["username"] = v
+	}
+	if patch.Nickname != nil {
+		updates["nickname"] = strings.TrimSpace(*patch.Nickname)
+	}
 	if patch.Email != nil {
 		v := strings.TrimSpace(*patch.Email)
 		updates["email"] = v
 	}
 	if patch.AvatarURL != nil {
 		updates["avatar_url"] = strings.TrimSpace(*patch.AvatarURL)
+	}
+	if patch.HideAdult != nil {
+		updates["hide_adult"] = *patch.HideAdult
 	}
 	if len(updates) > 0 {
 		if err := p.repo.DB.Model(&model.User{}).Where("id = ?", userID).

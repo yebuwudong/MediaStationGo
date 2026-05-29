@@ -19,6 +19,11 @@ type verifyPlayProfilePINReq struct {
 	PIN string `json:"pin"`
 }
 
+type deletePlayProfileReq struct {
+	PIN      string `json:"pin"`
+	Password string `json:"password"`
+}
+
 // listPlayProfilesHandler returns only the caller's own profiles.
 func listPlayProfilesHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -82,7 +87,44 @@ func updatePlayProfileHandler(svc *service.Container) gin.HandlerFunc {
 func deletePlayProfileHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid, _ := c.Get(middleware.CtxUserID)
-		if err := svc.PlayProfiles.DeleteForUser(c.Request.Context(), c.Param("id"), toString(uid)); errors.Is(err, service.ErrPlayProfileNotFound) {
+		userID := toString(uid)
+		var req deletePlayProfileReq
+		_ = c.ShouldBindJSON(&req)
+
+		profile, err := svc.Repo.PlayProfile.FindByID(c.Request.Context(), c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if profile == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "profile not found"})
+			return
+		}
+		if profile.UserID != userID {
+			c.JSON(http.StatusForbidden, gin.H{"error": "profile forbidden"})
+			return
+		}
+		verified := false
+		if profile.RequirePIN && req.PIN != "" {
+			if _, err := svc.PlayProfiles.VerifyPIN(c.Request.Context(), profile.ID, userID, req.PIN); err == nil {
+				verified = true
+			}
+		}
+		if !verified && req.Password != "" {
+			if err := svc.Auth.VerifyPassword(c.Request.Context(), userID, req.Password); err == nil {
+				verified = true
+			}
+		}
+		if !verified {
+			if profile.RequirePIN {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "删除此 Profile 需要输入 PIN 或当前账号密码"})
+			} else {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "删除此 Profile 需要输入当前账号密码"})
+			}
+			return
+		}
+
+		if err := svc.PlayProfiles.DeleteForUser(c.Request.Context(), profile.ID, userID); errors.Is(err, service.ErrPlayProfileNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "profile not found"})
 			return
 		} else if errors.Is(err, service.ErrPlayProfileForbidden) {

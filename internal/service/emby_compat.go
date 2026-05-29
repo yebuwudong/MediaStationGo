@@ -169,13 +169,17 @@ func (e *EmbyService) userPayload(u *model.User) map[string]any {
 // ─── Views / MediaFolders ────────────────────────────────────────────────────
 
 // Views 返回 Emby 中"虚拟根目录"——每个 library 一个条目。
-func (e *EmbyService) Views(ctx context.Context) (map[string]any, error) {
+func (e *EmbyService) Views(ctx context.Context, userID string) (map[string]any, error) {
 	libs, err := e.repo.Library.List(ctx)
 	if err != nil {
 		return nil, err
 	}
+	visibility := UserDefaultMediaVisibility(ctx, e.repo, userID)
 	items := make([]map[string]any, 0, len(libs))
 	for _, l := range libs {
+		if !LibraryVisibleForUser(ctx, e.repo, l, visibility) {
+			continue
+		}
 		items = append(items, e.libraryAsView(&l))
 	}
 	return map[string]any{"Items": items, "TotalRecordCount": len(items)}, nil
@@ -290,16 +294,16 @@ func (e *EmbyService) Items(ctx context.Context, p ItemsParams) (map[string]any,
 	}
 
 	if p.ParentID == "" && p.SearchTerm == "" && !p.Recursive && len(p.IncludeItemTypes) == 0 {
-		return e.Views(ctx)
+		return e.Views(ctx, p.UserID)
 	}
 
-	if season, ok, err := e.findSeasonGroup(ctx, p.ParentID); err != nil {
+	if season, ok, err := e.findSeasonGroup(ctx, p.ParentID, p.UserID); err != nil {
 		return nil, err
 	} else if ok {
 		return e.episodeItems(ctx, season.Episodes, p)
 	}
 
-	if series, ok, err := e.findSeriesGroup(ctx, p.ParentID); err != nil {
+	if series, ok, err := e.findSeriesGroup(ctx, p.ParentID, p.UserID); err != nil {
 		return nil, err
 	} else if ok {
 		if p.Recursive || containsItemType(p.IncludeItemTypes, "Episode") {
@@ -329,6 +333,7 @@ func (e *EmbyService) Items(ctx context.Context, p ItemsParams) (map[string]any,
 
 func (e *EmbyService) mediaItems(ctx context.Context, p ItemsParams) (map[string]any, error) {
 	q := e.repo.DB.WithContext(ctx).Model(&model.Media{})
+	q = e.applyUserMediaVisibility(ctx, q, p.UserID)
 	if p.ParentID != "" {
 		q = q.Where("library_id = ? OR series_id = ?", p.ParentID, p.ParentID)
 	}
@@ -375,6 +380,7 @@ func (e *EmbyService) mediaItems(ctx context.Context, p ItemsParams) (map[string
 }
 
 func (e *EmbyService) episodeItems(ctx context.Context, rows []model.Media, p ItemsParams) (map[string]any, error) {
+	rows = e.filterMediaRowsForUser(ctx, rows, p.UserID)
 	if p.SearchTerm != "" {
 		filtered := rows[:0]
 		needle := strings.ToLower(p.SearchTerm)
@@ -428,14 +434,14 @@ func (e *EmbyService) payloadsForMedia(ctx context.Context, rows []model.Media, 
 // Item 单条目详情。
 func (e *EmbyService) Item(ctx context.Context, mediaID, userID string) (map[string]any, error) {
 	if strings.HasPrefix(mediaID, embyVirtualSeasonPrefix) {
-		if season, ok, err := e.findSeasonGroup(ctx, mediaID); err != nil {
+		if season, ok, err := e.findSeasonGroup(ctx, mediaID, userID); err != nil {
 			return nil, err
 		} else if ok {
 			return e.seasonPayload(season), nil
 		}
 	}
 	if strings.HasPrefix(mediaID, embyVirtualSeriesPrefix) {
-		if series, ok, err := e.findSeriesGroup(ctx, mediaID); err != nil {
+		if series, ok, err := e.findSeriesGroup(ctx, mediaID, userID); err != nil {
 			return nil, err
 		} else if ok {
 			return e.seriesPayload(series), nil
@@ -446,11 +452,14 @@ func (e *EmbyService) Item(ctx context.Context, mediaID, userID string) (map[str
 		return nil, err
 	}
 	if m == nil {
-		if series, ok, err := e.findSeriesGroup(ctx, mediaID); err != nil {
+		if series, ok, err := e.findSeriesGroup(ctx, mediaID, userID); err != nil {
 			return nil, err
 		} else if ok {
 			return e.seriesPayload(series), nil
 		}
+		return nil, nil
+	}
+	if !UserDefaultMediaVisibility(ctx, e.repo, userID).Allows(m) {
 		return nil, nil
 	}
 	fav := false
@@ -477,6 +486,7 @@ func (e *EmbyService) LatestItems(ctx context.Context, userID, parentID string, 
 		limit = 20
 	}
 	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).Where("deleted_at IS NULL")
+	q = e.applyUserMediaVisibility(ctx, q, userID)
 	if parentID != "" {
 		if episodic, err := e.libraryIsEpisodic(ctx, parentID); err == nil && episodic {
 			resp, err := e.seriesItemsForLibrary(ctx, parentID, ItemsParams{
@@ -540,7 +550,9 @@ func (e *EmbyService) ResumeItems(ctx context.Context, userID string, limit int)
 		posByID[h.MediaID] = h.PositionMs
 	}
 	var medias []model.Media
-	if err := e.repo.DB.WithContext(ctx).Where("id IN ?", ids).Find(&medias).Error; err != nil {
+	q := e.repo.DB.WithContext(ctx).Where("id IN ?", ids)
+	q = e.applyUserMediaVisibility(ctx, q, userID)
+	if err := q.Find(&medias).Error; err != nil {
 		return nil, err
 	}
 	// 维持时间倒序
@@ -638,6 +650,7 @@ func (e *EmbyService) itemPayload(m *model.Media, fav bool, posMs int64) map[str
 
 func (e *EmbyService) seriesItemsForLibrary(ctx context.Context, libraryID string, p ItemsParams) (map[string]any, error) {
 	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).Where("season_num > 0 OR episode_num > 0")
+	q = e.applyUserMediaVisibility(ctx, q, p.UserID)
 	if libraryID != "" {
 		q = q.Where("library_id = ?", libraryID)
 	}
@@ -677,12 +690,13 @@ func (e *EmbyService) libraryIsEpisodic(ctx context.Context, libraryID string) (
 	return count > 0, err
 }
 
-func (e *EmbyService) findSeriesGroup(ctx context.Context, id string) (embySeriesGroup, bool, error) {
+func (e *EmbyService) findSeriesGroup(ctx context.Context, id, userID string) (embySeriesGroup, bool, error) {
 	if strings.TrimSpace(id) == "" {
 		return embySeriesGroup{}, false, nil
 	}
 	var rows []model.Media
 	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).Where("season_num > 0 OR episode_num > 0")
+	q = e.applyUserMediaVisibility(ctx, q, userID)
 	if !strings.HasPrefix(id, embyVirtualSeriesPrefix) {
 		q = q.Where("series_id = ?", id)
 	}
@@ -716,13 +730,15 @@ func (e *EmbyService) findSeriesGroup(ctx context.Context, id string) (embySerie
 	return embySeriesGroup{}, false, nil
 }
 
-func (e *EmbyService) findSeasonGroup(ctx context.Context, id string) (embySeasonGroup, bool, error) {
+func (e *EmbyService) findSeasonGroup(ctx context.Context, id, userID string) (embySeasonGroup, bool, error) {
 	if strings.TrimSpace(id) == "" || !strings.HasPrefix(id, embyVirtualSeasonPrefix) {
 		return embySeasonGroup{}, false, nil
 	}
 	var rows []model.Media
-	if err := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
-		Where("season_num > 0 OR episode_num > 0").
+	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
+		Where("season_num > 0 OR episode_num > 0")
+	q = e.applyUserMediaVisibility(ctx, q, userID)
+	if err := q.
 		Order("season_num asc, episode_num asc, created_at asc").
 		Find(&rows).Error; err != nil {
 		return embySeasonGroup{}, false, err
@@ -900,14 +916,14 @@ func (e *EmbyService) ImageURL(ctx context.Context, id, imageType string) (strin
 		return backdrop
 	}
 	if strings.HasPrefix(id, embyVirtualSeasonPrefix) {
-		if season, ok, err := e.findSeasonGroup(ctx, id); err != nil {
+		if season, ok, err := e.findSeasonGroup(ctx, id, ""); err != nil {
 			return "", err
 		} else if ok {
 			return pick(season.Series.PosterURL, season.Series.BackdropURL), nil
 		}
 	}
 	if strings.HasPrefix(id, embyVirtualSeriesPrefix) {
-		if series, ok, err := e.findSeriesGroup(ctx, id); err != nil {
+		if series, ok, err := e.findSeriesGroup(ctx, id, ""); err != nil {
 			return "", err
 		} else if ok {
 			return pick(series.PosterURL, series.BackdropURL), nil
@@ -920,7 +936,7 @@ func (e *EmbyService) ImageURL(ctx context.Context, id, imageType string) (strin
 	if err != nil {
 		return "", err
 	}
-	if series, ok, err := e.findSeriesGroup(ctx, id); err != nil {
+	if series, ok, err := e.findSeriesGroup(ctx, id, ""); err != nil {
 		return "", err
 	} else if ok {
 		return pick(series.PosterURL, series.BackdropURL), nil
@@ -1050,6 +1066,66 @@ func emptyUserData() map[string]any {
 	}
 }
 
+func (e *EmbyService) applyUserMediaVisibility(ctx context.Context, q *gorm.DB, userID string) *gorm.DB {
+	visibility := UserDefaultMediaVisibility(ctx, e.repo, userID)
+	if !visibility.IncludeNSFW {
+		q = q.Where("nsfw = ?", false)
+		if hidden := e.hiddenLibraryIDs(ctx, visibility); len(hidden) > 0 {
+			q = q.Where("library_id NOT IN ?", hidden)
+		}
+	}
+	if len(visibility.AllowedLibraryIDs) > 0 {
+		q = q.Where("library_id IN ?", visibility.AllowedLibraryIDs)
+	}
+	return q
+}
+
+func (e *EmbyService) filterMediaRowsForUser(ctx context.Context, rows []model.Media, userID string) []model.Media {
+	visibility := UserDefaultMediaVisibility(ctx, e.repo, userID)
+	if visibility.IncludeNSFW && len(visibility.AllowedLibraryIDs) == 0 {
+		return rows
+	}
+	allowed := map[string]bool{}
+	for _, id := range visibility.AllowedLibraryIDs {
+		allowed[id] = true
+	}
+	hiddenLibraries := map[string]bool{}
+	for _, id := range e.hiddenLibraryIDs(ctx, visibility) {
+		hiddenLibraries[id] = true
+	}
+	out := rows[:0]
+	for _, row := range rows {
+		if row.NSFW && !visibility.IncludeNSFW {
+			continue
+		}
+		if hiddenLibraries[row.LibraryID] {
+			continue
+		}
+		if len(allowed) > 0 && !allowed[row.LibraryID] {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+func (e *EmbyService) hiddenLibraryIDs(ctx context.Context, visibility MediaVisibility) []string {
+	if visibility.IncludeNSFW {
+		return nil
+	}
+	libs, err := e.repo.Library.List(ctx)
+	if err != nil {
+		return nil
+	}
+	ids := make([]string, 0)
+	for _, lib := range libs {
+		if !LibraryVisibleForUser(ctx, e.repo, lib, visibility) {
+			ids = append(ids, lib.ID)
+		}
+	}
+	return ids
+}
+
 func minInt(a, b int) int {
 	if a < b {
 		return a
@@ -1067,8 +1143,8 @@ func maxInt(a, b int) int {
 // ─── Playback ────────────────────────────────────────────────────────────────
 
 // PlaybackInfo returns a PlaybackInfoResponse usable by Emby clients.
-func (e *EmbyService) PlaybackInfo(ctx context.Context, mediaID string) (map[string]any, error) {
-	m, err := e.playableMedia(ctx, mediaID)
+func (e *EmbyService) PlaybackInfo(ctx context.Context, mediaID, userID string) (map[string]any, error) {
+	m, err := e.playableMedia(ctx, mediaID, userID)
 	if err != nil || m == nil {
 		return nil, err
 	}
@@ -1078,18 +1154,25 @@ func (e *EmbyService) PlaybackInfo(ctx context.Context, mediaID string) (map[str
 	}, nil
 }
 
-func (e *EmbyService) playableMedia(ctx context.Context, id string) (*model.Media, error) {
-	if season, ok, err := e.findSeasonGroup(ctx, id); err != nil {
+func (e *EmbyService) playableMedia(ctx context.Context, id, userID string) (*model.Media, error) {
+	if season, ok, err := e.findSeasonGroup(ctx, id, userID); err != nil {
 		return nil, err
 	} else if ok && len(season.Episodes) > 0 {
 		return &season.Episodes[0], nil
 	}
-	if series, ok, err := e.findSeriesGroup(ctx, id); err != nil {
+	if series, ok, err := e.findSeriesGroup(ctx, id, userID); err != nil {
 		return nil, err
 	} else if ok && len(series.Episodes) > 0 {
 		return &series.Episodes[0], nil
 	}
-	return e.repo.Media.FindByID(ctx, id)
+	m, err := e.repo.Media.FindByID(ctx, id)
+	if err != nil || m == nil {
+		return m, err
+	}
+	if !UserDefaultMediaVisibility(ctx, e.repo, userID).Allows(m) {
+		return nil, nil
+	}
+	return m, nil
 }
 
 // mediaSource 是 /Items 与 /PlaybackInfo 共享的 MediaSource 结构。

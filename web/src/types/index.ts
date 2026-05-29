@@ -8,6 +8,7 @@ export interface User {
   nickname?: string
   email?: string
   avatar_url?: string
+  hide_adult?: boolean
   force_password_reset: boolean
   is_active: boolean
   is_default_admin?: boolean

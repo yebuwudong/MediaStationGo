@@ -2,6 +2,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -18,8 +19,19 @@ func updateProfileHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		uid, _ := c.Get(middleware.CtxUserID)
-		u, err := svc.Profile.UpdateProfile(c.Request.Context(), uid.(string), patch)
+		userID := uid.(string)
+		if patch.HideAdult != nil {
+			if err := svc.Auth.VerifyPassword(c.Request.Context(), userID, patch.Password); err != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "需要输入当前账号密码确认"})
+				return
+			}
+		}
+		u, err := svc.Profile.UpdateProfile(c.Request.Context(), userID, patch)
 		if err != nil {
+			if errors.Is(err, service.ErrUsernameTaken) {
+				c.JSON(http.StatusConflict, gin.H{"error": "username already taken"})
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}

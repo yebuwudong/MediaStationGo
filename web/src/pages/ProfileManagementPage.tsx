@@ -7,6 +7,7 @@ import { playProfilesAPI, type PlayProfileInput } from '../api/play_profiles'
 import { useAuthStore } from '../stores/auth'
 import { usePlayProfileStore } from '../stores/playProfile'
 import { confirmAction } from '../components/ConfirmDialog'
+import { requestPassword } from '../components/PasswordDialog'
 import { requestPIN } from '../components/PinDialog'
 import type { Library, PlayProfile } from '../types'
 
@@ -48,9 +49,27 @@ export function ProfileManagementPage() {
   }, [])
 
   const onDelete = async (p: PlayProfile) => {
-    if (!(await confirmAction({ title: '删除播放档案', message: `确定删除 Profile「${p.name}」?`, confirmText: '删除' }))) return
+    if (!(await confirmAction({ title: '删除播放档案', message: `确定删除 Profile「${p.name}」? 删除前需要再次验证。`, confirmText: '继续删除' }))) return
     try {
-      await playProfilesAPI.remove(p.id)
+      const proof: { pin?: string; password?: string } = {}
+      if (p.require_pin) {
+        const pin = await requestPIN({
+          title: '删除 Profile 需要 PIN',
+          message: `请输入「${p.name}」的 PIN；也可以取消后改用账号密码删除。`,
+          profileName: p.name,
+        })
+        if (!pin) return
+        proof.pin = pin
+      } else {
+        const password = await requestPassword({
+          title: '删除 Profile 需要密码',
+          message: `请输入当前账号密码以删除「${p.name}」。`,
+          confirmText: '删除',
+        })
+        if (!password) return
+        proof.password = password
+      }
+      await playProfilesAPI.remove(p.id, proof)
       toast.success('已删除')
       await refresh()
     } catch (err: unknown) {

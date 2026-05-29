@@ -318,7 +318,11 @@ func embyFallbackUser(id string) gin.H {
 
 func embyViewsHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		out, err := svc.Emby.Views(c.Request.Context())
+		uid := c.Param("userId")
+		if uid == "" {
+			uid = embyUserID(c)
+		}
+		out, err := svc.Emby.Views(c.Request.Context(), uid)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -335,8 +339,13 @@ func embyVirtualFoldersHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		uid := embyUserID(c)
+		visibility := service.UserDefaultMediaVisibility(c.Request.Context(), svc.Repo, uid)
 		out := make([]gin.H, 0, len(libs))
 		for _, lib := range libs {
+			if !service.LibraryVisibleForUser(c.Request.Context(), svc.Repo, lib, visibility) {
+				continue
+			}
 			collectionType := "movies"
 			switch lib.Type {
 			case "tv", "anime", "variety":
@@ -538,7 +547,11 @@ func embyShowEpisodesHandler(svc *service.Container) gin.HandlerFunc {
 
 func embyPlaybackInfoHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		out, err := svc.Emby.PlaybackInfo(c.Request.Context(), c.Param("id"))
+		uid := c.Param("userId")
+		if uid == "" {
+			uid = embyUserID(c)
+		}
+		out, err := svc.Emby.PlaybackInfo(c.Request.Context(), c.Param("id"), uid)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -555,8 +568,14 @@ func embyPlaybackInfoHandler(svc *service.Container) gin.HandlerFunc {
 // 直接代理到我们的 /api/stream/{id}（同一个 ServeFile）。
 func embyVideoStreamHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		uid := embyUserID(c)
+		item, err := svc.Emby.Item(c.Request.Context(), c.Param("id"), uid)
+		if err != nil || item == nil {
+			c.Status(http.StatusNotFound)
+			return
+		}
 		// 直接调用 Stream service 写入 response
-		err := svc.Stream.ServeFile(c.Writer, c.Request, c.Param("id"))
+		err = svc.Stream.ServeFile(c.Writer, c.Request, c.Param("id"))
 		if err != nil {
 			c.Status(http.StatusNotFound)
 		}
