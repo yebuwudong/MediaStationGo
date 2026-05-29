@@ -183,7 +183,7 @@ function channelSummary(ch: NotifyChannel): string {
   const cfg = ch.config ?? {}
   switch (ch.type) {
     case 'telegram':
-      return `Bot ${String(cfg.bot_token ?? '').slice(0, 10)}… → 通知 ${cfg.chat_id ?? '-'} · 命令 ${cfg.command_chat_id ?? cfg.chat_id ?? '-'}`
+      return `Bot ${String(cfg.bot_token ?? '').slice(0, 10)}… → 通知 ${cfg.chat_id ?? '-'} · 管理员 ${cfg.admin_user_ids ?? '-'} · 群组 ${cfg.group_chat_id ?? '-'} · 频道 ${cfg.channel_chat_id ?? '-'}`
     case 'wechat':
       return `SendKey ${String(cfg.sendkey ?? '').slice(0, 10)}…`
     case 'bark':
@@ -200,7 +200,7 @@ function channelSummary(ch: NotifyChannel): string {
 // ─── Form Modal ─────────────────────────────────────────────────────────────
 
 const EMPTY_CONFIG: Record<NotifyChannel['type'], Record<string, string>> = {
-  telegram: { bot_token: '', chat_id: '', command_chat_id: '' },
+  telegram: { bot_token: '', chat_id: '', admin_user_ids: '', group_chat_id: '', channel_chat_id: '' },
   wechat: { sendkey: '' },
   bark: { device_key: '', server: '' },
   webhook: { url: '', method: 'POST', headers: '', body_template: '' },
@@ -311,16 +311,33 @@ function ChannelFormModal({
                   onChange={(e) => updateConfig('chat_id', e.target.value)}
                 />
               </Field>
-              <Field label="命令群组/频道 Chat ID (可选)">
+              <Field label="管理员 Telegram ID">
+                <input
+                  required
+                  className="input-base"
+                  placeholder="多个用逗号分隔，如 123456789,987654321"
+                  value={config.admin_user_ids ?? ''}
+                  onChange={(e) => updateConfig('admin_user_ids', e.target.value)}
+                />
+              </Field>
+              <Field label="绑定群组 ID">
                 <input
                   className="input-base"
-                  placeholder="留空则使用上方 Chat ID；填写后只有该群组/频道可唤醒 Bot"
-                  value={config.command_chat_id ?? ''}
-                  onChange={(e) => updateConfig('command_chat_id', e.target.value)}
+                  placeholder="如 -1001234567890；群组成员才允许唤醒/绑定"
+                  value={config.group_chat_id ?? ''}
+                  onChange={(e) => updateConfig('group_chat_id', e.target.value)}
+                />
+              </Field>
+              <Field label="绑定频道 ID">
+                <input
+                  className="input-base"
+                  placeholder="如 -1009876543210；频道成员才允许唤醒/绑定"
+                  value={config.channel_chat_id ?? ''}
+                  onChange={(e) => updateConfig('channel_chat_id', e.target.value)}
                 />
               </Field>
               <div className="rounded-2xl border border-primary-400/15 bg-primary-400/5 px-4 py-3 text-xs leading-6 text-ink-50">
-                普通用户只能通过 <code>/start 用户名 密码</code> 绑定账号，并使用隐藏成人目录按钮；<code>/status</code>、<code>/search</code>、<code>/downloads</code>、<code>/stats</code> 仅管理员可用。
+                必须至少填写群组 ID 或频道 ID。只有配置群组/频道中的成员可以唤醒 Bot、使用 <code>/start 用户名 密码</code> 绑定账号和隐藏成人目录；<code>/status</code>、<code>/search</code>、<code>/downloads</code>、<code>/stats</code> 仅管理员 Telegram ID 或已绑定的本地管理员可用。
               </div>
             </>
           )}

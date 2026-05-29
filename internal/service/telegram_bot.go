@@ -114,8 +114,17 @@ func (s *TelegramBotService) HandleWebhook(ctx context.Context, body []byte) err
 		zap.String("text", text),
 	)
 
-	// 获取该 chat_id 对应的通知渠道配置
-	channel := s.findChannelByChatID(ctx, msg.Chat.ID)
+	// 获取该消息可使用的 Telegram 通知渠道配置。群组/频道消息必须来自
+	// 已配置的群组/频道；私聊消息会选择一个可验证该用户成员身份的 Bot。
+	channel := s.findChannelForMessage(ctx, msg)
+	if channel == nil {
+		s.log.Warn("telegram channel not allowed or not configured",
+			zap.Int("chat_id", msg.Chat.ID),
+			zap.String("chat_type", msg.Chat.Type),
+			zap.Int("telegram_user_id", msg.From.ID),
+		)
+		return nil
+	}
 
 	// 解析并执行命令
 	reply, err := s.executeCommand(ctx, channel, msg, text)
@@ -155,22 +164,22 @@ func (s *TelegramBotService) executeCommand(ctx context.Context, channel *model.
 	case "/hideadult", "/hide_adult", "/adult":
 		return s.cmdHideAdult(ctx, msg, args), nil
 	case "/status":
-		if !s.telegramUserIsAdmin(ctx, msg.From.ID) {
+		if !s.telegramUserIsAdmin(ctx, channel, msg.From.ID) {
 			return telegramCommandReply{Text: "此命令仅管理员可用。普通用户只能使用 /start 绑定账号，并通过按钮隐藏成人目录。"}, nil
 		}
 		return s.cmdStatus(ctx)
 	case "/search":
-		if !s.telegramUserIsAdmin(ctx, msg.From.ID) {
+		if !s.telegramUserIsAdmin(ctx, channel, msg.From.ID) {
 			return telegramCommandReply{Text: "此命令仅管理员可用。"}, nil
 		}
 		return s.cmdSearch(ctx, args)
 	case "/downloads":
-		if !s.telegramUserIsAdmin(ctx, msg.From.ID) {
+		if !s.telegramUserIsAdmin(ctx, channel, msg.From.ID) {
 			return telegramCommandReply{Text: "此命令仅管理员可用。"}, nil
 		}
 		return s.cmdDownloads(ctx)
 	case "/stats":
-		if !s.telegramUserIsAdmin(ctx, msg.From.ID) {
+		if !s.telegramUserIsAdmin(ctx, channel, msg.From.ID) {
 			return telegramCommandReply{Text: "此命令仅管理员可用。"}, nil
 		}
 		return s.cmdStats(ctx)
@@ -202,6 +211,10 @@ func (s *TelegramBotService) cmdStart(ctx context.Context, msg *TelegramMessage,
 		}
 		return telegramCommandReply{Text: "<b>欢迎使用 MediaStationGo</b>\n\n普通用户请先绑定账号：\n<code>/start 用户名 密码</code>\n或：<code>/start 用户名-密码</code>\n\n如果没有账号，请联系管理员注册。"}
 	}
+	channel := s.findChannelForMessage(ctx, msg)
+	if !s.telegramUserCanBind(ctx, channel, msg.From.ID) {
+		return telegramCommandReply{Text: "当前 Telegram 账号不在已绑定的群组/频道中，无法绑定媒体中心账号。请先加入管理员配置的群组或频道。"}
+	}
 	username, password := parseStartCredentials(args)
 	if username == "" || password == "" {
 		return telegramCommandReply{Text: "绑定格式不正确，请使用：\n<code>/start 用户名 密码</code>\n或：<code>/start 用户名-密码</code>"}
@@ -230,7 +243,8 @@ func (s *TelegramBotService) cmdStart(ctx context.Context, msg *TelegramMessage,
 
 // cmdHelp 处理 /help 命令。
 func (s *TelegramBotService) cmdHelp(ctx context.Context, msg *TelegramMessage) string {
-	if !s.telegramUserIsAdmin(ctx, msg.From.ID) {
+	channel := s.findChannelForMessage(ctx, msg)
+	if !s.telegramUserIsAdmin(ctx, channel, msg.From.ID) {
 		return "<b>MediaStationGo 用户命令</b>\n\n" +
 			"<b>/start 用户名 密码</b> — 绑定账号\n" +
 			"<b>/hideadult on|off</b> — 隐藏或显示成人目录\n\n" +
@@ -253,6 +267,10 @@ func (s *TelegramBotService) cmdHelp(ctx context.Context, msg *TelegramMessage) 
 
 // cmdStatus 处理 /status 命令。
 func (s *TelegramBotService) cmdHideAdult(ctx context.Context, msg *TelegramMessage, args []string) telegramCommandReply {
+	channel := s.findChannelForMessage(ctx, msg)
+	if !s.telegramUserCanBind(ctx, channel, msg.From.ID) {
+		return telegramCommandReply{Text: "当前 Telegram 账号不在已绑定的群组/频道中，无法使用成人目录隐藏开关。"}
+	}
 	binding := s.telegramBinding(ctx, msg.From.ID)
 	if binding == nil {
 		return telegramCommandReply{Text: "请先绑定账号：<code>/start 用户名 密码</code>"}
@@ -610,7 +628,8 @@ func (s *TelegramBotService) findChannelByChatID(ctx context.Context, chatID int
 		}
 		var cfg map[string]string
 		json.Unmarshal([]byte(configStr), &cfg)
-		if cfg["chat_id"] == target || cfg["command_chat_id"] == target {
+		if cfg["chat_id"] == target || cfg["command_chat_id"] == target ||
+			cfg["group_chat_id"] == target || cfg["channel_chat_id"] == target {
 			return &ch
 		}
 	}
@@ -618,6 +637,33 @@ func (s *TelegramBotService) findChannelByChatID(ctx context.Context, chatID int
 		return &channels[0]
 	}
 	return nil
+}
+
+func (s *TelegramBotService) findChannelForMessage(ctx context.Context, msg *TelegramMessage) *model.NotifyChannel {
+	if msg == nil {
+		return nil
+	}
+	if msg.Chat.Type != "" && msg.Chat.Type != "private" {
+		return s.findChannelByChatID(ctx, msg.Chat.ID)
+	}
+	channels, err := s.repo.NotifyChannel.ListByType(ctx, "telegram")
+	if err != nil {
+		return nil
+	}
+	var first *model.NotifyChannel
+	for i := range channels {
+		ch := channels[i]
+		if !ch.Enabled {
+			continue
+		}
+		if first == nil {
+			first = &ch
+		}
+		if s.telegramUserIsAdmin(ctx, &ch, msg.From.ID) || s.telegramUserCanBind(ctx, &ch, msg.From.ID) {
+			return &ch
+		}
+	}
+	return first
 }
 
 func (s *TelegramBotService) handleCallback(ctx context.Context, cb *TelegramCallbackQuery) error {
@@ -649,7 +695,10 @@ func (s *TelegramBotService) telegramBinding(ctx context.Context, telegramUserID
 	return &binding
 }
 
-func (s *TelegramBotService) telegramUserIsAdmin(ctx context.Context, telegramUserID int) bool {
+func (s *TelegramBotService) telegramUserIsAdmin(ctx context.Context, channel *model.NotifyChannel, telegramUserID int) bool {
+	if s.telegramUserIDConfigured(channel, telegramUserID) {
+		return true
+	}
 	binding := s.telegramBinding(ctx, telegramUserID)
 	if binding == nil {
 		return false
@@ -671,11 +720,113 @@ func (s *TelegramBotService) telegramChatAllowed(channel *model.NotifyChannel, c
 		return false
 	}
 	target := strconv.Itoa(chatID)
-	commandChatID := strings.TrimSpace(cfg["command_chat_id"])
-	if commandChatID != "" {
-		return commandChatID == target
+	for _, key := range []string{"group_chat_id", "channel_chat_id", "command_chat_id"} {
+		if configured := strings.TrimSpace(cfg[key]); configured != "" && configured == target {
+			return true
+		}
+	}
+	if strings.TrimSpace(cfg["group_chat_id"]) != "" || strings.TrimSpace(cfg["channel_chat_id"]) != "" || strings.TrimSpace(cfg["command_chat_id"]) != "" {
+		return false
 	}
 	return strings.TrimSpace(cfg["chat_id"]) == target
+}
+
+func (s *TelegramBotService) telegramUserCanBind(ctx context.Context, channel *model.NotifyChannel, telegramUserID int) bool {
+	if telegramUserID == 0 || channel == nil {
+		return false
+	}
+	if s.telegramUserIDConfigured(channel, telegramUserID) {
+		return true
+	}
+	cfg := s.telegramChannelConfig(channel)
+	groupID := strings.TrimSpace(cfg["group_chat_id"])
+	channelID := strings.TrimSpace(cfg["channel_chat_id"])
+	if groupID == "" && channelID == "" {
+		return true
+	}
+	for _, chatID := range []string{groupID, channelID} {
+		if chatID == "" {
+			continue
+		}
+		if s.telegramUserIsChatMember(ctx, channel, chatID, telegramUserID) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *TelegramBotService) telegramUserIsChatMember(ctx context.Context, channel *model.NotifyChannel, chatID string, telegramUserID int) bool {
+	token := strings.TrimSpace(s.telegramChannelConfig(channel)["bot_token"])
+	if token == "" || chatID == "" || telegramUserID == 0 {
+		return false
+	}
+	payload, _ := json.Marshal(map[string]interface{}{
+		"chat_id": chatID,
+		"user_id": telegramUserID,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("https://api.telegram.org/bot%s/getChatMember", token),
+		bytes.NewReader(payload))
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{Timeout: 8 * time.Second}).Do(req)
+	if err != nil {
+		s.log.Warn("telegram getChatMember failed", zap.String("chat_id", chatID), zap.Int("telegram_user_id", telegramUserID), zap.Error(err))
+		return false
+	}
+	defer resp.Body.Close()
+	var result struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			Status string `json:"status"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || !result.OK {
+		return false
+	}
+	switch strings.ToLower(result.Result.Status) {
+	case "creator", "administrator", "member", "restricted":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *TelegramBotService) telegramUserIDConfigured(channel *model.NotifyChannel, telegramUserID int) bool {
+	if channel == nil || telegramUserID == 0 {
+		return false
+	}
+	cfg := s.telegramChannelConfig(channel)
+	target := strconv.Itoa(telegramUserID)
+	for _, value := range strings.FieldsFunc(cfg["admin_user_ids"], func(r rune) bool {
+		return r == ',' || r == ';' || r == '，' || r == ' ' || r == '\n' || r == '\t'
+	}) {
+		if strings.TrimSpace(value) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *TelegramBotService) telegramChannelConfig(channel *model.NotifyChannel) map[string]string {
+	return telegramConfigFromChannel(s.crypto, channel)
+}
+
+func telegramConfigFromChannel(crypto *CryptoService, channel *model.NotifyChannel) map[string]string {
+	if channel == nil {
+		return map[string]string{}
+	}
+	configStr := channel.Config
+	if crypto != nil && configStr != "" {
+		configStr = crypto.Decrypt(configStr)
+	}
+	var cfg map[string]string
+	if err := json.Unmarshal([]byte(configStr), &cfg); err != nil || cfg == nil {
+		return map[string]string{}
+	}
+	return cfg
 }
 
 func (s *TelegramBotService) upsertTelegramBinding(ctx context.Context, msg *TelegramMessage, userID string) error {

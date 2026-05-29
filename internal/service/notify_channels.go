@@ -95,11 +95,11 @@ func (s *NotifyChannelService) Create(ctx context.Context, in ChannelInput) (*ch
 	cfgBlob, _ := json.Marshal(in.Config)
 	evBlob, _ := json.Marshal(in.Events)
 	n := &model.NotifyChannel{
-		Name:        strings.TrimSpace(in.Name),
-		Type:   in.Type,
-		Config:      string(cfgBlob),
-		Events:      string(evBlob),
-		Enabled:     true,
+		Name:    strings.TrimSpace(in.Name),
+		Type:    in.Type,
+		Config:  string(cfgBlob),
+		Events:  string(evBlob),
+		Enabled: true,
 	}
 	if in.Enabled != nil {
 		n.Enabled = *in.Enabled
@@ -119,10 +119,10 @@ func (s *NotifyChannelService) Update(ctx context.Context, id string, in Channel
 	cfgBlob, _ := json.Marshal(in.Config)
 	evBlob, _ := json.Marshal(in.Events)
 	patch := map[string]any{
-		"name":    strings.TrimSpace(in.Name),
-		"type":    in.Type,
-		"config":  string(cfgBlob),
-		"events":  string(evBlob),
+		"name":   strings.TrimSpace(in.Name),
+		"type":   in.Type,
+		"config": string(cfgBlob),
+		"events": string(evBlob),
 	}
 	if in.Enabled != nil {
 		patch["enabled"] = *in.Enabled
@@ -319,6 +319,21 @@ func validateChannel(in ChannelInput) error {
 	case "telegram", "wechat", "bark", "webhook", "email":
 	default:
 		return fmt.Errorf("unsupported channel type %q", in.Type)
+	}
+	if in.Type == "telegram" {
+		cfg := in.Config
+		if str(cfg["bot_token"]) == "" {
+			return errors.New("telegram bot_token required")
+		}
+		if str(cfg["chat_id"]) == "" {
+			return errors.New("telegram notification chat_id required")
+		}
+		if str(cfg["admin_user_ids"]) == "" {
+			return errors.New("telegram admin_user_ids required")
+		}
+		if str(cfg["group_chat_id"]) == "" && str(cfg["channel_chat_id"]) == "" && str(cfg["command_chat_id"]) == "" {
+			return errors.New("telegram group_chat_id or channel_chat_id required")
+		}
 	}
 	return nil
 }
