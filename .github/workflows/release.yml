@@ -3,6 +3,17 @@ name: Publish release packages
 on:
   push:
     tags: ['v*', 'MediaStationGo-v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release tag to publish, for example MediaStationGo-v0.0.32'
+        required: true
+        type: string
+      ref:
+        description: 'Git ref to build from'
+        required: false
+        default: main
+        type: string
 
 permissions:
   contents: write
@@ -10,10 +21,13 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
 
       - uses: actions/setup-go@v5
         with:
@@ -29,7 +43,7 @@ jobs:
       - name: Build release packages
         run: ./scripts/package-release.sh
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ env.RELEASE_VERSION }}
 
       - name: Generate checksums
         run: |
@@ -44,6 +58,8 @@ jobs:
             dist-release/*.zip
             dist-release/SHA256SUMS.txt
           generate_release_notes: true
+          tag_name: ${{ env.RELEASE_VERSION }}
+          target_commitish: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
           # GitHub immutable releases reject deleting/replacing existing assets.
           # Keep reruns idempotent by skipping same-name assets instead of
           # deleting them first.

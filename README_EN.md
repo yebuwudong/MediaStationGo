@@ -177,7 +177,7 @@ The current base license is `GPL-3.0`, and contributions are welcome under that 
 | Downloads | qBittorrent / PT site adapters | Search, subscriptions, task cards, private URL redaction |
 | Compatibility | Emby-style API / DLNA | External clients and player integrations |
 | Deployment | Docker / Docker Compose / Shell / PowerShell | NAS, Linux, Windows, and macOS friendly |
-| CI/CD | GitHub Actions / GHCR | Multi-arch Docker images and release packages only on version tags |
+| CI/CD | GitHub Actions / GHCR | Version tags or manual Actions runs publish multi-arch Docker images and release packages |
 
 ---
 
@@ -235,7 +235,7 @@ mkdir -p data cache media downloads
 
 ```bash
 cat > .env <<'EOF'
-MEDIASTATION_IMAGE_TAG=MediaStationGo-v0.0.31
+MEDIASTATION_IMAGE_TAG=MediaStationGo-v0.0.32
 MEDIASTATION_HTTP_PORT=18080
 MEDIASTATION_DATA_DIR=./data
 MEDIASTATION_CACHE_DIR=./cache
@@ -344,7 +344,7 @@ For production, pin a specific release tag instead of using `latest`. Recommende
 
 ```bash
 cat > .env <<'EOF'
-MEDIASTATION_IMAGE_TAG=MediaStationGo-v0.0.31
+MEDIASTATION_IMAGE_TAG=MediaStationGo-v0.0.32
 MEDIASTATION_HTTP_PORT=18080
 MEDIASTATION_DATA_DIR=./data
 MEDIASTATION_CACHE_DIR=./cache
@@ -593,25 +593,25 @@ Each release provides multi-platform archives:
 
 | Platform | Package example |
 | --- | --- |
-| Linux x86_64 | `MediaStationGo-v0.0.31-linux-amd64.tar.gz` |
-| Linux ARM64 | `MediaStationGo-v0.0.31-linux-arm64.tar.gz` |
-| Windows x86_64 | `MediaStationGo-v0.0.31-windows-amd64.zip` |
-| macOS Intel | `MediaStationGo-v0.0.31-darwin-amd64.tar.gz` |
-| macOS Apple Silicon | `MediaStationGo-v0.0.31-darwin-arm64.tar.gz` |
+| Linux x86_64 | `MediaStationGo-v0.0.32-linux-amd64.tar.gz` |
+| Linux ARM64 | `MediaStationGo-v0.0.32-linux-arm64.tar.gz` |
+| Windows x86_64 | `MediaStationGo-v0.0.32-windows-amd64.zip` |
+| macOS Intel | `MediaStationGo-v0.0.32-darwin-amd64.tar.gz` |
+| macOS Apple Silicon | `MediaStationGo-v0.0.32-darwin-arm64.tar.gz` |
 
 Linux example:
 
 ```bash
-tar -xzf MediaStationGo-v0.0.31-linux-amd64.tar.gz
-cd MediaStationGo-v0.0.31-linux-amd64
+tar -xzf MediaStationGo-v0.0.32-linux-amd64.tar.gz
+cd MediaStationGo-v0.0.32-linux-amd64
 MEDIASTATION_APP_PORT=18080 ./mediastation-go
 ```
 
 Windows example:
 
 ```powershell
-Expand-Archive .\MediaStationGo-v0.0.31-windows-amd64.zip
-cd .\MediaStationGo-v0.0.31-windows-amd64
+Expand-Archive .\MediaStationGo-v0.0.32-windows-amd64.zip
+cd .\MediaStationGo-v0.0.32-windows-amd64
 $env:MEDIASTATION_APP_PORT = "18080"
 .\mediastation-go.exe
 ```
