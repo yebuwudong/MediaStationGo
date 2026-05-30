@@ -647,7 +647,7 @@ extra_hosts:
   - "host.docker.internal:host-gateway"
 ```
 
-如果你填写 `http://192.168.1.125:8085` 超时，但 `http://172.17.0.1:8085` 返回 403，通常表示：
+如果你填写 `http://你的IP:8085` 超时，但 `http://172.17.0.?(使用了代理):8085` 返回 403，通常表示：
 
 - Docker 容器到局域网 IP 存在防火墙、路由或 hairpin 限制，建议改用 `host.docker.internal`。
 - qBittorrent WebUI 已经能被容器访问，但登录被拒绝。请检查用户名/密码、IP 封禁、CSRF/Host Header 校验。
@@ -1056,7 +1056,7 @@ MediaStationGo 的智能分类分为两个阶段：
 
 整理规则建议按媒体类型拆分。剧集、动漫、综艺都属于连续剧集类，应保留剧名、年份、季目录、季集号和分集标题；电影类则保留片名、年份、分段和视频规格。
 
-剧集 / 动漫 / 综艺推荐模板：
+剧集 / 动漫 / 综艺推荐模板（参考MPV2模板）：
 
 ```jinja
 {{title}}{% if year %} ({{year}}){% endif %}/Season {{season}}/{{title}} - {{season_episode}}{% if part %}-{{part}}{% endif %}{% if episode %} - 第 {{episode}} 集{% endif %}{{fileExt}}
@@ -1159,7 +1159,7 @@ http://<服务器IP>:18080
 
 ### 与 MoviePilot 的功能参考关系
 
-MediaStationGo 在外部客户端兼容与媒体生态联动上参考了 MoviePilot 的成熟产品路径：通过统一媒体库、订阅下载、下载后整理和 Emby/Jellyfin 兼容接口，把 Web 管理端与 Infuse、VidHub、SenPlayer 等客户端串起来。本项目的目标不是替代 Emby/Jellyfin，而是在轻量 Go 服务中提供足够常用的媒体浏览、播放、海报墙、剧集分季分集、播放进度和外部客户端访问能力。
+MediaStationGo 在外部客户端兼容与媒体生态联动上参考了 MoviePilot 的成熟产品路径：通过统一媒体库、订阅下载、下载后整理和 Emby/Jellyfin 兼容接口，把 Web 管理端与 Infuse、VidHub、SenPlayer 等客户端串起来。本项目的目标不是替代 Emby/Jellyfin，而是在最极少的资源占用的轻量 Go 服务中提供足够常用的媒体浏览、播放、海报墙、剧集分季分集、播放进度和外部客户端访问能力。
 
 当前兼容重点：
 
@@ -1257,7 +1257,7 @@ docker ps
 docker logs -f mediastation-go
 ```
 
-确认访问的是宿主机端口，例如 `http://192.168.1.4:18080`。
+确认访问的是宿主机端口，例如 `http://你的IP:18080`。
 
 ### Q: 外部客户端提示服务器未响应？
 
@@ -1276,11 +1276,7 @@ docker logs -f mediastation-go
 
 PT 下载 URL 常包含私有 Token。下载中心和订阅管理会主动隐藏原始 URL，只显示安全标题、海报、速度、进度、体积等信息。
 
-### Q: 可以只保留哪个 Docker 包？
 
-保留 `ghcr.io/shukebta/mediastation-go` 即可；旧的 `mediastationgo` 包可以删除，避免用户拉错镜像。
-
----
 
 ## 🗺️ 路线图
 
