@@ -142,11 +142,20 @@ services:
       MEDIASTATION_APP_CORS_ORIGINS: ${MEDIASTATION_APP_CORS_ORIGINS:-}
 
       # Telegram 通知/Bot 出站网络。通常留空即可；如 NAS 访问 Telegram 超时，
-      # 可在 .env 中填写反代 API 或代理地址：
+      # 可在 .env 中填写反代 API 或代理地址。v2rayA 常见代理：
+      #   HTTP  http://host.docker.internal:20171 或 http://172.17.0.1:20171
+      #   SOCKS socks5://host.docker.internal:20170 或 socks5://172.17.0.1:20170
       #   MEDIASTATION_TELEGRAM_API_BASE_URL=https://api.telegram.org
-      #   MEDIASTATION_TELEGRAM_PROXY_URL=http://172.17.0.1:7890
+      #   MEDIASTATION_TELEGRAM_PROXY_URL=http://host.docker.internal:20171
       MEDIASTATION_TELEGRAM_API_BASE_URL: ${MEDIASTATION_TELEGRAM_API_BASE_URL:-}
       MEDIASTATION_TELEGRAM_PROXY_URL: ${MEDIASTATION_TELEGRAM_PROXY_URL:-}
+      # 可选：把宿主机 shell/.env 中的代理变量透传给容器。留空无效果。
+      # 如果 NAS 已使用 v2rayA redirect/透明代理且 Docker 网桥流量已被接管，
+      # 通常不需要填写这些变量。
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      ALL_PROXY: ${ALL_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-127.0.0.1,localhost}
 
       # 宿主机文件权限映射。Linux/NAS 常用 1000:1000，可用 id 命令查看。
       PUID: ${PUID:-1000}

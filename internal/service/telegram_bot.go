@@ -1296,49 +1296,21 @@ func userNameOrFallback(user *model.User) string {
 
 // SetWebhook 注册 Telegram Bot Webhook URL。
 func (s *TelegramBotService) SetWebhook(ctx context.Context, botToken, webhookURL string) error {
-	payload, _ := json.Marshal(map[string]interface{}{
+	payload := map[string]interface{}{
 		"url":             webhookURL,
 		"allowed_updates": []string{"message", "callback_query"},
-	})
+	}
 	cfg := map[string]string{"bot_token": botToken}
-	apiURL, err := telegramMethodURL(cfg, botToken, "setWebhook")
-	if err != nil {
-		return err
-	}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, strings.NewReader(string(payload)))
-	req.Header.Set("Content-Type", "application/json")
-
-	client := telegramHTTPClient(15*time.Second, cfg)
-	resp, err := client.Do(req)
-	if err != nil {
-		return sanitizeTelegramError(err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("setWebhook failed: %s", sanitizeTelegramText(string(body)))
-	}
-	return nil
+	return telegramPostJSON(ctx, cfg, "setWebhook", payload, 15*time.Second)
 }
 
 // GetWebhookInfo 获取 Webhook 配置信息。
 func (s *TelegramBotService) GetWebhookInfo(ctx context.Context, botToken string) (map[string]interface{}, error) {
 	cfg := map[string]string{"bot_token": botToken}
-	apiURL, err := telegramMethodURL(cfg, botToken, "getWebhookInfo")
-	if err != nil {
+	var result map[string]interface{}
+	if err := telegramGetJSONDecode(ctx, cfg, "getWebhookInfo", 10*time.Second, &result); err != nil {
 		return nil, err
 	}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
-	resp, err := telegramHTTPClient(10*time.Second, cfg).Do(req)
-	if err != nil {
-		return nil, sanitizeTelegramError(err)
-	}
-	defer resp.Body.Close()
-
-	var result map[string]interface{}
-	body, _ := io.ReadAll(resp.Body)
-	json.Unmarshal(body, &result)
 	return result, nil
 }
 
