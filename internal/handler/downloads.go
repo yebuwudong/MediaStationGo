@@ -17,12 +17,15 @@ import (
 )
 
 type addDownloadReq struct {
-	URL         string `json:"url" binding:"required"`
-	SavePath    string `json:"save_path"`
-	Title       string `json:"title"`
-	PosterURL   string `json:"poster_url"`
-	BackdropURL string `json:"backdrop_url"`
-	Overview    string `json:"overview"`
+	URL            string `json:"url" binding:"required"`
+	SavePath       string `json:"save_path"`
+	Title          string `json:"title"`
+	PosterURL      string `json:"poster_url"`
+	BackdropURL    string `json:"backdrop_url"`
+	Overview       string `json:"overview"`
+	MediaType      string `json:"media_type"`
+	MediaCategory  string `json:"media_category"`
+	SourceCategory string `json:"source_category"`
 }
 
 // resolvePTDownloadURL 把站点搜索结果里的"详情/获取签名"URL 解析成 qb 能直接
@@ -67,11 +70,14 @@ func addDownloadHandler(svc *service.Container) gin.HandlerFunc {
 			fallbackTitle = realURL
 		}
 		meta := enrichDownloadTaskMeta(c.Request.Context(), svc, service.DownloadTaskMeta{
-			Title:       req.Title,
-			PosterURL:   req.PosterURL,
-			BackdropURL: req.BackdropURL,
-			Overview:    req.Overview,
-		}, fallbackTitle, "")
+			Title:          req.Title,
+			PosterURL:      req.PosterURL,
+			BackdropURL:    req.BackdropURL,
+			Overview:       req.Overview,
+			MediaType:      req.MediaType,
+			MediaCategory:  req.MediaCategory,
+			SourceCategory: req.SourceCategory,
+		}, fallbackTitle, req.MediaType)
 		t, err := svc.Downloads.AddDownloadWithMeta(c.Request.Context(), uid.(string), realURL, req.SavePath, meta)
 		if err != nil {
 			if errors.Is(err, service.ErrMediaAlreadyInLibrary) {

@@ -153,10 +153,17 @@ const GROUPS: SettingGroup[] = [
         type: 'toggle',
       },
       {
+        key: 'downloads.smart_classify',
+        label: '下载器智能分类',
+        type: 'toggle',
+        hint: '订阅下载和站点搜索下载未指定保存路径时，自动按媒体类型/分类写入 qB 保存目录与 qB 分类（如：/downloads/国产剧、/downloads/综艺）。',
+        defaultValue: 'true',
+      },
+      {
         key: 'organizer.smart_classify',
         label: '启用智能分类',
         type: 'toggle',
-        hint: '根据元数据（语言/国家/类型）自动分类到子目录（如：华语电影、欧美剧、日番）',
+        hint: '整理/入库时根据元数据（语言/国家/类型）自动分类到媒体库子目录（如：华语电影、欧美剧、日番）',
       },
       {
         key: 'organize.source_dir',

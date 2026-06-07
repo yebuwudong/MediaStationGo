@@ -74,6 +74,9 @@ type DownloadTaskMeta struct {
 	PosterURL            string
 	BackdropURL          string
 	Overview             string
+	MediaType            string
+	MediaCategory        string
+	SourceCategory       string
 	AllowExistingLibrary bool
 }
 
@@ -205,13 +208,17 @@ func (d *DownloadService) AddDownloadWithMeta(ctx context.Context, userID, urlSt
 	if urlStr == "" {
 		return nil, errors.New("empty url")
 	}
-	if savePath == "" {
-		savePath, _ = d.repo.Setting.Get(ctx, "qbittorrent.savepath")
-	}
 	title := strings.TrimSpace(meta.Title)
 	if title == "" {
 		title = publicDownloadTitle(urlStr)
 		meta.Title = title
+	}
+	autoClassify := downloadSmartClassifyEnabled(ctx, d.repo, d.organizer)
+	savePath, resolvedCategory := d.resolveDownloadSavePath(ctx, savePath, meta, autoClassify)
+	if !autoClassify {
+		meta.MediaCategory = ""
+	} else if strings.TrimSpace(meta.MediaCategory) == "" {
+		meta.MediaCategory = resolvedCategory
 	}
 	if !meta.AllowExistingLibrary && d.localMediaAlreadyExists(ctx, title) {
 		return nil, ErrMediaAlreadyInLibrary
@@ -231,9 +238,10 @@ func (d *DownloadService) AddDownloadWithMeta(ctx context.Context, userID, urlSt
 		return task, ErrDownloadAlreadyExists
 	}
 	var siteFetchErr error
+	qbitCategory := strings.TrimSpace(meta.MediaCategory)
 	if d.site != nil {
 		if data, name, err := d.site.FetchTorrentFile(ctx, urlStr); err == nil {
-			if err := d.qb.AddTorrentFile(ctx, data, name, savePath); err != nil {
+			if err := d.qb.AddTorrentFileWithCategory(ctx, data, name, savePath, qbitCategory); err != nil {
 				return nil, err
 			}
 			if strings.TrimSpace(meta.Title) == "" {
@@ -244,13 +252,39 @@ func (d *DownloadService) AddDownloadWithMeta(ctx context.Context, userID, urlSt
 			siteFetchErr = err
 		}
 	}
-	if err := d.qb.AddTorrent(ctx, urlStr, savePath); err != nil {
+	if err := d.qb.AddTorrentWithCategory(ctx, urlStr, savePath, qbitCategory); err != nil {
 		if siteFetchErr != nil && !strings.Contains(siteFetchErr.Error(), "no matching PT site") {
 			return nil, errors.Join(err, siteFetchErr)
 		}
 		return nil, err
 	}
 	return d.createTask(ctx, userID, urlStr, savePath, meta)
+}
+
+func (d *DownloadService) resolveDownloadSavePath(ctx context.Context, explicitSavePath string, meta DownloadTaskMeta, autoClassify bool) (string, string) {
+	if strings.TrimSpace(explicitSavePath) != "" {
+		if !autoClassify {
+			return explicitSavePath, ""
+		}
+		return explicitSavePath, strings.TrimSpace(meta.MediaCategory)
+	}
+	base := downloadDefaultSaveRoot(ctx, d.repo)
+	if strings.TrimSpace(base) == "" {
+		return "", strings.TrimSpace(meta.MediaCategory)
+	}
+	mediaType := normalizeMediaType(meta.MediaType, meta.Title, meta.SourceCategory)
+	category := strings.TrimSpace(meta.MediaCategory)
+	if category == "" {
+		category = classifyMediaCategory(mediaClassifyInput{
+			MediaType: mediaType,
+			Title:     meta.Title,
+			Category:  meta.SourceCategory,
+		}, downloadCategoryMap(d.organizer))
+	}
+	if !autoClassify || category == "" {
+		return base, ""
+	}
+	return categoryRoot(base, sanitizeFilename(category)), category
 }
 
 func (d *DownloadService) localMediaAlreadyExists(ctx context.Context, title string) bool {

@@ -235,6 +235,8 @@ func (s *SubscriptionService) runOne(ctx context.Context, sub *model.Subscriptio
 			PosterURL:            sub.PosterURL,
 			BackdropURL:          sub.BackdropURL,
 			Overview:             sub.Overview,
+			MediaType:            mediaType,
+			MediaCategory:        mediaCategory,
 			AllowExistingLibrary: sub.WashEnabled,
 		}); err != nil {
 			if IsDownloadDedupError(err) {
@@ -333,6 +335,9 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 			PosterURL:            sub.PosterURL,
 			BackdropURL:          sub.BackdropURL,
 			Overview:             sub.Overview,
+			MediaType:            mediaType,
+			MediaCategory:        mediaCategory,
+			SourceCategory:       item.Category,
 			AllowExistingLibrary: sub.WashEnabled,
 		}); err != nil {
 			if IsDownloadDedupError(err) {

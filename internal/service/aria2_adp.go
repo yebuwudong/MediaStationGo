@@ -49,7 +49,7 @@ type Aria2Adapter struct {
 // NewAria2Adapter 创建新的 Aria2 适配器。
 func NewAria2Adapter() *Aria2Adapter {
 	return &Aria2Adapter{
-		client: &http.Client{Timeout: 20 * time.Second},
+		client: NewInternalHTTPClient(20 * time.Second),
 	}
 }
 

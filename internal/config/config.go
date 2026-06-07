@@ -247,6 +247,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("flaresolverr.session", "mediastation")
 	v.SetDefault("flaresolverr.timeout", 60)
 
+	v.SetDefault("downloads.smart_classify", true)
 	v.SetDefault("organizer.smart_classify", false)
 	v.SetDefault("organizer.auto_after_download", false)
 	v.SetDefault("organizer.categories.chinese_movie", "华语电影")

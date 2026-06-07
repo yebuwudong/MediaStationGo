@@ -2,17 +2,20 @@ package service
 
 import (
 	"context"
-	"path/filepath"
+	"os"
 	"regexp"
 	"strings"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
 var (
 	classifierEpisodeRE = regexp.MustCompile(`(?i)\bS\d{1,2}E\d{1,3}\b|第\s*\d+\s*[集期]|(?:^|[\s._-])E\d{1,3}(?:[\s._-]|$)`)
 	classifierSeasonRE  = regexp.MustCompile(`(?i)\bS\d{1,2}\b|第\s*\d+\s*季`)
 )
+
+const DownloadSmartClassifySettingKey = "downloads.smart_classify"
 
 type mediaClassifyInput struct {
 	MediaType string
@@ -210,8 +213,8 @@ func (s *SubscriptionService) resolveSubscriptionSavePath(ctx context.Context, s
 		return ""
 	}
 	base := strings.TrimSpace(sub.SavePath)
-	if base == "" && s.repo != nil && s.repo.Setting != nil {
-		base, _ = s.repo.Setting.Get(ctx, "qbittorrent.savepath")
+	if base == "" {
+		base = downloadDefaultSaveRoot(ctx, s.repo)
 	}
 	if base == "" {
 		return ""
@@ -219,15 +222,60 @@ func (s *SubscriptionService) resolveSubscriptionSavePath(ctx context.Context, s
 	if !s.isSmartClassifyEnabled(ctx) || category == "" {
 		return base
 	}
-	return filepath.Join(base, sanitizeFilename(category))
+	return categoryRoot(base, sanitizeFilename(category))
 }
 
 func (s *SubscriptionService) isSmartClassifyEnabled(ctx context.Context) bool {
 	if s != nil && s.repo != nil && s.repo.Setting != nil {
-		val, err := s.repo.Setting.Get(ctx, "organizer.smart_classify")
+		val, err := s.repo.Setting.Get(ctx, DownloadSmartClassifySettingKey)
 		if err == nil && val != "" {
-			return val == "true" || val == "1" || val == "on"
+			return parseBoolSetting(val, true)
+		}
+		val, err = s.repo.Setting.Get(ctx, "organizer.smart_classify")
+		if err == nil && parseBoolSetting(val, false) {
+			return true
 		}
 	}
-	return s != nil && s.cfg != nil && s.cfg.Organizer.SmartClassify
+	if s != nil && s.cfg != nil && s.cfg.Organizer.SmartClassify {
+		return true
+	}
+	return true
+}
+
+func downloadDefaultSaveRoot(ctx context.Context, repo *repository.Container) string {
+	if repo != nil && repo.Setting != nil {
+		if base, _ := repo.Setting.Get(ctx, "qbittorrent.savepath"); strings.TrimSpace(base) != "" {
+			return strings.TrimSpace(base)
+		}
+	}
+	for _, key := range []string{"MEDIASTATION_DOWNLOAD_CONTAINER_DIR", "MEDIASTATION_DOWNLOAD_DIR"} {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func downloadSmartClassifyEnabled(ctx context.Context, repo *repository.Container, organizer *OrganizerService) bool {
+	if repo != nil && repo.Setting != nil {
+		val, err := repo.Setting.Get(ctx, DownloadSmartClassifySettingKey)
+		if err == nil && val != "" {
+			return parseBoolSetting(val, true)
+		}
+		val, err = repo.Setting.Get(ctx, "organizer.smart_classify")
+		if err == nil && parseBoolSetting(val, false) {
+			return true
+		}
+	}
+	if organizer != nil && organizer.cfg != nil && organizer.cfg.Organizer.SmartClassify {
+		return true
+	}
+	return true
+}
+
+func downloadCategoryMap(organizer *OrganizerService) map[string]string {
+	if organizer == nil {
+		return nil
+	}
+	return organizer.categoryMap()
 }

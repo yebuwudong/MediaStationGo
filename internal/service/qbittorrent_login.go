@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -60,7 +61,7 @@ func qbitLoginOnce(ctx context.Context, client *http.Client, baseURL, username, 
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return qbitNetworkError(baseURL, err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
@@ -77,4 +78,15 @@ func qbitLoginOnce(ctx context.Context, client *http.Client, baseURL, username, 
 	default:
 		return fmt.Errorf("qbittorrent login unexpected response during %s login: status=%d body=%q", variant.name, resp.StatusCode, text)
 	}
+}
+
+func qbitNetworkError(baseURL string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var netErr net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) || strings.Contains(err.Error(), "Client.Timeout exceeded") {
+		return fmt.Errorf("qbittorrent: 连接 %s 超时；容器内无法访问该地址。若 qBittorrent 运行在 NAS 宿主机上，请把下载器地址改为 http://host.docker.internal:端口 或 http://172.17.0.1:端口，并确认 docker-compose.yml 包含 extra_hosts: host.docker.internal:host-gateway: %w", baseURL, err)
+	}
+	return fmt.Errorf("qbittorrent: 连接 %s 失败：%w", baseURL, err)
 }

@@ -71,6 +71,7 @@ function OrganizePanel() {
   const [savingDefaults, setSavingDefaults] = useState(false)
   const ORGANIZE_KEYS = [
     'organizer.auto_after_download',
+    'downloads.smart_classify',
     'organizer.smart_classify',
     'organize.source_dir',
     'organize.target_dir',
@@ -331,6 +332,14 @@ function OrganizePanel() {
                   onChange={(e) => setDefault('organizer.auto_after_download', e.target.checked ? 'true' : 'false')}
                 />
                 入库时自动整理
+              </label>
+              <label className="flex items-center gap-2 text-xs text-ink-600">
+                <input
+                  type="checkbox"
+                  checked={!defaults['downloads.smart_classify'] || isOn(defaults['downloads.smart_classify'])}
+                  onChange={(e) => setDefault('downloads.smart_classify', e.target.checked ? 'true' : 'false')}
+                />
+                下载器智能分类
               </label>
               <label className="flex items-center gap-2 text-xs text-ink-600">
                 <input

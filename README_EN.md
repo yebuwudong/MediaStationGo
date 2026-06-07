@@ -861,6 +861,7 @@ If the library root is set directly to `/media`, the organizer automatically add
 
 Automatic and manual organization are separate switches:
 
+- `downloads.smart_classify`: controls whether subscription/site-search downloads are automatically routed into category-specific save paths and qB categories; enabled by default.
 - `organizer.smart_classify`: controls smart category folders only.
 - `organizer.auto_after_download` / `organize.auto`: controls whether completed downloads are organized automatically.
 - If auto organization is disabled, use the Tools page to organize a library or a single media item manually.

@@ -75,10 +75,12 @@ var (
 func NewQBitClient(log *zap.Logger, cfg QBitConfig) *QBitClient {
 	cfg.BaseURL = strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
 	jar, _ := cookiejar.New(nil)
+	client := NewInternalHTTPClient(20 * time.Second)
+	client.Jar = jar
 	return &QBitClient{
 		log:    log,
 		cfg:    cfg,
-		client: &http.Client{Jar: jar, Timeout: 20 * time.Second},
+		client: client,
 	}
 }
 
@@ -112,6 +114,10 @@ func (q *QBitClient) Login(ctx context.Context) error {
 // 但 body 里写 "Fails."。我们把这些情况也识别为错误并返回，避免
 // "API 返回 200 → 我们告诉前端成功 → qb 中却没下载" 这种迷惑性失败。
 func (q *QBitClient) AddTorrent(ctx context.Context, magnetOrURL, savePath string) error {
+	return q.AddTorrentWithCategory(ctx, magnetOrURL, savePath, "")
+}
+
+func (q *QBitClient) AddTorrentWithCategory(ctx context.Context, magnetOrURL, savePath, category string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if err := q.ensureAuth(ctx); err != nil {
@@ -120,10 +126,14 @@ func (q *QBitClient) AddTorrent(ctx context.Context, magnetOrURL, savePath strin
 
 	torrentData, torrentName, fetchErr := q.fetchTorrentFile(ctx, magnetOrURL)
 	useFileUpload := fetchErr == nil && len(torrentData) > 0
-	return q.addTorrentLocked(ctx, magnetOrURL, torrentData, torrentName, useFileUpload, savePath)
+	return q.addTorrentLocked(ctx, magnetOrURL, torrentData, torrentName, useFileUpload, savePath, category)
 }
 
 func (q *QBitClient) AddTorrentFile(ctx context.Context, data []byte, name, savePath string) error {
+	return q.AddTorrentFileWithCategory(ctx, data, name, savePath, "")
+}
+
+func (q *QBitClient) AddTorrentFileWithCategory(ctx context.Context, data []byte, name, savePath, category string) error {
 	if len(data) == 0 {
 		return errors.New("empty torrent data")
 	}
@@ -132,10 +142,10 @@ func (q *QBitClient) AddTorrentFile(ctx context.Context, data []byte, name, save
 	if err := q.ensureAuth(ctx); err != nil {
 		return err
 	}
-	return q.addTorrentLocked(ctx, "", data, name, true, savePath)
+	return q.addTorrentLocked(ctx, "", data, name, true, savePath, category)
 }
 
-func (q *QBitClient) addTorrentLocked(ctx context.Context, magnetOrURL string, torrentData []byte, torrentName string, useFileUpload bool, savePath string) error {
+func (q *QBitClient) addTorrentLocked(ctx context.Context, magnetOrURL string, torrentData []byte, torrentName string, useFileUpload bool, savePath, category string) error {
 	before, beforeErr := q.listLocked(ctx, "")
 	beforeHashes := make(map[string]struct{}, len(before))
 	if beforeErr == nil {
@@ -172,6 +182,9 @@ func (q *QBitClient) addTorrentLocked(ctx context.Context, magnetOrURL string, t
 	}
 	if savePath != "" {
 		_ = w.WriteField("savepath", savePath)
+	}
+	if strings.TrimSpace(category) != "" {
+		_ = w.WriteField("category", sanitizeQBitCategory(category))
 	}
 	_ = w.Close()
 
@@ -234,9 +247,14 @@ func (q *QBitClient) addTorrentLocked(ctx context.Context, magnetOrURL string, t
 	q.log.Info("qbittorrent: torrent added",
 		zap.String("url", redactTorrentURL(magnetOrURL)),
 		zap.String("save_path", savePath),
+		zap.String("category", sanitizeQBitCategory(category)),
 		zap.Bool("file_upload", useFileUpload),
 		zap.String("body", bodyText))
 	return nil
+}
+
+func sanitizeQBitCategory(category string) string {
+	return strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(category, "\r", " "), "\n", " "))
 }
 
 func redactTorrentURL(raw string) string {

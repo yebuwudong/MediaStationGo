@@ -33,17 +33,17 @@ type transmissionRPCResponse struct {
 
 // TransmissionAdapter 是 Transmission 的 DownloadAdapter 实现。
 type TransmissionAdapter struct {
-	mu       sync.Mutex
-	cfg      DownloadClientConfig
-	client   *http.Client
-	tag      int
+	mu        sync.Mutex
+	cfg       DownloadClientConfig
+	client    *http.Client
+	tag       int
 	sessionID string
 }
 
 // NewTransmissionAdapter 创建新的 Transmission 适配器。
 func NewTransmissionAdapter() *TransmissionAdapter {
 	return &TransmissionAdapter{
-		client: &http.Client{Timeout: 20 * time.Second},
+		client: NewInternalHTTPClient(20 * time.Second),
 	}
 }
 
@@ -208,7 +208,7 @@ func (a *TransmissionAdapter) Remove(ctx context.Context, hash string, deleteFil
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	_, err := a.rpcLocked(ctx, "torrent-remove", map[string]interface{}{
-		"ids":             []string{hash},
+		"ids":               []string{hash},
 		"delete-local-data": deleteFiles,
 	})
 	return err

@@ -1048,6 +1048,7 @@ MediaStationGo 的智能分类分为两个阶段：
 
 自动整理与手动整理是两件事：
 
+- `downloads.smart_classify`：控制订阅下载 / 站点搜索下载是否自动按媒体分类写入下载目录和 qB 分类，默认开启。
 - `organizer.smart_classify`：只控制是否使用智能分类目录。
 - `organizer.auto_after_download` / `organize.auto`：控制下载完成后是否自动整理。
 - 未开启自动整理时，可以在「整理与维护」页面手动整理媒体库或单个媒体。

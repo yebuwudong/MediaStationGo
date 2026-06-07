@@ -15,6 +15,12 @@ import (
 	"go.uber.org/zap"
 )
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
 func TestQBitLoginUsesMinimalRequestFirst(t *testing.T) {
 	var loginAttempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -43,6 +49,25 @@ func TestQBitLoginUsesMinimalRequestFirst(t *testing.T) {
 	}
 	if loginAttempts.Load() != 1 {
 		t.Fatalf("login attempts = %d, want 1", loginAttempts.Load())
+	}
+}
+
+func TestQBitLoginTimeoutSuggestsDockerHostAddress(t *testing.T) {
+	client := &http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, context.DeadlineExceeded
+		}),
+	}
+
+	err := qbitLogin(context.Background(), client, "http://192.168.1.125:8085", "admin", "adminadmin")
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	msg := err.Error()
+	for _, want := range []string{"连接 http://192.168.1.125:8085 超时", "host.docker.internal", "172.17.0.1"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("timeout hint %q missing %q", msg, want)
+		}
 	}
 }
 

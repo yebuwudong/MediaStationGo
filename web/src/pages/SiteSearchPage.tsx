@@ -53,7 +53,10 @@ export function SiteSearchPage() {
       return
     }
     try {
-      await downloadsAPI.add(url, '', { title: item.title })
+      await downloadsAPI.add(url, '', {
+        title: item.title,
+        source_category: item.category,
+      })
       toast.success(`已加入下载: ${item.title.substring(0, 40)}...`)
     } catch (err: unknown) {
       const msg =

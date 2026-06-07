@@ -13,6 +13,9 @@ export interface AddDownloadInput {
   poster_url?: string
   backdrop_url?: string
   overview?: string
+  media_type?: string
+  media_category?: string
+  source_category?: string
 }
 
 export const downloadsAPI = {

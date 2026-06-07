@@ -31,8 +31,10 @@ type QBitAdapter struct {
 // NewQBitAdapter 创建新的 qBittorrent 适配器。
 func NewQBitAdapter() *QBitAdapter {
 	jar, _ := cookiejar.New(nil)
+	client := NewInternalHTTPClient(20 * time.Second)
+	client.Jar = jar
 	return &QBitAdapter{
-		client: &http.Client{Jar: jar, Timeout: 20 * time.Second},
+		client: client,
 	}
 }
 

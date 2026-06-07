@@ -10,6 +10,7 @@ export interface SiteSearchResult {
   title: string
   torrent_url: string
   download_url: string
+  category?: string
   size: number
   seeders: number
   leechers: number

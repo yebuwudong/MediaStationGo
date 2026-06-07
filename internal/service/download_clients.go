@@ -31,7 +31,7 @@ func NewDownloadClientService(log *zap.Logger, repo *repository.Container) *Down
 	return &DownloadClientService{
 		log:    log,
 		repo:   repo,
-		client: &http.Client{Timeout: 10 * time.Second},
+		client: NewInternalHTTPClient(10 * time.Second),
 	}
 }
 

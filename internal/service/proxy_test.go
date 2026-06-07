@@ -1,6 +1,10 @@
 package service
 
-import "testing"
+import (
+	"net/http"
+	"testing"
+	"time"
+)
 
 func TestProxyURLFromProxyServer(t *testing.T) {
 	cases := []struct {
@@ -25,5 +29,28 @@ func TestProxyURLFromProxyServer(t *testing.T) {
 				t.Fatalf("got %q, want %q", got.String(), tc.want)
 			}
 		})
+	}
+}
+
+func TestNewInternalHTTPClientBypassesProxyEnvironment(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:9")
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+
+	client := NewInternalHTTPClient(time.Second)
+	req, err := http.NewRequest(http.MethodGet, "http://172.17.0.1:8085", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("unexpected transport type %T", client.Transport)
+	}
+	if transport.Proxy == nil {
+		return
+	}
+	if proxyURL, err := transport.Proxy(req); err != nil {
+		t.Fatal(err)
+	} else if proxyURL != nil {
+		t.Fatalf("internal downloader client must bypass proxy, got %s", proxyURL)
 	}
 }
