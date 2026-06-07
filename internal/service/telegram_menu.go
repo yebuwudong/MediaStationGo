@@ -274,6 +274,31 @@ func (s *TelegramBotService) cmdSetPass(ctx context.Context, msg *TelegramMessag
 	return s.selfSetPass(ctx, msg, strings.Join(args, " "))
 }
 
+func (s *TelegramBotService) cmdRedeem(ctx context.Context, channel *model.NotifyChannel, msg *TelegramMessage, args []string) telegramCommandReply {
+	if len(args) == 0 {
+		return telegramCommandReply{Text: "请发送：<code>/redeem 兑换码</code>\n未绑定账号时自动尝试注册码；已绑定账号时自动尝试续期码。"}
+	}
+	code := strings.Join(args, " ")
+	if s.boundUser(ctx, msg.From.ID) == nil {
+		return s.redeemRegisterFlow(ctx, channel, msg, code)
+	}
+	return s.redeemRenewFlow(ctx, msg, code)
+}
+
+func (s *TelegramBotService) cmdRedeemRegister(ctx context.Context, channel *model.NotifyChannel, msg *TelegramMessage, args []string) telegramCommandReply {
+	if len(args) == 0 {
+		return telegramCommandReply{Text: "请发送：<code>/redeem_register 注册兑换码</code>"}
+	}
+	return s.redeemRegisterFlow(ctx, channel, msg, strings.Join(args, " "))
+}
+
+func (s *TelegramBotService) cmdRedeemRenew(ctx context.Context, msg *TelegramMessage, args []string) telegramCommandReply {
+	if len(args) == 0 {
+		return telegramCommandReply{Text: "请发送：<code>/redeem_renew 续期兑换码</code>"}
+	}
+	return s.redeemRenewFlow(ctx, msg, strings.Join(args, " "))
+}
+
 func (s *TelegramBotService) replyAccount(ctx context.Context, msg *TelegramMessage) telegramCommandReply {
 	user := s.boundUser(ctx, msg.From.ID)
 	if user == nil {
@@ -387,6 +412,12 @@ func (s *TelegramBotService) selfSetPass(ctx context.Context, msg *TelegramMessa
 // ── 兑换码流程 ───────────────────────────────────────────────────────────────
 
 func (s *TelegramBotService) redeemRegisterFlow(ctx context.Context, channel *model.NotifyChannel, msg *TelegramMessage, raw string) telegramCommandReply {
+	if channel == nil {
+		channel = s.findChannelForMessage(ctx, msg)
+	}
+	if !s.telegramUserCanBind(ctx, channel, msg.From.ID) {
+		return telegramCommandReply{Text: "当前 Telegram 账号不在管理员配置的绑定群组/频道中，无法兑换注册账号。请先加入管理员配置的群组或频道；如果尚未配置，请联系管理员。"}
+	}
 	rc, errMsg := s.lookupRedeemableCode(ctx, raw, model.RegistrationCodeRegister)
 	if rc == nil {
 		return telegramCommandReply{Text: errMsg}
@@ -518,6 +549,50 @@ func (s *TelegramBotService) replyGenCode(ctx context.Context, msg *TelegramMess
 	}
 }
 
+func (s *TelegramBotService) cmdGenCode(ctx context.Context, msg *TelegramMessage, args []string) telegramCommandReply {
+	if len(args) < 2 {
+		return telegramCommandReply{Text: "用法：<code>/gencode register|renew 天数 [有效天数]</code>\n示例：<code>/gencode register 30</code>、<code>/gencode renew 90 7</code>"}
+	}
+	kind := strings.ToLower(strings.TrimSpace(args[0]))
+	switch kind {
+	case "reg", "register", "注册码":
+		kind = model.RegistrationCodeRegister
+	case "renew", "续期", "续期码":
+		kind = model.RegistrationCodeRenew
+	default:
+		return telegramCommandReply{Text: "类型无效，只支持 register / renew。"}
+	}
+	days, err := strconv.Atoi(args[1])
+	if err != nil || days < 0 {
+		return telegramCommandReply{Text: "天数必须是非负整数，0 表示永久。"}
+	}
+	validDays := 0
+	if len(args) > 2 {
+		validDays, err = strconv.Atoi(args[2])
+		if err != nil || validDays < 0 {
+			return telegramCommandReply{Text: "有效天数必须是非负整数。"}
+		}
+	}
+	createdBy := ""
+	if u := s.boundUser(ctx, msg.From.ID); u != nil {
+		createdBy = u.ID
+	}
+	code, err := s.generateCode(ctx, kind, days, validDays, createdBy)
+	if err != nil {
+		return telegramCommandReply{Text: "生成失败：" + err.Error()}
+	}
+	kindLabel := map[string]string{model.RegistrationCodeRegister: "注册码", model.RegistrationCodeRenew: "续期码"}[code.Kind]
+	dur := "永久"
+	if days > 0 {
+		dur = fmt.Sprintf("%d 天", days)
+	}
+	valid := "长期有效"
+	if validDays > 0 && code.ExpiresAt != nil {
+		valid = "有效至 " + code.ExpiresAt.Format("2006-01-02 15:04")
+	}
+	return telegramCommandReply{Text: fmt.Sprintf("已生成%s（%s，%s）：\n\n<code>%s</code>", kindLabel, dur, valid, code.Code)}
+}
+
 func (s *TelegramBotService) replyUserList(ctx context.Context) telegramCommandReply {
 	users, err := s.repo.User.List(ctx)
 	if err != nil {
@@ -620,6 +695,44 @@ func (s *TelegramBotService) replyUserRenew(ctx context.Context, payload string)
 		return telegramCommandReply{Text: "续期失败：" + err.Error()}
 	}
 	return s.replyUserActions(ctx, parts[0])
+}
+
+func (s *TelegramBotService) cmdUserRenew(ctx context.Context, args []string) telegramCommandReply {
+	if len(args) < 2 {
+		return telegramCommandReply{Text: "用法：<code>/renew_user 用户名 天数</code>，天数 0 表示永久。"}
+	}
+	user, _ := s.repo.User.FindByUsername(ctx, args[0])
+	if user == nil {
+		user, _ = s.repo.User.FindByID(ctx, args[0])
+	}
+	if user == nil {
+		return telegramCommandReply{Text: "未找到用户。"}
+	}
+	days, err := strconv.Atoi(args[1])
+	if err != nil || days < 0 {
+		return telegramCommandReply{Text: "天数必须是非负整数。"}
+	}
+	if err := s.applyRenewal(ctx, user.ID, days); err != nil {
+		return telegramCommandReply{Text: "续期失败：" + err.Error()}
+	}
+	return s.replyUserActions(ctx, user.ID)
+}
+
+func (s *TelegramBotService) cmdUserDelete(ctx context.Context, args []string) telegramCommandReply {
+	if len(args) == 0 {
+		return telegramCommandReply{Text: "用法：<code>/delete_user 用户名 confirm</code>\n为避免误删，最后一个参数必须是 confirm。"}
+	}
+	if len(args) < 2 || !strings.EqualFold(args[len(args)-1], "confirm") {
+		return telegramCommandReply{Text: "删除用户需要确认：<code>/delete_user 用户名 confirm</code>"}
+	}
+	user, _ := s.repo.User.FindByUsername(ctx, args[0])
+	if user == nil {
+		user, _ = s.repo.User.FindByID(ctx, args[0])
+	}
+	if user == nil {
+		return telegramCommandReply{Text: "未找到用户。"}
+	}
+	return s.replyUserDelete(ctx, user.ID)
 }
 
 // protectReason returns a non-empty message when a user must not be

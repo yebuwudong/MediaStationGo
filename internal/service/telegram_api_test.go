@@ -110,4 +110,9 @@ func TestTelegramCommandFiltering(t *testing.T) {
 	if telegramSupportedCommand("/签到") {
 		t.Fatal("unrelated group bot command should not be handled")
 	}
+	for _, cmd := range []string{"/signin", "/redeem", "/gencode", "/users", "/renew_user", "/delete_user", "/cleanup_rule"} {
+		if !telegramSupportedCommand(cmd) {
+			t.Fatalf("%s should be supported so group slash commands get feedback", cmd)
+		}
+	}
 }

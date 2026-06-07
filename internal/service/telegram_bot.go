@@ -255,6 +255,8 @@ func (s *TelegramBotService) executeCommand(ctx context.Context, channel *model.
 		return s.cmdHideAdult(ctx, msg, args), nil
 	case "/account", "/me":
 		return s.replyAccount(ctx, msg), nil
+	case "/signin", "/checkin":
+		return s.replySignIn(ctx, msg), nil
 	case "/devices":
 		return s.replyDevices(ctx, msg), nil
 	case "/kick":
@@ -263,6 +265,12 @@ func (s *TelegramBotService) executeCommand(ctx context.Context, channel *model.
 		return s.cmdSetName(ctx, msg, args), nil
 	case "/setpass", "/passwd", "/password":
 		return s.cmdSetPass(ctx, msg, args), nil
+	case "/redeem":
+		return s.cmdRedeem(ctx, channel, msg, args), nil
+	case "/redeem_register":
+		return s.cmdRedeemRegister(ctx, channel, msg, args), nil
+	case "/redeem_renew":
+		return s.cmdRedeemRenew(ctx, msg, args), nil
 	case "/register", "/reg", "/signup":
 		return s.cmdRegister(ctx, channel, msg, args), nil
 	case "/registration", "/reg_switch", "/openreg":
@@ -270,6 +278,31 @@ func (s *TelegramBotService) executeCommand(ctx context.Context, channel *model.
 			return telegramCommandReply{Text: "此命令仅管理员可用。"}, nil
 		}
 		return s.cmdRegistrationToggle(ctx, args), nil
+	case "/capacity":
+		if !s.telegramUserIsAdmin(ctx, channel, msg.From.ID) {
+			return telegramCommandReply{Text: "此命令仅管理员可用。"}, nil
+		}
+		return s.replyCapacity(ctx), nil
+	case "/users":
+		if !s.telegramUserIsAdmin(ctx, channel, msg.From.ID) {
+			return telegramCommandReply{Text: "此命令仅管理员可用。"}, nil
+		}
+		return s.replyUserList(ctx), nil
+	case "/gencode":
+		if !s.telegramUserIsAdmin(ctx, channel, msg.From.ID) {
+			return telegramCommandReply{Text: "此命令仅管理员可用。"}, nil
+		}
+		return s.cmdGenCode(ctx, msg, args), nil
+	case "/renew_user":
+		if !s.telegramUserIsAdmin(ctx, channel, msg.From.ID) {
+			return telegramCommandReply{Text: "此命令仅管理员可用。"}, nil
+		}
+		return s.cmdUserRenew(ctx, args), nil
+	case "/delete_user":
+		if !s.telegramUserIsAdmin(ctx, channel, msg.From.ID) {
+			return telegramCommandReply{Text: "此命令仅管理员可用。"}, nil
+		}
+		return s.cmdUserDelete(ctx, args), nil
 	case "/devicepolicy", "/policy":
 		if !s.telegramUserIsAdmin(ctx, channel, msg.From.ID) {
 			return telegramCommandReply{Text: "此命令仅管理员可用。"}, nil
@@ -352,8 +385,10 @@ func telegramCommandName(text string) string {
 func telegramSupportedCommand(cmd string) bool {
 	switch cmd {
 	case "/start", "/menu", "/cancel", "/help", "/hideadult", "/hide_adult", "/adult",
-		"/account", "/me", "/devices", "/kick", "/setname", "/rename", "/setpass", "/passwd", "/password",
+		"/account", "/me", "/signin", "/checkin", "/devices", "/kick", "/setname", "/rename", "/setpass", "/passwd", "/password",
+		"/redeem", "/redeem_register", "/redeem_renew",
 		"/register", "/reg", "/signup", "/registration", "/reg_switch", "/openreg",
+		"/capacity", "/users", "/gencode", "/renew_user", "/delete_user",
 		"/devicepolicy", "/policy", "/antishare", "/cleanup", "/cleanup_mode", "/cleanup_rule",
 		"/ban", "/unban", "/status", "/search", "/downloads", "/stats":
 		return true
@@ -388,7 +423,7 @@ func (s *TelegramBotService) cmdStart(ctx context.Context, msg *TelegramMessage,
 			}
 		}
 		hint := "如果没有账号，请联系管理员注册。"
-		if s.registrationEnabled(ctx) {
+		if s.openRegEnabled(ctx) {
 			hint = "如果还没有账号，可直接注册：\n<code>/register 用户名 密码</code>\n或：<code>/register 用户名-密码</code>"
 		}
 		return telegramCommandReply{Text: "<b>欢迎使用 MediaStationGo</b>\n\n普通用户请先绑定账号：\n<code>/start 用户名 密码</code>\n或：<code>/start 用户名-密码</code>\n\n" + hint}
@@ -476,27 +511,47 @@ func (s *TelegramBotService) cmdRegister(ctx context.Context, channel *model.Not
 	}
 }
 
-// cmdRegistrationToggle 处理管理员的 /registration on|off|status 命令。
+// cmdRegistrationToggle handles /registration and /openreg. It uses the same
+// quota-aware open-registration state as the inline Bot menu.
 func (s *TelegramBotService) cmdRegistrationToggle(ctx context.Context, args []string) telegramCommandReply {
-	current := s.registrationEnabled(ctx)
 	if len(args) == 0 || strings.EqualFold(strings.TrimSpace(args[0]), "status") {
-		state := map[bool]string{true: "已开启", false: "已关闭"}[current]
-		return telegramCommandReply{Text: fmt.Sprintf("普通用户 Bot 注册功能当前<b>%s</b>。\n\n开启：<code>/registration on</code>\n关闭：<code>/registration off</code>", state)}
+		c := s.loadCapacity(ctx)
+		state := "已关闭"
+		if c.OpenRegOn {
+			if c.OpenRegLimit > 0 {
+				state = fmt.Sprintf("已开启（%d/%d 名额）", c.OpenRegUsed, c.OpenRegLimit)
+			} else {
+				state = "已开启（不限名额，受授权上限约束）"
+			}
+		}
+		return telegramCommandReply{Text: fmt.Sprintf("普通用户 Bot 注册功能当前<b>%s</b>。\n剩余可注册：<b>%d</b> 人。\n\n开启：<code>/registration on 10</code>\n不限：<code>/registration on 0</code>\n关闭：<code>/registration off</code>", state, c.Remaining())}
 	}
-	var next bool
 	switch strings.ToLower(strings.TrimSpace(args[0])) {
 	case "on", "true", "1", "open", "enable", "enabled", "开启", "打开", "开":
-		next = true
+		limit := 0
+		if len(args) > 1 {
+			n, err := strconv.Atoi(strings.TrimSpace(args[1]))
+			if err != nil || n < 0 {
+				return telegramCommandReply{Text: "名额必须是非负整数，0 表示不限名额。"}
+			}
+			limit = n
+		}
+		if err := s.openRegistration(ctx, limit); err != nil {
+			return telegramCommandReply{Text: "开启失败：" + err.Error()}
+		}
+		label := "不限名额"
+		if limit > 0 {
+			label = fmt.Sprintf("%d 个名额", limit)
+		}
+		return telegramCommandReply{Text: "普通用户 Bot 注册功能已开启：" + label + "。"}
 	case "off", "false", "0", "close", "disable", "disabled", "关闭", "关":
-		next = false
+		if err := s.closeRegistration(ctx); err != nil {
+			return telegramCommandReply{Text: "关闭失败：" + err.Error()}
+		}
+		return telegramCommandReply{Text: "普通用户 Bot 注册功能已关闭。"}
 	default:
-		return telegramCommandReply{Text: "参数无效，请使用 <code>/registration on</code> 或 <code>/registration off</code>。"}
+		return telegramCommandReply{Text: "参数无效，请使用 <code>/registration on [名额]</code> 或 <code>/registration off</code>。"}
 	}
-	if err := s.setRegistrationEnabled(ctx, next); err != nil {
-		return telegramCommandReply{Text: "更新失败：" + err.Error()}
-	}
-	state := map[bool]string{true: "已开启", false: "已关闭"}[next]
-	return telegramCommandReply{Text: fmt.Sprintf("普通用户 Bot 注册功能<b>%s</b>。此设置与系统设置页同步。", state)}
 }
 
 // cmdHelp 处理 /help 命令。
@@ -504,17 +559,19 @@ func (s *TelegramBotService) cmdHelp(ctx context.Context, msg *TelegramMessage) 
 	channel := s.findChannelForMessage(ctx, msg)
 	if !s.telegramUserIsAdmin(ctx, channel, msg.From.ID) {
 		register := ""
-		if s.registrationEnabled(ctx) {
+		if s.openRegEnabled(ctx) {
 			register = "<b>/register 用户名 密码</b> — 注册新账号\n"
 		}
 		return "<b>MediaStationGo 用户命令</b>\n\n" +
 			register +
 			"<b>/start 用户名 密码</b> — 绑定账号\n" +
 			"<b>/account</b> — 查看账号状态\n" +
+			"<b>/signin</b> — 签到\n" +
 			"<b>/devices</b> — 查看登录设备\n" +
 			"<b>/kick all|编号</b> — 踢下线设备\n" +
 			"<b>/setname 新用户名</b> — 修改用户名\n" +
 			"<b>/setpass 新密码</b> — 修改密码\n" +
+			"<b>/redeem 兑换码</b> — 注册或续期兑换\n" +
 			"<b>/hideadult on|off</b> — 隐藏或显示成人目录\n\n" +
 			"系统状态、搜索、下载列表与统计命令仅管理员可用。"
 	}
@@ -522,9 +579,13 @@ func (s *TelegramBotService) cmdHelp(ctx context.Context, msg *TelegramMessage) 
 		"<b>/start</b> — 开始使用\n" +
 		"<b>/help</b> — 帮助信息\n" +
 		"<b>/account</b> / <b>/devices</b> / <b>/kick all|编号</b> — 用户自助设备管理\n" +
+		"<b>/signin</b> / <b>/redeem 兑换码</b> — 签到与兑换\n" +
 		"<b>/setname 新用户名</b> / <b>/setpass 新密码</b> — 用户自助改名改密\n" +
 		"<b>/register 用户名 密码</b> — 注册新账号（需管理员开启）\n" +
-		"<b>/registration on|off</b> — 开启/关闭普通用户注册（管理员）\n" +
+		"<b>/registration on [名额]|off</b> — 开启/关闭普通用户注册（管理员）\n" +
+		"<b>/capacity</b> / <b>/users</b> — 容量与用户管理（管理员）\n" +
+		"<b>/gencode register|renew 天数 [有效天数]</b> — 生成兑换码（管理员）\n" +
+		"<b>/renew_user 用户名 天数</b> / <b>/delete_user 用户名 confirm</b> — 续期/删除用户（管理员）\n" +
 		"<b>/antishare on play=3 login=3 warn=2</b> — 防共享策略（管理员）\n" +
 		"<b>/cleanup on|off|run</b> — 删号规则开关/巡检（管理员）\n" +
 		"<b>/cleanup_mode any|all|count 2</b> — 保号模式（管理员）\n" +
