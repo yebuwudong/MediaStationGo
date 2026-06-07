@@ -141,7 +141,7 @@ func loadBotConfig(ctx context.Context, repo *repository.Container) botConfig {
 	cfg.AccountCleanupRequiredCount = parseIntSettingDefault(get(SettingAccountCleanupRequiredCount), cfg.AccountCleanupRequiredCount)
 	if raw := strings.TrimSpace(get(SettingAccountCleanupRules)); raw != "" {
 		var rules []accountCleanupRule
-		if err := json.Unmarshal([]byte(raw), &rules); err == nil && len(rules) > 0 {
+		if err := json.Unmarshal([]byte(raw), &rules); err == nil {
 			cfg.AccountCleanupRules = normalizeCleanupRules(rules)
 		}
 	}

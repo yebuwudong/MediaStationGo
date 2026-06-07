@@ -319,6 +319,34 @@ func TestBotAdminCommandsManageDevicePolicy(t *testing.T) {
 	}
 }
 
+func TestBotCleanupRulesCanBeDeletedUntilEmpty(t *testing.T) {
+	ctx := context.Background()
+	repos, bot := newBotTestService(t)
+	admin := &model.User{Username: "root", PasswordHash: "x", Role: "admin", IsActive: true}
+	if err := repos.User.Create(ctx, admin); err != nil {
+		t.Fatal(err)
+	}
+	channel := &model.NotifyChannel{Name: "Telegram", Type: "telegram", Enabled: true, Config: `{"admin_user_ids":"9001"}`}
+	msg := &TelegramMessage{From: TelegramUser{ID: 9001, Username: "root"}, Chat: TelegramChat{ID: 9001, Type: "private"}}
+
+	reply, err := bot.executeCommand(ctx, channel, msg, "/cleanup_rule del watch_3_5d_6h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := loadBotConfig(ctx, repos)
+	if len(cfg.AccountCleanupRules) != 0 {
+		t.Fatalf("cleanup rules should stay empty after deleting the last rule; reply=%q rules=%+v", reply.Text, cfg.AccountCleanupRules)
+	}
+
+	reply, err = bot.executeCommand(ctx, channel, msg, "/cleanup_rule list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reply.Text, "暂无规则") {
+		t.Fatalf("expected empty rule list, got %q", reply.Text)
+	}
+}
+
 func TestBotRegistrationCommandUsesOpenRegQuota(t *testing.T) {
 	ctx := context.Background()
 	repos, bot := newBotTestService(t)
