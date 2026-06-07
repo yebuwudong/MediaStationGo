@@ -55,14 +55,24 @@ var torrentEpisodeToken = regexp.MustCompile(`(?i)e\d{1,3}`)
 // successful dedup hit, not as a retryable enqueue failure.
 var ErrDownloadAlreadyExists = errors.New("download already exists")
 
+// ErrMediaAlreadyInLibrary tells callers that the requested movie/episode is
+// already present in the scanned media library and must not be sent to the
+// downloader again.
+var ErrMediaAlreadyInLibrary = errors.New("media already exists in library")
+
+func IsDownloadDedupError(err error) bool {
+	return errors.Is(err, ErrDownloadAlreadyExists) || errors.Is(err, ErrMediaAlreadyInLibrary)
+}
+
 // DownloadTaskMeta carries public display metadata for a download. It is
 // deliberately separate from the private torrent URL so API responses never
 // need to expose tracker tokens.
 type DownloadTaskMeta struct {
-	Title       string
-	PosterURL   string
-	BackdropURL string
-	Overview    string
+	Title                string
+	PosterURL            string
+	BackdropURL          string
+	Overview             string
+	AllowExistingLibrary bool
 }
 
 type DownloadTaskView struct {
@@ -196,6 +206,9 @@ func (d *DownloadService) AddDownloadWithMeta(ctx context.Context, userID, urlSt
 		title = publicDownloadTitle(urlStr)
 		meta.Title = title
 	}
+	if !meta.AllowExistingLibrary && d.localMediaAlreadyExists(ctx, title) {
+		return nil, ErrMediaAlreadyInLibrary
+	}
 	if existing, ok := d.findExistingDownloadTask(ctx, title); ok {
 		return existing, ErrDownloadAlreadyExists
 	}
@@ -227,6 +240,59 @@ func (d *DownloadService) AddDownloadWithMeta(ctx context.Context, userID, urlSt
 		return nil, err
 	}
 	return d.createTask(ctx, userID, urlStr, savePath, meta)
+}
+
+func (d *DownloadService) localMediaAlreadyExists(ctx context.Context, title string) bool {
+	if d == nil || d.repo == nil || d.repo.DB == nil {
+		return false
+	}
+	if !d.repo.DB.Migrator().HasTable(&model.Media{}) {
+		return false
+	}
+	query := availabilityQuery(title, "")
+	if query == "" {
+		return false
+	}
+	like := "%" + query + "%"
+	var rows []model.Media
+	if err := d.repo.DB.WithContext(ctx).
+		Where("title LIKE ? OR original_name LIKE ? OR path LIKE ?", like, like, like).
+		Order("season_num asc, episode_num asc, created_at desc").
+		Limit(200).
+		Find(&rows).Error; err != nil || len(rows) == 0 {
+		return false
+	}
+
+	wantSeason, wantEpisode := ParseEpisode(title)
+	if wantSeason <= 0 {
+		wantSeason = 1
+	}
+	if wantEpisode <= 0 {
+		return true
+	}
+	for _, row := range rows {
+		rowSeason := row.SeasonNum
+		rowEpisode := row.EpisodeNum
+		if rowSeason <= 0 || rowEpisode <= 0 {
+			parsedSeason, parsedEpisode := ParseEpisode(row.Path)
+			if rowSeason <= 0 {
+				rowSeason = parsedSeason
+			}
+			if rowEpisode <= 0 {
+				rowEpisode = parsedEpisode
+			}
+		}
+		if rowSeason <= 0 {
+			rowSeason = 1
+		}
+		if rowEpisode == wantEpisode && rowSeason == wantSeason {
+			return true
+		}
+		if rowEpisode <= 0 && isSeriesPackTitle(row.Title+" "+row.OriginalName+" "+row.Path) {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *DownloadService) findExistingDownloadTask(ctx context.Context, title string) (*model.DownloadTask, bool) {

@@ -36,6 +36,11 @@ import (
 // 该 id 后会把所有派生数据（cookie/收藏/历史）和它绑定。
 const embyServerID = "mediastation-go-001"
 
+// embyCompatVersion deliberately reports an Emby 4.x server. Official Emby
+// clients reject Jellyfin-style 10.x identities as unsupported/too old during
+// the login handshake, even when the API shape is compatible enough for us.
+const embyCompatVersion = "4.8.10.0"
+
 // PlaybackDirectOnlySettingKey 控制「客户端直连解码」模式：开启后宿主机
 // 不再提供转码，所有播放交给第三方客户端本地解码（direct play / 302 直链），
 // 以释放宿主机 CPU 资源。
@@ -61,8 +66,9 @@ func (e *EmbyService) SystemInfo() map[string]any {
 		"Id":                     embyServerID,
 		"ServerId":               embyServerID,
 		"ServerName":             "MediaStationGo",
-		"Version":                "10.8.13",
-		"ProductName":            "Jellyfin Server",
+		"Version":                embyCompatVersion,
+		"ServerVersion":          embyCompatVersion,
+		"ProductName":            "Emby Server",
 		"OperatingSystem":        "Windows",
 		"Architecture":           "X64",
 		"LocalAddress":           "",
@@ -89,8 +95,9 @@ func (e *EmbyService) SystemInfoPublic() map[string]any {
 		"Id":                     embyServerID,
 		"ServerId":               embyServerID,
 		"ServerName":             "MediaStationGo",
-		"Version":                "10.8.13",
-		"ProductName":            "Jellyfin Server",
+		"Version":                embyCompatVersion,
+		"ServerVersion":          embyCompatVersion,
+		"ProductName":            "Emby Server",
 		"OperatingSystem":        "Windows",
 		"LocalAddress":           "",
 		"WanAddress":             "",
@@ -1220,7 +1227,7 @@ func (e *EmbyService) mediaSource(m *model.Media, asEmbedded, directOnly bool) m
 		// 直连解码模式下不下发 TranscodingUrl，迫使客户端本地解码直连，
 		// 宿主机不参与转码。
 		if !directOnly {
-			src["TranscodingUrl"] = "/Videos/" + m.ID + "/stream"
+			src["TranscodingUrl"] = "/Videos/" + m.ID + "/master.m3u8"
 		}
 	}
 	if strings.TrimSpace(m.STRMURL) != "" {

@@ -225,6 +225,9 @@ func TestEmbyPlaybackInfoRespectsDirectPlayOnly(t *testing.T) {
 	if _, ok := src["TranscodingUrl"]; !ok {
 		t.Fatalf("expected TranscodingUrl present by default: %#v", src)
 	}
+	if src["TranscodingUrl"] != "/Videos/m-1/master.m3u8" {
+		t.Fatalf("expected HLS TranscodingUrl by default, got %#v", src["TranscodingUrl"])
+	}
 
 	// 开启「客户端直连解码」：不再下发转码能力 / TranscodingUrl，仍保留 DirectStream。
 	if err := svc.repo.Setting.Set(t.Context(), PlaybackDirectOnlySettingKey, "true"); err != nil {

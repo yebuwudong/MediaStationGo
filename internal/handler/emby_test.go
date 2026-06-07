@@ -86,6 +86,75 @@ func TestEmbyWithRequestAddressHonorsForwardedHeaders(t *testing.T) {
 	}
 }
 
+func TestEmbyPublicSystemInfoLooksLikeModernEmbyServer(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	repos := repository.New(db)
+	router := gin.New()
+	registerEmbyRoutes(router, "test-secret", &service.Container{
+		Repo: repos,
+		Emby: service.NewEmbyService(&config.Config{}, zap.NewNop(), repos),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/System/Info/Public", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", w.Code, w.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode system info: %v", err)
+	}
+	if payload["ProductName"] != "Emby Server" {
+		t.Fatalf("ProductName = %#v, want Emby Server", payload["ProductName"])
+	}
+	version, _ := payload["Version"].(string)
+	if !strings.HasPrefix(version, "4.") {
+		t.Fatalf("Version = %q, want Emby-compatible 4.x", version)
+	}
+}
+
+func TestEmbyUppercaseSessionCapabilitiesRouteNoContent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(&model.User{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := repository.New(db)
+	if err := repos.User.Create(t.Context(), &model.User{
+		Base:         model.Base{ID: "user-1"},
+		Username:     "tester",
+		PasswordHash: "x",
+		Role:         "admin",
+		Tier:         "plus",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	const secret = "test-secret"
+	router := gin.New()
+	registerEmbyRoutes(router, secret, &service.Container{Repo: repos})
+
+	req := httptest.NewRequest(http.MethodPost, "/Sessions/Capabilities/Full", strings.NewReader(`{}`))
+	req.Header.Set("X-Emby-Token", signedTestToken(t, secret))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("unexpected status: %d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestEmbyVirtualFoldersRouteReturnsJSON(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -325,6 +394,22 @@ func TestEmbyLowercasePlaybackInfoRouteReturnsJSON(t *testing.T) {
 	if _, ok := body["MediaSources"]; !ok {
 		t.Fatalf("missing MediaSources: %#v", body)
 	}
+	sources, ok := body["MediaSources"].([]any)
+	if !ok || len(sources) == 0 {
+		t.Fatalf("unexpected MediaSources: %#v", body["MediaSources"])
+	}
+	source, ok := sources[0].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected MediaSource: %#v", sources[0])
+	}
+	directURL, _ := source["DirectStreamUrl"].(string)
+	if !strings.Contains(directURL, "api_key=") {
+		t.Fatalf("DirectStreamUrl should carry api_key for clients that do not repeat auth headers: %#v", source)
+	}
+	transcodeURL, _ := source["TranscodingUrl"].(string)
+	if transcodeURL != "" && !strings.Contains(transcodeURL, "api_key=") {
+		t.Fatalf("TranscodingUrl should carry api_key: %#v", source)
+	}
 }
 
 func TestEmbyLowercaseVideoStreamRouteServesMedia(t *testing.T) {
@@ -383,6 +468,68 @@ func TestEmbyLowercaseVideoStreamRouteServesMedia(t *testing.T) {
 	}
 	if got := w.Body.String(); got != "fake-video-bytes" {
 		t.Fatalf("unexpected stream body: %q", got)
+	}
+}
+
+func TestEmbyLowercaseVideoHLSRouteDoesNot404WhenDirectOnly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(model.AllModels()...); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := repository.New(db)
+	if err := repos.User.Create(t.Context(), &model.User{
+		Base:         model.Base{ID: "user-1"},
+		Username:     "tester",
+		PasswordHash: "x",
+		Role:         "admin",
+		Tier:         "plus",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	dir := t.TempDir()
+	mediaPath := filepath.Join(dir, "sample.mp4")
+	if err := os.WriteFile(mediaPath, []byte("fake-video-bytes"), 0o644); err != nil {
+		t.Fatalf("write media: %v", err)
+	}
+	lib := model.Library{Name: "电影", Path: dir, Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	if err := db.Create(&model.Media{
+		Base:      model.Base{ID: "media-1"},
+		LibraryID: lib.ID,
+		Title:     "Lowercase HLS",
+		Path:      mediaPath,
+		Container: "mp4",
+	}).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+	if err := repos.Setting.Set(t.Context(), service.PlaybackDirectOnlySettingKey, "true"); err != nil {
+		t.Fatalf("set direct-only: %v", err)
+	}
+
+	const secret = "test-secret"
+	router := gin.New()
+	registerEmbyRoutes(router, secret, &service.Container{
+		Repo:   repos,
+		Emby:   service.NewEmbyService(&config.Config{}, zap.NewNop(), repos),
+		Stream: service.NewStreamService(&config.Config{}, zap.NewNop(), repos, nil),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/videos/media-1/master.m3u8?api_key="+signedTestToken(t, secret), nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code == http.StatusNotFound {
+		t.Fatalf("lowercase HLS route should be registered, got 404")
+	}
+	if w.Code != http.StatusConflict {
+		t.Fatalf("direct-only HLS should return 409, got %d body=%s", w.Code, w.Body.String())
 	}
 }
 

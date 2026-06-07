@@ -74,6 +74,10 @@ func addDownloadHandler(svc *service.Container) gin.HandlerFunc {
 		}, fallbackTitle, "")
 		t, err := svc.Downloads.AddDownloadWithMeta(c.Request.Context(), uid.(string), realURL, req.SavePath, meta)
 		if err != nil {
+			if errors.Is(err, service.ErrMediaAlreadyInLibrary) {
+				c.JSON(http.StatusConflict, gin.H{"error": "media already exists in library"})
+				return
+			}
 			if errors.Is(err, service.ErrDownloadAlreadyExists) {
 				c.JSON(http.StatusOK, t)
 				return

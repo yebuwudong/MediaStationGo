@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -80,9 +81,6 @@ func embyWithRequestAddress(c *gin.Context, payload map[string]any) map[string]a
 		out["LocalAddress"] = address
 		out["WanAddress"] = address
 		out["PublishedServerUrl"] = address
-	}
-	if strings.HasPrefix(strings.ToLower(c.Request.URL.Path), "/emby") {
-		out["ProductName"] = "Emby Server"
 	}
 	return out
 }
@@ -388,8 +386,8 @@ func embyVirtualFoldersHandler(svc *service.Container) gin.HandlerFunc {
 // ─── Items ───────────────────────────────────────────────────────────────────
 
 func parseEmbyItemsParams(c *gin.Context) service.ItemsParams {
-	limit, _ := strconv.Atoi(c.DefaultQuery("Limit", "50"))
-	offset, _ := strconv.Atoi(c.DefaultQuery("StartIndex", "0"))
+	limit, _ := strconv.Atoi(embyFirstNonEmptyString(firstQueryValue(c, "Limit", "limit"), "50"))
+	offset, _ := strconv.Atoi(embyFirstNonEmptyString(firstQueryValue(c, "StartIndex", "startIndex", "startindex"), "0"))
 	uid := c.Param("userId")
 	if uid == "" {
 		uid = embyUserID(c)
@@ -410,16 +408,25 @@ func parseEmbyItemsParams(c *gin.Context) service.ItemsParams {
 	}
 	return service.ItemsParams{
 		UserID:           uid,
-		ParentID:         c.Query("ParentId"),
-		IDs:              splitOpt(c.Query("Ids")),
-		SearchTerm:       c.Query("SearchTerm"),
-		IncludeItemTypes: splitOpt(c.Query("IncludeItemTypes")),
-		Recursive:        strings.EqualFold(c.Query("Recursive"), "true"),
-		SortBy:           c.Query("SortBy"),
-		SortOrder:        c.Query("SortOrder"),
+		ParentID:         firstQueryValue(c, "ParentId", "parentId", "parentid"),
+		IDs:              splitOpt(firstQueryValue(c, "Ids", "ids")),
+		SearchTerm:       firstQueryValue(c, "SearchTerm", "searchTerm", "searchterm"),
+		IncludeItemTypes: splitOpt(firstQueryValue(c, "IncludeItemTypes", "includeItemTypes", "includeitemtypes")),
+		Recursive:        strings.EqualFold(firstQueryValue(c, "Recursive", "recursive"), "true"),
+		SortBy:           firstQueryValue(c, "SortBy", "sortBy", "sortby"),
+		SortOrder:        firstQueryValue(c, "SortOrder", "sortOrder", "sortorder"),
 		Limit:            limit,
 		StartIndex:       offset,
 	}
+}
+
+func embyFirstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func embyItemsHandler(svc *service.Container) gin.HandlerFunc {
@@ -577,8 +584,96 @@ func embyPlaybackInfoHandler(svc *service.Container) gin.HandlerFunc {
 			embyError(c, http.StatusNotFound, "not found")
 			return
 		}
+		embyAttachRequestTokenToPlaybackInfo(c, out)
 		c.JSON(http.StatusOK, out)
 	}
+}
+
+func embyAttachRequestTokenToPlaybackInfo(c *gin.Context, out map[string]any) {
+	token := embyRequestToken(c)
+	if token == "" || out == nil {
+		return
+	}
+	sources, ok := out["MediaSources"].([]map[string]any)
+	if !ok {
+		return
+	}
+	for _, source := range sources {
+		for _, key := range []string{"DirectStreamUrl", "TranscodingUrl"} {
+			raw, ok := source[key].(string)
+			if !ok {
+				continue
+			}
+			source[key] = embyAppendAPIKey(raw, token)
+		}
+	}
+}
+
+func embyRequestToken(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	for _, key := range []string{"api_key", "apiKey", "ApiKey", "token"} {
+		if value := strings.TrimSpace(c.Query(key)); value != "" {
+			return value
+		}
+	}
+	for _, header := range []string{"X-Emby-Token", "X-MediaBrowser-Token"} {
+		if value := strings.TrimSpace(c.GetHeader(header)); value != "" {
+			return value
+		}
+	}
+	for _, header := range []string{"Authorization", "X-Emby-Authorization"} {
+		if token := embyTokenFromAuthHeader(c.GetHeader(header)); token != "" {
+			return token
+		}
+	}
+	return ""
+}
+
+func embyTokenFromAuthHeader(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	for _, prefix := range []string{"Bearer ", "Emby "} {
+		if strings.HasPrefix(value, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(value, prefix))
+		}
+	}
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(part), "MediaBrowser "))
+		if !strings.HasPrefix(part, "Token=") {
+			continue
+		}
+		token := strings.TrimSpace(strings.TrimPrefix(part, "Token="))
+		return strings.Trim(token, `"`)
+	}
+	if strings.Contains(value, "Token=") {
+		return ""
+	}
+	return value
+}
+
+func embyAppendAPIKey(raw, token string) string {
+	raw = strings.TrimSpace(raw)
+	token = strings.TrimSpace(token)
+	if raw == "" || token == "" {
+		return raw
+	}
+	if strings.HasPrefix(raw, "//") {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.IsAbs() {
+		return raw
+	}
+	q := u.Query()
+	if q.Get("api_key") == "" && q.Get("apiKey") == "" && q.Get("token") == "" {
+		q.Set("api_key", token)
+		u.RawQuery = q.Encode()
+	}
+	return u.String()
 }
 
 // embyVideoStreamHandler 是 GET /Videos/{id}/stream 的入口，
@@ -594,6 +689,43 @@ func embyVideoStreamHandler(svc *service.Container) gin.HandlerFunc {
 		// 直接调用 Stream service 写入 response
 		err = svc.Stream.ServeFile(c.Writer, c.Request, c.Param("id"))
 		if err != nil {
+			c.Status(http.StatusNotFound)
+		}
+	}
+}
+
+func embyVideoHLSPlaylistHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := embyUserID(c)
+		item, err := svc.Emby.Item(c.Request.Context(), c.Param("id"), uid)
+		if err != nil || item == nil || svc.Stream == nil {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		err = svc.Stream.ServeHLSPlaylist(c.Writer, c.Request, c.Param("id"))
+		if errors.Is(err, service.ErrTranscodeDisabled) {
+			c.JSON(http.StatusConflict, gin.H{"error": "transcode disabled"})
+			return
+		}
+		if errors.Is(err, service.ErrTranscodeBusy) {
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": "transcode busy"})
+			return
+		}
+		if err != nil {
+			c.Status(http.StatusNotFound)
+		}
+	}
+}
+
+func embyVideoHLSSegmentHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := embyUserID(c)
+		item, err := svc.Emby.Item(c.Request.Context(), c.Param("id"), uid)
+		if err != nil || item == nil || svc.Stream == nil {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		if err := svc.Stream.ServeHLSSegment(c.Writer, c.Request, c.Param("id"), c.Param("seg")); err != nil {
 			c.Status(http.StatusNotFound)
 		}
 	}
@@ -831,10 +963,17 @@ func registerEmbyRoutes(r *gin.Engine, jwtSecret string, svc *service.Container)
 		auth.HEAD("/Videos/:id/stream.:container", embyVideoStreamHandler(svc))
 		auth.GET("/Videos/:id/original", embyVideoStreamHandler(svc))
 		auth.GET("/Videos/:id/original.:container", embyVideoStreamHandler(svc))
+		auth.GET("/Videos/:id/master.m3u8", embyVideoHLSPlaylistHandler(svc))
+		auth.HEAD("/Videos/:id/master.m3u8", embyVideoHLSPlaylistHandler(svc))
+		auth.GET("/Videos/:id/main.m3u8", embyVideoHLSPlaylistHandler(svc))
+		auth.HEAD("/Videos/:id/main.m3u8", embyVideoHLSPlaylistHandler(svc))
+		auth.GET("/Videos/:id/:seg", embyVideoHLSSegmentHandler(svc))
 
 		auth.POST("/Sessions/Playing", embyPlayingProgressHandler(svc))
 		auth.POST("/Sessions/Playing/Progress", embyPlayingProgressHandler(svc))
 		auth.POST("/Sessions/Playing/Stopped", embyPlayingProgressHandler(svc))
+		auth.POST("/Sessions/Capabilities", embyNoContentHandler(svc))
+		auth.POST("/Sessions/Capabilities/Full", embyNoContentHandler(svc))
 
 		auth.POST("/Users/:userId/FavoriteItems/:itemId", embyFavoriteHandler(svc, true))
 		auth.DELETE("/Users/:userId/FavoriteItems/:itemId", embyFavoriteHandler(svc, false))
@@ -842,6 +981,7 @@ func registerEmbyRoutes(r *gin.Engine, jwtSecret string, svc *service.Container)
 		auth.DELETE("/Users/:userId/PlayedItems/:itemId", embyMarkPlayedHandler(svc, false))
 
 		auth.GET("/Sessions", embySessionsHandler(svc))
+		auth.GET("/System/Configuration", embyServerConfigurationHandler(svc))
 		auth.GET("/DisplayPreferences/:id", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"Id": c.Param("id"), "CustomPrefs": gin.H{}})
 		})
@@ -885,6 +1025,11 @@ func registerLowercaseEmbyAuthRoutes(auth *gin.RouterGroup, svc *service.Contain
 	auth.HEAD("/videos/:id/stream.:container", embyVideoStreamHandler(svc))
 	auth.GET("/videos/:id/original", embyVideoStreamHandler(svc))
 	auth.GET("/videos/:id/original.:container", embyVideoStreamHandler(svc))
+	auth.GET("/videos/:id/master.m3u8", embyVideoHLSPlaylistHandler(svc))
+	auth.HEAD("/videos/:id/master.m3u8", embyVideoHLSPlaylistHandler(svc))
+	auth.GET("/videos/:id/main.m3u8", embyVideoHLSPlaylistHandler(svc))
+	auth.HEAD("/videos/:id/main.m3u8", embyVideoHLSPlaylistHandler(svc))
+	auth.GET("/videos/:id/:seg", embyVideoHLSSegmentHandler(svc))
 
 	auth.POST("/sessions/playing", embyPlayingProgressHandler(svc))
 	auth.POST("/sessions/playing/progress", embyPlayingProgressHandler(svc))

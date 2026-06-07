@@ -105,10 +105,19 @@ func LibraryVisibleForUser(ctx context.Context, repo *repository.Container, lib 
 	if visibility.IncludeNSFW {
 		return true
 	}
-	for _, id := range visibility.HiddenLibraryIDs {
+	hiddenLibraryIDs := visibility.HiddenLibraryIDs
+	configuredAdultLibraryIDs := AdultLibraryIDs(ctx, repo)
+	hasConfiguredAdultLibraries := len(hiddenLibraryIDs) > 0 || len(configuredAdultLibraryIDs) > 0
+	if len(hiddenLibraryIDs) == 0 {
+		hiddenLibraryIDs = configuredAdultLibraryIDs
+	}
+	for _, id := range hiddenLibraryIDs {
 		if id == lib.ID {
 			return false
 		}
+	}
+	if hasConfiguredAdultLibraries {
+		return true
 	}
 	if LibraryLooksAdult(lib) {
 		return false

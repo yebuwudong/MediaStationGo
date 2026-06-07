@@ -105,6 +105,78 @@ func TestAddDownloadWithMetaSkipsExistingTaskBeforeQBAdd(t *testing.T) {
 	}
 }
 
+func TestAddDownloadWithMetaSkipsExistingLocalMovieBeforeQBAdd(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Media{}, &model.DownloadTask{}, &model.Setting{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	if err := db.Create(&model.Media{
+		Title: "Inception",
+		Path:  "/media/movies/Inception (2010)/Inception (2010).mkv",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
+	task, err := svc.AddDownloadWithMeta(t.Context(), "u1", "magnet:?xt=urn:btih:cccccccccccccccccccccccccccccccccccccccc&dn=Inception+2010+1080p", "/downloads", DownloadTaskMeta{
+		Title: "Inception 2010 1080p WEB-DL",
+	})
+	if !errors.Is(err, ErrMediaAlreadyInLibrary) {
+		t.Fatalf("err = %v, want ErrMediaAlreadyInLibrary", err)
+	}
+	if task != nil {
+		t.Fatalf("task = %#v, want nil because local media already exists", task)
+	}
+	rows, err := repos.Download.List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("download rows = %d, want 0", len(rows))
+	}
+}
+
+func TestAddDownloadWithMetaSkipsExistingLocalEpisodeBeforeQBAdd(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Media{}, &model.DownloadTask{}, &model.Setting{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	if err := db.Create(&model.Media{
+		Title:      "Some Show",
+		Path:       "/media/tv/Some Show/Season 01/Some Show - S01E01.mkv",
+		SeasonNum:  1,
+		EpisodeNum: 1,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
+	task, err := svc.AddDownloadWithMeta(t.Context(), "u1", "magnet:?xt=urn:btih:dddddddddddddddddddddddddddddddddddddddd&dn=Some+Show+S01E01", "/downloads", DownloadTaskMeta{
+		Title: "Some Show S01E01 2160p WEB-DL",
+	})
+	if !errors.Is(err, ErrMediaAlreadyInLibrary) {
+		t.Fatalf("err = %v, want ErrMediaAlreadyInLibrary", err)
+	}
+	if task != nil {
+		t.Fatalf("task = %#v, want nil because local episode already exists", task)
+	}
+	rows, err := repos.Download.List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("download rows = %d, want 0", len(rows))
+	}
+}
+
 func TestReloadConfigDoesNotFallbackToLegacyAfterClientDeleted(t *testing.T) {
 	var addCalls int32
 	qb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

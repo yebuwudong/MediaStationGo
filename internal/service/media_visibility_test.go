@@ -89,6 +89,57 @@ func TestMediaVisibilityFiltersNSFWAndLibraries(t *testing.T) {
 	}
 }
 
+func TestConfiguredAdultLibrariesDoNotHideSafeLibraryWithNSFWItems(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.Library{}, &model.Media{}, &model.Setting{}, &model.PlayProfile{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+
+	safe := model.Library{Name: "电影", Path: "/media/movie", Type: "movie", Enabled: true}
+	adult := model.Library{Name: "9KG", Path: "/media/9KG", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &safe); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Library.Create(t.Context(), &adult); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Setting.Set(t.Context(), AdultLibraryIDsSettingKey, `["`+adult.ID+`"]`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&[]model.Media{
+		{LibraryID: safe.ID, Title: "普通电影", Path: "/media/movie/a.mkv"},
+		{LibraryID: safe.ID, Title: "误入普通库的成人条目", Path: "/media/movie/b.mkv", NSFW: true},
+		{LibraryID: adult.ID, Title: "成人影片", Path: "/media/9KG/c.mkv"},
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	viewer := &model.User{Username: "viewer", PasswordHash: "hash", Role: "user", HideAdult: true}
+	if err := repos.User.Create(t.Context(), viewer); err != nil {
+		t.Fatal(err)
+	}
+
+	visibility := UserDefaultMediaVisibility(t.Context(), repos, viewer.ID)
+	if LibraryVisibleForUser(t.Context(), repos, safe, visibility) != true {
+		t.Fatal("configured adult libraries should not hide a safe library just because it contains NSFW items")
+	}
+	if LibraryVisibleForUser(t.Context(), repos, adult, visibility) != false {
+		t.Fatal("configured adult library should be hidden when the user hides adult content")
+	}
+
+	items, err := NewMediaService(&config.Config{}, zap.NewNop(), repos).
+		SearchMediaVisible(t.Context(), "电影", 20, visibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sortedMediaTitles(items); !slices.Equal(got, []string{"普通电影"}) {
+		t.Fatalf("safe library should stay visible while NSFW media is filtered, got %#v", got)
+	}
+}
+
 func sortedMediaTitles(rows []model.Media) []string {
 	out := make([]string, 0, len(rows))
 	for _, row := range rows {

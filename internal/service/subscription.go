@@ -231,12 +231,13 @@ func (s *SubscriptionService) runOne(ctx context.Context, sub *model.Subscriptio
 			continue
 		}
 		if _, err := s.downloads.AddDownloadWithMeta(ctx, sub.UserID, download, savePath, DownloadTaskMeta{
-			Title:       firstNonEmpty(item.Title, sub.Name),
-			PosterURL:   sub.PosterURL,
-			BackdropURL: sub.BackdropURL,
-			Overview:    sub.Overview,
+			Title:                firstNonEmpty(item.Title, sub.Name),
+			PosterURL:            sub.PosterURL,
+			BackdropURL:          sub.BackdropURL,
+			Overview:             sub.Overview,
+			AllowExistingLibrary: sub.WashEnabled,
 		}); err != nil {
-			if errors.Is(err, ErrDownloadAlreadyExists) {
+			if IsDownloadDedupError(err) {
 				if washOff {
 					addAvailabilityTitle(item.Title, availQuery, &avail)
 				}
@@ -328,12 +329,13 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 			continue
 		}
 		if _, err := s.downloads.AddDownloadWithMeta(ctx, sub.UserID, realURL, savePath, DownloadTaskMeta{
-			Title:       firstNonEmpty(item.Title, sub.Name),
-			PosterURL:   sub.PosterURL,
-			BackdropURL: sub.BackdropURL,
-			Overview:    sub.Overview,
+			Title:                firstNonEmpty(item.Title, sub.Name),
+			PosterURL:            sub.PosterURL,
+			BackdropURL:          sub.BackdropURL,
+			Overview:             sub.Overview,
+			AllowExistingLibrary: sub.WashEnabled,
 		}); err != nil {
-			if errors.Is(err, ErrDownloadAlreadyExists) {
+			if IsDownloadDedupError(err) {
 				seen = append(seen, candidate.GUID)
 				seenSet[candidate.GUID] = struct{}{}
 				continue
