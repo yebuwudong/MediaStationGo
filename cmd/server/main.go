@@ -149,8 +149,17 @@ func buildRouter(cfg *config.Config, logger *zap.Logger, svc *service.Container)
 // serveSPA serves the React build artifacts and falls back to index.html for
 // non-API, non-asset paths so client-side routing keeps working.
 func serveSPA(r *gin.Engine, webDir string) {
-	r.Static("/assets", filepath.Join(webDir, "assets"))
-	r.StaticFile("/favicon.ico", filepath.Join(webDir, "favicon.ico"))
+	assets := r.Group("/assets")
+	assets.Use(func(c *gin.Context) {
+		c.Header("Cache-Control", "public, max-age=31536000, immutable")
+		c.Next()
+	})
+	assets.Static("/", filepath.Join(webDir, "assets"))
+	for _, icon := range []string{"/favicon.ico", "/favicon.svg"} {
+		iconPath := filepath.Join(webDir, strings.TrimPrefix(icon, "/"))
+		r.GET(icon, serveNoCacheFile(iconPath))
+		r.HEAD(icon, serveNoCacheFile(iconPath))
+	}
 	r.NoRoute(func(c *gin.Context) {
 		path := c.Request.URL.Path
 		// Do not swallow API / Emby compatibility routes; clients expect JSON
@@ -159,8 +168,34 @@ func serveSPA(r *gin.Engine, webDir string) {
 			c.Status(http.StatusNotFound)
 			return
 		}
-		c.File(filepath.Join(webDir, "index.html"))
+		serveSPAIndex(c, filepath.Join(webDir, "index.html"))
 	})
+}
+
+func serveNoCacheFile(filePath string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		setNoCacheHeaders(c)
+		if _, err := os.Stat(filePath); err != nil {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		c.File(filePath)
+	}
+}
+
+func serveSPAIndex(c *gin.Context, indexPath string) {
+	setNoCacheHeaders(c)
+	if _, err := os.Stat(indexPath); err != nil {
+		c.String(http.StatusNotFound, "MediaStationGo web UI not found: %s", indexPath)
+		return
+	}
+	c.File(indexPath)
+}
+
+func setNoCacheHeaders(c *gin.Context) {
+	c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
+	c.Header("Pragma", "no-cache")
+	c.Header("Expires", "0")
 }
 
 func shouldBypassSPAFallback(path string) bool {
