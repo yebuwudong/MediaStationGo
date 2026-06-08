@@ -99,7 +99,7 @@ func (o *OrganizerService) OrganizeDirectory(ctx context.Context, opts OrganizeO
 		if _, ok := videoExtensions[ext]; !ok {
 			return nil
 		}
-		if err := o.organizeSourceFile(ctx, path, dest, mode, res); err != nil {
+		if err := o.organizeSourceFile(ctx, path, source, dest, mode, res); err != nil {
 			res.Errors = append(res.Errors, fmt.Sprintf("%s: %s", filepath.Base(path), err.Error()))
 		}
 		return nil
@@ -118,9 +118,14 @@ func (o *OrganizerService) OrganizeDirectory(ctx context.Context, opts OrganizeO
 	return res, nil
 }
 
+type organizeDirectoryLayout struct {
+	MediaType string
+	Category  string
+}
+
 // organizeSourceFile organizes a single video file from the source directory
 // into destRoot, applying dedup + 洗版.
-func (o *OrganizerService) organizeSourceFile(ctx context.Context, src, destRoot string, mode TransferMode, res *OrganizeResult) error {
+func (o *OrganizerService) organizeSourceFile(ctx context.Context, src, sourceRoot, destRoot string, mode TransferMode, res *OrganizeResult) error {
 	ext := filepath.Ext(src)
 	title, year := CleanQuery(src)
 	if title == "" {
@@ -134,12 +139,18 @@ func (o *OrganizerService) organizeSourceFile(ctx context.Context, src, destRoot
 		title = "Unknown"
 	}
 	season, episode := ParseEpisode(src)
+	layout := o.inferOrganizeDirectoryLayout(src, sourceRoot)
+	layoutRoot := destRoot
+	if layout.Category != "" {
+		root := o.organizeRoot(destRoot, layout.MediaType, layout.Category)
+		layoutRoot = categoryRoot(root, sanitizeFilename(layout.Category))
+	}
 
 	var destDir, dst, episodeTag string
 	if season > 0 || episode > 0 {
 		// TV/动漫/综艺等剧集：{destRoot}/{Title}/Season XX/{Title} - SxxExx.ext
 		episodeTag = fmt.Sprintf("S%02dE%02d", season, episode)
-		destDir = filepath.Join(destRoot, title, fmt.Sprintf("Season %02d", season))
+		destDir = filepath.Join(layoutRoot, title, fmt.Sprintf("Season %02d", season))
 		dst = filepath.Join(destDir, fmt.Sprintf("%s - %s%s", title, episodeTag, ext))
 	} else {
 		// 电影：{destRoot}/{Title} ({Year})/{Title} ({Year}).ext
@@ -147,7 +158,7 @@ func (o *OrganizerService) organizeSourceFile(ctx context.Context, src, destRoot
 		if year > 0 {
 			folder = fmt.Sprintf("%s (%d)", title, year)
 		}
-		destDir = filepath.Join(destRoot, folder)
+		destDir = filepath.Join(layoutRoot, folder)
 		dst = filepath.Join(destDir, folder+ext)
 	}
 
@@ -206,6 +217,92 @@ func (o *OrganizerService) organizeSourceFile(ctx context.Context, src, destRoot
 	}
 	res.Organized++
 	return nil
+}
+
+func (o *OrganizerService) inferOrganizeDirectoryLayout(src, sourceRoot string) organizeDirectoryLayout {
+	for _, name := range organizeDirectoryCategoryCandidates(src, sourceRoot) {
+		if mediaType, category := o.mediaTypeForDirectoryCategory(name); mediaType != "" && category != "" {
+			return organizeDirectoryLayout{MediaType: mediaType, Category: category}
+		}
+	}
+	return organizeDirectoryLayout{}
+}
+
+func organizeDirectoryCategoryCandidates(src, sourceRoot string) []string {
+	var out []string
+	seen := map[string]struct{}{}
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" || value == "." || value == string(os.PathSeparator) {
+			return
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+
+	cleanSourceRoot := filepath.Clean(sourceRoot)
+	add(filepath.Base(cleanSourceRoot))
+	rel, err := filepath.Rel(cleanSourceRoot, filepath.Clean(src))
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return out
+	}
+	dir := filepath.Dir(rel)
+	if dir == "." {
+		return out
+	}
+	for _, part := range strings.Split(dir, string(os.PathSeparator)) {
+		add(part)
+	}
+	return out
+}
+
+func (o *OrganizerService) mediaTypeForDirectoryCategory(name string) (string, string) {
+	key := strings.ToLower(strings.TrimSpace(name))
+	if key == "" {
+		return "", ""
+	}
+	if hit, ok := o.directoryCategoryTypes()[key]; ok {
+		return hit.MediaType, hit.Category
+	}
+	return "", ""
+}
+
+func (o *OrganizerService) directoryCategoryTypes() map[string]organizeDirectoryLayout {
+	categories := o.categoryMap()
+	out := map[string]organizeDirectoryLayout{}
+	add := func(category, mediaType string) {
+		category = strings.TrimSpace(category)
+		if category == "" {
+			return
+		}
+		out[strings.ToLower(category)] = organizeDirectoryLayout{
+			MediaType: mediaType,
+			Category:  category,
+		}
+	}
+	addConfigured := func(key, fallback, mediaType string) {
+		add(fallback, mediaType)
+		add(categoryName(categories, key, fallback), mediaType)
+	}
+	addConfigured("animation_movie", "动画电影", "movie")
+	addConfigured("chinese_movie", "华语电影", "movie")
+	addConfigured("jk_movie", "日韩电影", "movie")
+	addConfigured("euus_movie", "欧美电影", "movie")
+	addConfigured("foreign_movie", "外语电影", "movie")
+	addConfigured("domestic_tv", "国产剧", "tv")
+	addConfigured("euus_tv", "欧美剧", "tv")
+	addConfigured("jk_tv", "日韩剧", "tv")
+	addConfigured("cn_anime", "国漫", "anime")
+	addConfigured("jp_anime", "日番", "anime")
+	addConfigured("variety", "综艺", "variety")
+	addConfigured("documentary", "纪录片", "tv")
+	addConfigured("children", "儿童", "tv")
+	addConfigured("uncategorized_tv", "未分类", "tv")
+	return out
 }
 
 // existingVersionPaths returns existing destination files that represent the

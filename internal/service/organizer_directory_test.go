@@ -209,3 +209,33 @@ func TestOrganizeDirectoryTVEpisodeDedup(t *testing.T) {
 		t.Fatalf("expected E02 organized at %q: %v", e02, err)
 	}
 }
+
+func TestOrganizeDirectoryUsesDownloadCategoryLayout(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "downloads")
+	dest := filepath.Join(root, "media")
+	writeOrgFile(t, filepath.Join(src, "国产剧", "狂飙.S01E01.2023.1080p.WEB-DL.mkv"), "kuangbiao-e01")
+	writeOrgFile(t, filepath.Join(src, "华语电影", "流浪地球2.2023.2160p.WEB-DL.H265.mkv"), "wandering-earth-2")
+
+	org := NewOrganizerService(&config.Config{}, zap.NewNop(), newOrganizerTestRepo(t))
+	res, err := org.OrganizeDirectory(t.Context(), OrganizeOptions{
+		SourcePath:   src,
+		DestPath:     dest,
+		TransferMode: TransferCopy,
+	})
+	if err != nil {
+		t.Fatalf("organize directory: %v", err)
+	}
+	if res.Organized != 2 || res.Replaced != 0 || res.Skipped != 0 {
+		t.Fatalf("expected organized=2 replaced=0 skipped=0, got %+v", res)
+	}
+
+	tv := filepath.Join(dest, "电视剧", "国产剧", "狂飙", "Season 01", "狂飙 - S01E01.mkv")
+	if _, err := os.Stat(tv); err != nil {
+		t.Fatalf("expected TV episode organized at %q: %v", tv, err)
+	}
+	movie := filepath.Join(dest, "电影", "华语电影", "流浪地球2 (2023)", "流浪地球2 (2023).mkv")
+	if _, err := os.Stat(movie); err != nil {
+		t.Fatalf("expected movie organized at %q: %v", movie, err)
+	}
+}
