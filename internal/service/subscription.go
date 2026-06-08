@@ -61,16 +61,18 @@ func (s *SubscriptionService) Stop() { close(s.stop) }
 type rssFeed struct {
 	XMLName xml.Name `xml:"rss"`
 	Channel struct {
-		Items []struct {
-			Title       string `xml:"title"`
-			Link        string `xml:"link"`
-			GUID        string `xml:"guid"`
-			Description string `xml:"description"`
-			Enclosure   struct {
-				URL string `xml:"url,attr"`
-			} `xml:"enclosure"`
-		} `xml:"item"`
+		Items []rssItem `xml:"item"`
 	} `xml:"channel"`
+}
+
+type rssItem struct {
+	Title       string `xml:"title"`
+	Link        string `xml:"link"`
+	GUID        string `xml:"guid"`
+	Description string `xml:"description"`
+	Enclosure   struct {
+		URL string `xml:"url,attr"`
+	} `xml:"enclosure"`
 }
 
 // Create persists a new subscription.
@@ -186,42 +188,21 @@ func (s *SubscriptionService) runOne(ctx context.Context, sub *model.Subscriptio
 		seenSet[g] = struct{}{}
 	}
 
-	// 非洗版订阅：成功下载一次即满足，预先算一次媒体库与下载中任务的
-	// 可用性，用于跳过已入库/已在下载队列中的电影或剧集（对齐 MoviePilot）。
 	washOff := !sub.WashEnabled
-	var avail LocalAvailability
-	availQuery := ""
-	if washOff {
-		availQuery = availabilityQuery(subscriptionName(sub), subscriptionFilter(sub))
-		avail = mergeLocalAvailability(
-			SubscriptionLocalAvailability(ctx, s.repo, sub),
-			s.pendingDownloadAvailability(ctx, sub),
-		)
-	}
+	availQuery := availabilityQuery(subscriptionName(sub), subscriptionFilter(sub))
+	// RSS 和站点搜索统一使用候选规划：先按订阅规则过滤，再按洗版优先级/集数去重择优。
+	// 非洗版订阅成功下载一次即满足，媒体库与下载中任务会作为可用性输入避免重复下载。
+	avail := mergeLocalAvailability(
+		SubscriptionLocalAvailability(ctx, s.repo, sub),
+		s.pendingDownloadAvailability(ctx, sub),
+	)
+	candidates := selectRSSSubscriptionCandidates(feed.Channel.Items, sub, filter, seenSet, avail)
 
 	queued := 0
-	for _, item := range feed.Channel.Items {
-		guid := stableRSSItemGUID(item.Title, item.GUID, item.Link, item.Enclosure.URL)
-		if _, ok := seenSet[guid]; ok {
-			continue
-		}
-		if filter != nil && !filter.MatchString(item.Title) {
-			continue
-		}
-		// 应用订阅高级规则（排除词/分辨率/质量/特效/发布组）—— 此前 RSS 路径完全跳过，导致排除不生效。
-		if !matchesSubscriptionRules(sub, item.Title) {
-			continue
-		}
-		if washOff && subscriptionItemAlreadyAvailable(sub, avail, item.Title) {
-			continue
-		}
-		download := item.Enclosure.URL
-		if download == "" {
-			download = item.Link
-		}
-		if download == "" {
-			continue
-		}
+	for _, candidate := range candidates {
+		item := candidate.Item
+		guid := candidate.GUID
+		download := candidate.Download
 		mediaType, mediaCategory := s.classifySubscriptionItem(ctx, sub, item.Title, "")
 		savePath := s.resolveSubscriptionSavePath(ctx, sub, mediaType, mediaCategory)
 		if s.downloadPathHasCandidate(ctx, sub, item.Title, savePath) {

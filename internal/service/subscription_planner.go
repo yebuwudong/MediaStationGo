@@ -78,6 +78,52 @@ func selectSiteSearchCandidatesWithAvailability(results []SearchResult, sub *mod
 			Score:    score,
 		})
 	}
+	return selectPreparedSubscriptionCandidates(candidates, sub, local)
+}
+
+func selectRSSSubscriptionCandidates(items []rssItem, sub *model.Subscription, filter *regexp.Regexp, seenSet map[string]struct{}, local LocalAvailability) []siteSearchCandidate {
+	if seenSet == nil {
+		seenSet = map[string]struct{}{}
+	}
+	candidates := make([]siteSearchCandidate, 0, len(items))
+	for _, item := range items {
+		title := strings.TrimSpace(item.Title)
+		if title == "" {
+			continue
+		}
+		if filter != nil && !filter.MatchString(title) {
+			continue
+		}
+		if !matchesSubscriptionRules(sub, title) {
+			continue
+		}
+		download := strings.TrimSpace(item.Enclosure.URL)
+		if download == "" {
+			download = strings.TrimSpace(item.Link)
+		}
+		if download == "" {
+			continue
+		}
+		guid := stableRSSItemGUID(title, item.GUID, item.Link, item.Enclosure.URL)
+		if _, ok := seenSet[guid]; ok {
+			continue
+		}
+		searchItem := SearchResult{Title: title, DownloadURL: download}
+		season, episode := ParseEpisode(title)
+		candidates = append(candidates, siteSearchCandidate{
+			Item:     searchItem,
+			Download: download,
+			GUID:     guid,
+			Season:   season,
+			Episode:  episode,
+			Pack:     isSeriesPackTitle(title),
+			Score:    subscriptionCandidateScore(sub, searchItem),
+		})
+	}
+	return selectPreparedSubscriptionCandidates(candidates, sub, local)
+}
+
+func selectPreparedSubscriptionCandidates(candidates []siteSearchCandidate, sub *model.Subscription, local LocalAvailability) []siteSearchCandidate {
 	if len(candidates) > 1 {
 		sort.SliceStable(candidates, func(i, j int) bool {
 			if candidates[i].Score != candidates[j].Score {

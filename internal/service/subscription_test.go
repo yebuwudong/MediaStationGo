@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -590,6 +591,98 @@ func TestSubscriptionRunOneSkipsSameEpisodeAddedEarlierInFeed(t *testing.T) {
 	}
 	if len(rows) != 1 {
 		t.Fatalf("download rows = %d, want 1", len(rows))
+	}
+}
+
+func TestSubscriptionRunOneRSSWashQueuesOnlyBestMovieVariant(t *testing.T) {
+	rss := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		_, _ = w.Write([]byte(`<?xml version="1.0"?>
+<rss><channel>
+  <item>
+    <title>Dune 2021 1080p WEB-DL</title>
+    <guid>dune-1080-web</guid>
+    <link>magnet:?xt=urn:btih:dddddddddddddddddddddddddddddddddddddddd&amp;dn=Dune+2021+1080p+WEB-DL</link>
+  </item>
+  <item>
+    <title>Dune 2021 2160p UHD BluRay REMUX HDR</title>
+    <guid>dune-2160-remux</guid>
+    <link>magnet:?xt=urn:btih:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee&amp;dn=Dune+2021+2160p+REMUX</link>
+  </item>
+  <item>
+    <title>Dune 2021 720p HDTV</title>
+    <guid>dune-720-hdtv</guid>
+    <link>magnet:?xt=urn:btih:ffffffffffffffffffffffffffffffffffffffff&amp;dn=Dune+2021+720p+HDTV</link>
+  </item>
+</channel></rss>`))
+	}))
+	defer rss.Close()
+
+	var addCalls int32
+	var addedTitles []string
+	addedHashes := make([]string, 0, 3)
+	qb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			_, _ = w.Write([]byte("Ok."))
+		case "/api/v2/torrents/info":
+			if len(addedHashes) == 0 {
+				_, _ = w.Write([]byte(`[]`))
+				return
+			}
+			var items []string
+			for _, hash := range addedHashes {
+				items = append(items, `{"hash":"`+hash+`","name":"Dune 2021","state":"downloading","progress":0.1}`)
+			}
+			_, _ = w.Write([]byte(`[` + strings.Join(items, ",") + `]`))
+		case "/api/v2/torrents/add":
+			call := atomic.AddInt32(&addCalls, 1)
+			_ = r.ParseMultipartForm(10 << 20)
+			addedTitles = append(addedTitles, r.FormValue("urls"))
+			addedHashes = append(addedHashes, strings.Repeat(fmt.Sprintf("%x", call), 40))
+			_, _ = w.Write([]byte("Ok."))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer qb.Close()
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Subscription{}, &model.Setting{}, &model.DownloadTask{}, &model.Media{}, &model.DownloadClient{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	configureTestDefaultQB(t, repos, qb.URL)
+	downloads := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
+	svc := NewSubscriptionService(nil, zap.NewNop(), repos, downloads, nil, NewHub(zap.NewNop()))
+
+	sub := &model.Subscription{
+		Name:         "Dune 自动订阅",
+		FeedURL:      rss.URL,
+		Filter:       "Dune 2021",
+		MediaType:    "movie",
+		WashEnabled:  true,
+		WashPriority: "resolution",
+		SavePath:     "/downloads/movies",
+	}
+	if err := repos.Subscription.Create(t.Context(), sub); err != nil {
+		t.Fatal(err)
+	}
+	queued, err := svc.runOne(t.Context(), sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued != 1 {
+		t.Fatalf("queued = %d, want 1 best movie variant", queued)
+	}
+	if got := atomic.LoadInt32(&addCalls); got != 1 {
+		t.Fatalf("qb add calls = %d, want 1", got)
+	}
+	if len(addedTitles) != 1 || !strings.Contains(addedTitles[0], "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") {
+		t.Fatalf("added %#v, want 2160p REMUX variant only", addedTitles)
 	}
 }
 
