@@ -1,8 +1,17 @@
 # MediaStationGo 极简 Docker Compose 部署文件
 #
-# 新手只需要改 .env 里的两个路径：
-#   MEDIASTATION_MEDIA_DIR=/你的媒体目录
-#   MEDIASTATION_DOWNLOAD_DIR=/你的下载目录
+# 新手推荐：直接在本文件里填写 NAS/服务器真实路径，不必先创建 .env。
+# 需要改两组位置：
+#   1. volumes 里媒体库和下载目录左侧的宿主机路径。
+#   2. environment 里 MEDIASTATION_MEDIA_DIR / MEDIASTATION_DOWNLOAD_DIR 的同名真实路径。
+#
+# 示例：
+#   - /vol1/1000/Docker/moviepilot-v2/media:/media:ro
+#   - /vol1/1000/qBittorrent/downloads:/downloads
+#   MEDIASTATION_MEDIA_DIR: /vol1/1000/Docker/moviepilot-v2/media
+#   MEDIASTATION_DOWNLOAD_DIR: /vol1/1000/qBittorrent/downloads
+#
+# .env 是可选高级写法，适合多环境复用；README 后半部分有说明。
 #
 # 启动：docker compose up -d
 # 访问：http://<服务器IP>:18080
@@ -28,6 +37,7 @@ services:
       - ${MEDIASTATION_CACHE_DIR:-./cache}:/cache
 
       # 媒体库与下载目录：左边是宿主机/NAS真实路径，右边是容器内路径。
+      # 新手部署时推荐直接把左边改成真实绝对路径，不要写 ./vol1/...。
       # Web 页面里添加媒体库请填写 /media/电影、/media/电视剧 等容器路径。
       - ${MEDIASTATION_MEDIA_DIR:-./media}:/media:ro
       - ${MEDIASTATION_DOWNLOAD_DIR:-./downloads}:/downloads
@@ -44,7 +54,8 @@ services:
       MEDIASTATION_DATABASE_DB_PATH: /data/mediastation.db
       MEDIASTATION_CACHE_CACHE_DIR: /cache
 
-      # 路径提示：用于把宿主机路径自动换算成容器路径，避免误填 NAS 原始路径时报不可访问。
+      # 路径提示：这里要和 volumes 左侧真实路径保持一致。
+      # 用于把宿主机路径自动换算成容器路径，避免误填 NAS 原始路径时报不可访问。
       MEDIASTATION_MEDIA_DIR: ${MEDIASTATION_MEDIA_DIR:-./media}
       MEDIASTATION_MEDIA_CONTAINER_DIR: /media
       MEDIASTATION_DOWNLOAD_DIR: ${MEDIASTATION_DOWNLOAD_DIR:-./downloads}

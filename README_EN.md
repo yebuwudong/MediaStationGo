@@ -189,7 +189,7 @@ The current base license is `GPL-3.0`, and contributions are welcome under that 
 
 ### Docker Compose (Recommended)
 
-The default deployment is now **beginner-friendly**: download `docker-compose.yml`, create one `.env`, and edit only two paths.
+The recommended beginner path is now **editing real paths directly in `docker-compose.yml`**. This is easier for new NAS, VPS, and Docker users because the host paths are visible in one file.
 
 #### 1. Create a deployment directory
 
@@ -207,25 +207,40 @@ curl -fsSL https://raw.githubusercontent.com/ShukeBta/MediaStationGo/main/docker
 
 If GitHub Raw is slow, create `docker-compose.yml` manually and paste the template from the repository root.
 
-#### 3. Create `.env`
+#### 3. Edit real host paths
 
-Only change these two directories:
+Open the compose file:
 
 ```bash
-cat > .env <<'EOF'
-MEDIASTATION_MEDIA_DIR=/your-nas/media
-MEDIASTATION_DOWNLOAD_DIR=/your-nas/downloads
-MEDIASTATION_HTTP_PORT=18080
-TZ=Asia/Shanghai
-PUID=1000
-PGID=1000
-EOF
+vi docker-compose.yml
 ```
 
-| Variable | Meaning |
+Find the media and download volume lines, then replace the left side with your real NAS/server paths:
+
+```yaml
+    volumes:
+      - ./data:/data
+      - ./cache:/cache
+      - /vol1/1000/Docker/moviepilot-v2/media:/media:ro
+      - /vol1/1000/qBittorrent/downloads:/downloads
+```
+
+Then find the path mapping variables under `environment` and write the same real paths there:
+
+```yaml
+    environment:
+      MEDIASTATION_MEDIA_DIR: /vol1/1000/Docker/moviepilot-v2/media
+      MEDIASTATION_MEDIA_CONTAINER_DIR: /media
+      MEDIASTATION_DOWNLOAD_DIR: /vol1/1000/qBittorrent/downloads
+      MEDIASTATION_DOWNLOAD_CONTAINER_DIR: /downloads
+```
+
+| Location | Meaning |
 | --- | --- |
-| `MEDIASTATION_MEDIA_DIR` | Real host/NAS media directory, e.g. `/volume1/media`, `/mnt/media` |
-| `MEDIASTATION_DOWNLOAD_DIR` | Real host/NAS download directory, e.g. `/volume1/downloads`, `/mnt/downloads` |
+| Media volume left side | Real host/NAS media directory, e.g. `/volume1/media`, `/mnt/media`, `/vol1/1000/Docker/moviepilot-v2/media` |
+| Download volume left side | Real host/NAS download directory, e.g. `/volume1/downloads`, `/mnt/downloads`, `/vol1/1000/qBittorrent/downloads` |
+| `MEDIASTATION_MEDIA_DIR` | Must match the media volume left side |
+| `MEDIASTATION_DOWNLOAD_DIR` | Must match the download volume left side |
 
 > Do not write NAS absolute paths as `./vol1/...`. A leading `./` means a directory under the current compose project.
 
@@ -280,15 +295,43 @@ chmod +x docker-compose-update.sh
 
 #### Advanced options
 
-The default compose intentionally stays small. For host-path direct mode, Telegram proxy variables, hardware acceleration, and additional transcoding options, see:
+The default compose intentionally stays small. If you need the container to expose the same raw host paths, Telegram proxy variables, hardware acceleration, or additional transcoding options, see:
 
 ```text
 docker-compose.advanced.yml
 ```
 
+### Optional: Use `.env` for Paths
+
+If you already know Docker Compose well, or if you reuse the same compose file across multiple machines, you can put paths in `.env`. This is optional, not the beginner path:
+
+```bash
+cat > .env <<'EOF'
+MEDIASTATION_MEDIA_DIR=/vol1/1000/Docker/moviepilot-v2/media
+MEDIASTATION_DOWNLOAD_DIR=/vol1/1000/qBittorrent/downloads
+MEDIASTATION_HTTP_PORT=18080
+TZ=Asia/Shanghai
+PUID=1000
+PGID=1000
+EOF
+```
+
+When using `.env`, keep the default variable-style volume lines in `docker-compose.yml`:
+
+```yaml
+- ${MEDIASTATION_MEDIA_DIR:-./media}:/media:ro
+- ${MEDIASTATION_DOWNLOAD_DIR:-./downloads}:/downloads
+```
+
 ### Fixed Version Deployment
 
-For production, pin a release tag in `.env`:
+For production, pin a release tag so `latest` does not change unexpectedly. Without `.env`, edit the image line directly:
+
+```yaml
+image: ghcr.io/shukebta/mediastation-go:MediaStationGo-v0.0.32
+```
+
+If you use `.env`, you can also set:
 
 ```env
 MEDIASTATION_IMAGE_TAG=MediaStationGo-v0.0.32
@@ -323,7 +366,7 @@ With smart classification enabled, downloads are saved to folders such as `/down
 
 ## 🐳 Docker Compose Configuration
 
-The default repository `docker-compose.yml` is intentionally simple. Most users only need these variables:
+The default repository `docker-compose.yml` is intentionally simple. Beginners should write real host paths directly on the left side of `volumes`, then keep `MEDIASTATION_MEDIA_DIR` and `MEDIASTATION_DOWNLOAD_DIR` aligned with those same paths. `.env` variables are optional for advanced reuse:
 
 | Variable | Default | Description |
 | --- | --- | --- |
