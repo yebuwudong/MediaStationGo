@@ -113,10 +113,11 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 	playProfiles := NewPlayProfileService(log, repos)
 	permissions := NewPermissionService(log, repos)
 	storageCfg := NewStorageConfigService(log, repos, crypto)
+	scanner.SetStorageConfig(storageCfg)
 	downloadClients := NewDownloadClientService(log, repos)
 	assistant := NewAssistantService(log, repos, ai)
 	douban := NewDoubanProvider(cfg, log)
-	scheduler := NewSchedulerService(log, repos, scanner, transcoder, organizer, hub, cfg.Cache.CacheDir)
+	scheduler := NewSchedulerService(log, repos, scanner, transcoder, organizer, storageCfg, hub, cfg.Cache.CacheDir)
 
 	// 初始化认证相关服务
 	tokenSvc := NewTokenService(cfg, log, repos)

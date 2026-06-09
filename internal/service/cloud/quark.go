@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -85,38 +86,54 @@ func (q *quarkProvider) List(ctx context.Context, dirID string) ([]FileEntry, er
 	if dirID == "" {
 		dirID = "0"
 	}
-	path := fmt.Sprintf("/file/sort?pr=ucpro&fr=pc&uc_param_str=&pdir_fid=%s&_page=1&_size=100&_fetch_total=1&_sort=file_type:asc,updated_at:desc", dirID)
-	resp, err := q.do(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	var r quarkResp
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return nil, fmt.Errorf("quark: decode list: %w", err)
-	}
-	if r.Code != 0 && r.Status != 200 {
-		return nil, fmt.Errorf("quark: list failed: %s", r.Message)
-	}
-	var data struct {
-		List []struct {
-			Fid      string `json:"fid"`
-			FileName string `json:"file_name"`
-			Dir      bool   `json:"dir"`
-			Size     int64  `json:"size"`
-		} `json:"list"`
-	}
-	if err := json.Unmarshal(r.Data, &data); err != nil {
-		return nil, fmt.Errorf("quark: decode list data: %w", err)
-	}
-	out := make([]FileEntry, 0, len(data.List))
-	for _, it := range data.List {
-		out = append(out, FileEntry{
-			ID:    it.Fid,
-			Name:  it.FileName,
-			IsDir: it.Dir,
-			Size:  it.Size,
-		})
+	const pageSize = 100
+	out := make([]FileEntry, 0, pageSize)
+	for page := 1; ; page++ {
+		query := url.Values{}
+		query.Set("pr", "ucpro")
+		query.Set("fr", "pc")
+		query.Set("uc_param_str", "")
+		query.Set("pdir_fid", dirID)
+		query.Set("_page", fmt.Sprint(page))
+		query.Set("_size", fmt.Sprint(pageSize))
+		query.Set("_fetch_total", "1")
+		query.Set("_sort", "file_type:asc,updated_at:desc")
+		path := "/file/sort?" + query.Encode()
+		resp, err := q.do(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return nil, err
+		}
+		var r quarkResp
+		err = json.NewDecoder(resp.Body).Decode(&r)
+		_ = resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("quark: decode list: %w", err)
+		}
+		if r.Code != 0 && r.Status != 200 {
+			return nil, fmt.Errorf("quark: list failed: %s", r.Message)
+		}
+		var data struct {
+			List []struct {
+				Fid      string `json:"fid"`
+				FileName string `json:"file_name"`
+				Dir      bool   `json:"dir"`
+				Size     int64  `json:"size"`
+			} `json:"list"`
+		}
+		if err := json.Unmarshal(r.Data, &data); err != nil {
+			return nil, fmt.Errorf("quark: decode list data: %w", err)
+		}
+		for _, it := range data.List {
+			out = append(out, FileEntry{
+				ID:    it.Fid,
+				Name:  it.FileName,
+				IsDir: it.Dir,
+				Size:  it.Size,
+			})
+		}
+		if len(data.List) < pageSize {
+			break
+		}
 	}
 	return out, nil
 }

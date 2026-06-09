@@ -73,3 +73,24 @@ func testStorageConfigHandler(svc *service.Container) gin.HandlerFunc {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	}
 }
+
+func storageUploadLocalHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req service.CloudUploadInput
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		req.Type = c.Param("type")
+		res, err := svc.StorageCfg.UploadLocal(c.Request.Context(), req)
+		if err != nil && res == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"result": res, "error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"result": res})
+	}
+}

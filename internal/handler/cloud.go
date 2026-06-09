@@ -5,9 +5,12 @@ package handler
 import (
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 	"github.com/ShukeBta/MediaStationGo/internal/service/cloud"
 )
@@ -46,6 +49,84 @@ func cloudImportHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		c.JSON(http.StatusOK, m)
 	}
+}
+
+// cloudMountHandler creates or reuses a cloud:// media library for a cloud
+// directory, then scans it recursively so cloud files become playable STRM/302
+// media rows without copying bytes to local disk.
+func cloudMountHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		typ := c.Param("type")
+		var in struct {
+			Dir       string `json:"dir"`
+			Name      string `json:"name"`
+			MediaType string `json:"media_type"`
+		}
+		_ = c.ShouldBindJSON(&in)
+		if !cloud.IsCloudType(typ) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported cloud provider"})
+			return
+		}
+		if _, err := svc.StorageCfg.CloudProvider(c.Request.Context(), typ); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		path := "cloud://" + typ
+		if dir := strings.TrimSpace(in.Dir); dir != "" {
+			path += "/" + url.PathEscape(dir)
+		}
+		name := strings.TrimSpace(in.Name)
+		if name == "" {
+			name = cloudMountLibraryName(typ, strings.TrimSpace(in.Dir))
+		}
+		mediaType := strings.TrimSpace(in.MediaType)
+		if mediaType == "" {
+			mediaType = "movie"
+		}
+		libs, err := svc.Repo.Library.List(c.Request.Context())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		var lib *model.Library
+		for i := range libs {
+			if libs[i].Path == path {
+				lib = &libs[i]
+				break
+			}
+		}
+		if lib == nil {
+			lib = &model.Library{Name: name, Path: path, Type: mediaType, Enabled: true}
+			if err := svc.Repo.Library.Create(c.Request.Context(), lib); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		}
+		var scan any
+		if svc.Scan != nil {
+			res, err := svc.Scan.ScanLibrary(c.Request.Context(), lib.ID)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "library": lib})
+				return
+			}
+			scan = res
+		}
+		c.JSON(http.StatusOK, gin.H{"library": lib, "scan": scan})
+	}
+}
+
+func cloudMountLibraryName(typ, dir string) string {
+	base := typ
+	switch typ {
+	case cloud.TypeQuark:
+		base = "夸克网盘"
+	case cloud.Type115:
+		base = "115 网盘"
+	}
+	if dir == "" || dir == "0" {
+		return base
+	}
+	return base + " · " + dir
 }
 
 // cloud115QRStartHandler begins a 115 QR-code login and returns the session +
@@ -102,7 +183,11 @@ func cloudPlayHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		// Proxy mode: the direct link needs auth headers the browser cannot
 		// carry. Stream through with Range forwarding.
-		req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, link.URL, nil)
+		method := c.Request.Method
+		if method == "" {
+			method = http.MethodGet
+		}
+		req, err := http.NewRequestWithContext(c.Request.Context(), method, link.URL, nil)
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 			return
@@ -125,6 +210,8 @@ func cloudPlayHandler(svc *service.Container) gin.HandlerFunc {
 			}
 		}
 		c.Status(resp.StatusCode)
-		_, _ = io.Copy(c.Writer, resp.Body)
+		if c.Request.Method != http.MethodHead {
+			_, _ = io.Copy(c.Writer, resp.Body)
+		}
 	}
 }

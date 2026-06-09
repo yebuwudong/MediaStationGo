@@ -100,6 +100,44 @@ func TestOrganizeDirectoryUsesConfiguredSourceWhenRequestSourceEmpty(t *testing.
 	}
 }
 
+func TestOrganizeDirectoryMapsConfiguredHostPathsToContainerPaths(t *testing.T) {
+	root := t.TempDir()
+	hostDownloads := filepath.Join(root, "nas-host", "downloads")
+	hostMedia := filepath.Join(root, "nas-host", "media")
+	containerDownloads := filepath.Join(root, "container", "downloads")
+	containerMedia := filepath.Join(root, "container", "media")
+	containerSource := filepath.Join(containerDownloads, "国产剧")
+	writeOrgFile(t, filepath.Join(containerSource, "Some Show S01E01 2024 1080p.mkv"), "show-e01")
+
+	t.Setenv("MEDIASTATION_DOWNLOAD_DIR", hostDownloads)
+	t.Setenv("MEDIASTATION_DOWNLOAD_CONTAINER_DIR", containerDownloads)
+	t.Setenv("MEDIASTATION_MEDIA_DIR", hostMedia)
+	t.Setenv("MEDIASTATION_MEDIA_CONTAINER_DIR", containerMedia)
+
+	repos := newOrganizerTestRepo(t)
+	for key, value := range map[string]string{
+		"organize.source_dir":    filepath.Join(hostDownloads, "国产剧"),
+		"organize.target_dir":    hostMedia,
+		"organize.transfer_mode": "copy",
+	} {
+		if err := repos.Setting.Set(t.Context(), key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	org := NewOrganizerService(&config.Config{}, zap.NewNop(), repos)
+	res, err := org.OrganizeDirectory(t.Context(), OrganizeOptions{})
+	if err != nil {
+		t.Fatalf("organize mapped host paths: %v", err)
+	}
+	if res.SourcePath != filepath.Clean(containerSource) || res.DestPath != filepath.Clean(containerMedia) {
+		t.Fatalf("result paths = source %q dest %q, want %q -> %q", res.SourcePath, res.DestPath, containerSource, containerMedia)
+	}
+	want := filepath.Join(containerMedia, "电视剧", "国产剧", "Some Show", "Season 01", "Some Show - S01E01.mkv")
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("expected organized file at %q: %v", want, err)
+	}
+}
+
 func TestOrganizeDirectoryAcceptsSingleVideoFileSource(t *testing.T) {
 	root := t.TempDir()
 	src := filepath.Join(root, "downloads", "Dune 2021 2160p WEB-DL.mkv")

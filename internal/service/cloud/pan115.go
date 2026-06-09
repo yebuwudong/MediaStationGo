@@ -91,52 +91,59 @@ func (p *pan115Provider) List(ctx context.Context, dirID string) ([]FileEntry, e
 	if dirID == "" {
 		dirID = "0"
 	}
-	q := url.Values{}
-	q.Set("aid", "1")
-	q.Set("cid", dirID)
-	q.Set("o", "user_ptime")
-	q.Set("asc", "0")
-	q.Set("offset", "0")
-	q.Set("show_dir", "1")
-	q.Set("limit", "100")
-	q.Set("format", "json")
-	resp, err := p.get(ctx, p.webBase+"/files?"+q.Encode())
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	var r struct {
-		State bool   `json:"state"`
-		Error string `json:"error"`
-		Data  []struct {
-			Fid string      `json:"fid"` // file id (files only)
-			Cid string      `json:"cid"` // category id (dirs use this)
-			N   string      `json:"n"`   // name
-			S   json.Number `json:"s"`   // size
-			Pc  string      `json:"pc"`  // pickcode
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return nil, fmt.Errorf("115: decode list: %w", err)
-	}
-	if !r.State {
-		return nil, fmt.Errorf("115: list failed: %s", r.Error)
-	}
-	out := make([]FileEntry, 0, len(r.Data))
-	for _, it := range r.Data {
-		isDir := it.Fid == ""
-		id := it.Fid
-		if isDir {
-			id = it.Cid
+	const pageSize = 100
+	out := make([]FileEntry, 0, pageSize)
+	for offset := 0; ; offset += pageSize {
+		q := url.Values{}
+		q.Set("aid", "1")
+		q.Set("cid", dirID)
+		q.Set("o", "user_ptime")
+		q.Set("asc", "0")
+		q.Set("offset", strconv.Itoa(offset))
+		q.Set("show_dir", "1")
+		q.Set("limit", strconv.Itoa(pageSize))
+		q.Set("format", "json")
+		resp, err := p.get(ctx, p.webBase+"/files?"+q.Encode())
+		if err != nil {
+			return nil, err
 		}
-		size, _ := it.S.Int64()
-		out = append(out, FileEntry{
-			ID:       id,
-			Name:     it.N,
-			IsDir:    isDir,
-			Size:     size,
-			PickCode: it.Pc,
-		})
+		var r struct {
+			State bool   `json:"state"`
+			Error string `json:"error"`
+			Data  []struct {
+				Fid string      `json:"fid"` // file id (files only)
+				Cid string      `json:"cid"` // category id (dirs use this)
+				N   string      `json:"n"`   // name
+				S   json.Number `json:"s"`   // size
+				Pc  string      `json:"pc"`  // pickcode
+			} `json:"data"`
+		}
+		err = json.NewDecoder(resp.Body).Decode(&r)
+		_ = resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("115: decode list: %w", err)
+		}
+		if !r.State {
+			return nil, fmt.Errorf("115: list failed: %s", r.Error)
+		}
+		for _, it := range r.Data {
+			isDir := it.Fid == ""
+			id := it.Fid
+			if isDir {
+				id = it.Cid
+			}
+			size, _ := it.S.Int64()
+			out = append(out, FileEntry{
+				ID:       id,
+				Name:     it.N,
+				IsDir:    isDir,
+				Size:     size,
+				PickCode: it.Pc,
+			})
+		}
+		if len(r.Data) < pageSize {
+			break
+		}
 	}
 	return out, nil
 }

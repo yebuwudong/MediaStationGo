@@ -12,6 +12,8 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,6 +51,7 @@ type ScannerService struct {
 	hub     *Hub
 	probe   *FFprobeService
 	scraper *ScraperService
+	storage *StorageConfigService
 }
 
 // NewScannerService is the constructor.
@@ -64,6 +67,13 @@ func NewScannerService(
 		cfg: cfg, log: log, repo: repo, hub: hub,
 		probe: probe, scraper: scraper,
 	}
+}
+
+// SetStorageConfig wires cloud-disk storage access into the scanner. It is set
+// after service construction because StorageConfigService depends on Crypto,
+// while the scanner is needed earlier by watcher/download services.
+func (s *ScannerService) SetStorageConfig(storage *StorageConfigService) {
+	s.storage = storage
 }
 
 // ScanResult summarises a scan run.
@@ -87,6 +97,9 @@ func (s *ScannerService) scanLibrary(ctx context.Context, libraryID string, auto
 	lib, err := s.repo.Library.FindByID(ctx, libraryID)
 	if err != nil || lib == nil {
 		return nil, err
+	}
+	if typ, dirID, ok := parseCloudLibraryPath(lib.Path); ok {
+		return s.scanCloudLibrary(ctx, lib, typ, dirID, autoScrape)
 	}
 	res := &ScanResult{LibraryID: lib.ID}
 	seen := make(map[string]struct{})
@@ -159,6 +172,124 @@ func (s *ScannerService) IngestPath(ctx context.Context, libraryID, path string)
 	res := &ScanResult{LibraryID: lib.ID}
 	s.ingestFile(ctx, lib, path, fi.Size(), make(map[string]string), res)
 	return res.Added+res.Updated > 0, nil
+}
+
+func (s *ScannerService) scanCloudLibrary(ctx context.Context, lib *model.Library, typ, rootDir string, autoScrape bool) (*ScanResult, error) {
+	res := &ScanResult{LibraryID: lib.ID}
+	if s.storage == nil {
+		return res, fmt.Errorf("cloud storage service unavailable")
+	}
+	seen := make(map[string]struct{})
+	visitedDirs := map[string]struct{}{}
+	var walkCloud func(string) error
+	walkCloud = func(dirID string) error {
+		if _, ok := visitedDirs[dirID]; ok {
+			return nil
+		}
+		visitedDirs[dirID] = struct{}{}
+		entries, err := s.storage.CloudList(ctx, typ, dirID)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			if entry.IsDir {
+				if strings.TrimSpace(entry.ID) != "" {
+					if err := walkCloud(entry.ID); err != nil {
+						return err
+					}
+				}
+				continue
+			}
+			ext := strings.ToLower(filepath.Ext(entry.Name))
+			if _, ok := videoExtensions[ext]; !ok {
+				continue
+			}
+			ref := cloudEntryRef(typ, entry.ID, entry.PickCode)
+			if ref == "" {
+				res.Skipped++
+				continue
+			}
+			path := cloudMediaPath(typ, ref)
+			seen[path] = struct{}{}
+			s.ingestCloudFile(ctx, lib, typ, ref, entry.Name, entry.Size, res)
+		}
+		return nil
+	}
+	if err := walkCloud(rootDir); err != nil {
+		return res, err
+	}
+	removed, err := s.pruneMissingCloudMedia(ctx, lib.ID, seen)
+	if err != nil {
+		s.log.Warn("prune missing cloud media failed", zap.String("library_id", lib.ID), zap.Error(err))
+	} else {
+		res.Removed = removed
+	}
+	s.hub.Publish("scan", map[string]any{
+		"library_id": lib.ID,
+		"finished":   true,
+		"visited":    res.Visited,
+		"added":      res.Added,
+		"updated":    res.Updated,
+		"removed":    res.Removed,
+		"cloud":      true,
+	})
+	if autoScrape && s.scraper != nil && s.scraper.AnyEnabled() && s.autoScrapeEnabled(ctx) {
+		go func(libID string) {
+			if _, err := s.scraper.EnrichLibrary(context.Background(), libID); err != nil {
+				s.log.Warn("scraper enrich failed", zap.Error(err))
+			}
+		}(lib.ID)
+	}
+	return res, nil
+}
+
+func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library, typ, ref, name string, size int64, res *ScanResult) {
+	res.Visited++
+	ext := strings.ToLower(filepath.Ext(name))
+	title, year := CleanQuery(name)
+	if title == "" {
+		title = strings.TrimSuffix(filepath.Base(name), ext)
+	}
+	if title == "" {
+		title = ref
+	}
+	path := cloudMediaPath(typ, ref)
+	isNewMedia := !s.mediaPathExists(ctx, path)
+	m := &model.Media{
+		LibraryID:    lib.ID,
+		Title:        title,
+		Year:         year,
+		Path:         path,
+		SizeBytes:    size,
+		Container:    strings.TrimPrefix(ext, "."),
+		STRMURL:      "/api/cloud/play/" + typ + "?ref=" + url.QueryEscape(ref),
+		ScrapeStatus: "pending",
+	}
+	parsedSeason, parsedEpisode := ParseEpisode(name)
+	m.SeasonNum = parsedSeason
+	m.EpisodeNum = parsedEpisode
+	if err := s.repo.Media.Upsert(ctx, m); err != nil {
+		s.log.Warn("upsert cloud media failed", zap.String("path", path), zap.Error(err))
+		return
+	}
+	if isNewMedia {
+		res.Added++
+	} else {
+		res.Updated++
+	}
+	s.hub.Publish("scan", map[string]any{
+		"library_id": lib.ID,
+		"path":       path,
+		"visited":    res.Visited,
+		"added":      res.Added,
+		"updated":    res.Updated,
+		"cloud":      true,
+	})
 }
 
 // RemovePath deletes the media row for a path that has disappeared from disk
@@ -324,6 +455,63 @@ func (s *ScannerService) pruneMissingMedia(ctx context.Context, libraryID string
 		removed += res.RowsAffected
 	}
 	return removed, nil
+}
+
+func (s *ScannerService) pruneMissingCloudMedia(ctx context.Context, libraryID string, seen map[string]struct{}) (int64, error) {
+	var rows []model.Media
+	if err := s.repo.DB.WithContext(ctx).
+		Where("library_id = ? AND path LIKE ?", libraryID, "cloud://%").
+		Find(&rows).Error; err != nil {
+		return 0, err
+	}
+	var removed int64
+	for _, row := range rows {
+		if _, ok := seen[row.Path]; ok {
+			continue
+		}
+		res := s.repo.DB.WithContext(ctx).
+			Where("id = ?", row.ID).
+			Delete(&model.Media{})
+		if res.Error != nil {
+			return removed, res.Error
+		}
+		removed += res.RowsAffected
+	}
+	return removed, nil
+}
+
+func parseCloudLibraryPath(raw string) (typ, dirID string, ok bool) {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(strings.ToLower(raw), "cloud://") {
+		return "", "", false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || strings.ToLower(u.Scheme) != "cloud" {
+		return "", "", false
+	}
+	typ = strings.TrimSpace(u.Host)
+	if typ == "" {
+		return "", "", false
+	}
+	dirID = strings.Trim(strings.TrimSpace(u.Path), "/")
+	if qDir := strings.TrimSpace(u.Query().Get("dir")); qDir != "" {
+		dirID = qDir
+	}
+	if decoded, err := url.PathUnescape(dirID); err == nil {
+		dirID = decoded
+	}
+	return typ, dirID, true
+}
+
+func cloudEntryRef(typ, id, pickCode string) string {
+	if typ == "cloud115" && strings.TrimSpace(pickCode) != "" {
+		return strings.TrimSpace(pickCode)
+	}
+	return strings.TrimSpace(id)
+}
+
+func cloudMediaPath(typ, ref string) string {
+	return "cloud://" + strings.TrimSpace(typ) + "/" + strings.TrimSpace(ref)
 }
 
 func applyLocalMetadata(m *model.Media, local *LocalMetadata) {

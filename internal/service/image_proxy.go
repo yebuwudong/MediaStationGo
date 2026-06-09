@@ -84,6 +84,12 @@ type ImageProxy struct {
 	libRootsAt     time.Time
 }
 
+const (
+	imageBrowserCacheControl     = "public, max-age=2592000, immutable"
+	imagePlaceholderCacheControl = "public, max-age=3600"
+	imageNegativeCacheTTL        = 6 * time.Hour
+)
+
 // NewImageProxy is the constructor.
 func NewImageProxy(cfg *config.Config, log *zap.Logger) *ImageProxy {
 	// Honor HTTP(S)_PROXY env vars so deployments behind GFW can pull
@@ -222,6 +228,13 @@ func servePlaceholder(w http.ResponseWriter) {
 	_, _ = w.Write(transparent1x1PNG)
 }
 
+func serveCachedPlaceholder(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", imagePlaceholderCacheControl)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(transparent1x1PNG)
+}
+
 // Serve writes the requested image to w. Caller is expected to validate
 // the JWT before invoking it.
 func (p *ImageProxy) Serve(ctx context.Context, w http.ResponseWriter, r *http.Request, raw string) error {
@@ -244,7 +257,7 @@ func (p *ImageProxy) Serve(ctx context.Context, w http.ResponseWriter, r *http.R
 			modTime = stat.ModTime()
 		}
 		w.Header().Set("Content-Type", detectContentType(data))
-		w.Header().Set("Cache-Control", "public, max-age=604800")
+		w.Header().Set("Cache-Control", imageBrowserCacheControl)
 		http.ServeContent(w, r, filepath.Base(path), modTime, bytes.NewReader(data))
 		return nil
 	}
@@ -261,11 +274,12 @@ func (p *ImageProxy) Serve(ctx context.Context, w http.ResponseWriter, r *http.R
 	sum := sha1.Sum([]byte(raw))
 	key := hex.EncodeToString(sum[:])
 	cachePath := filepath.Join(p.cacheDir, key)
+	failPath := cachePath + ".fail"
 
 	// Cache hit.
 	if data, err := os.ReadFile(cachePath); err == nil && len(data) > 0 {
 		w.Header().Set("Content-Type", detectContentType(data))
-		w.Header().Set("Cache-Control", "public, max-age=604800")
+		w.Header().Set("Cache-Control", imageBrowserCacheControl)
 		stat, _ := os.Stat(cachePath)
 		modTime := time.Now()
 		if stat != nil {
@@ -273,6 +287,12 @@ func (p *ImageProxy) Serve(ctx context.Context, w http.ResponseWriter, r *http.R
 		}
 		http.ServeContent(w, r, key, modTime, bytes.NewReader(data))
 		return nil
+	}
+	if stat, err := os.Stat(failPath); err == nil && time.Since(stat.ModTime()) < imageNegativeCacheTTL {
+		serveCachedPlaceholder(w)
+		return nil
+	} else if err == nil {
+		_ = os.Remove(failPath)
 	}
 
 	// Cache miss → fetch upstream.
@@ -298,14 +318,16 @@ func (p *ImageProxy) Serve(ctx context.Context, w http.ResponseWriter, r *http.R
 	if err != nil {
 		p.log.Warn("imageproxy: upstream fetch failed",
 			zap.String("host", host), zap.Error(err))
-		servePlaceholder(w)
+		p.markImageFetchFailed(failPath)
+		serveCachedPlaceholder(w)
 		return nil
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		p.log.Warn("imageproxy: upstream returned non-OK",
 			zap.String("host", host), zap.String("status", resp.Status))
-		servePlaceholder(w)
+		p.markImageFetchFailed(failPath)
+		serveCachedPlaceholder(w)
 		return nil
 	}
 
@@ -313,7 +335,8 @@ func (p *ImageProxy) Serve(ctx context.Context, w http.ResponseWriter, r *http.R
 	if err != nil || len(data) == 0 {
 		p.log.Warn("imageproxy: read upstream body failed",
 			zap.String("host", host), zap.Error(err))
-		servePlaceholder(w)
+		p.markImageFetchFailed(failPath)
+		serveCachedPlaceholder(w)
 		return nil
 	}
 
@@ -325,6 +348,8 @@ func (p *ImageProxy) Serve(ctx context.Context, w http.ResponseWriter, r *http.R
 			tmp.Close()
 			if rerr := os.Rename(tmp.Name(), cachePath); rerr != nil {
 				_ = os.Remove(tmp.Name())
+			} else {
+				_ = os.Remove(failPath)
 			}
 		} else {
 			tmp.Close()
@@ -347,9 +372,18 @@ func (p *ImageProxy) Serve(ctx context.Context, w http.ResponseWriter, r *http.R
 	if v := resp.Header.Get("Last-Modified"); v != "" {
 		w.Header().Set("Last-Modified", v)
 	}
-	w.Header().Set("Cache-Control", "public, max-age=604800")
+	w.Header().Set("Cache-Control", imageBrowserCacheControl)
 	http.ServeContent(w, r, key, time.Now(), bytes.NewReader(data))
 	return nil
+}
+
+func (p *ImageProxy) markImageFetchFailed(failPath string) {
+	if err := os.MkdirAll(filepath.Dir(failPath), 0o755); err != nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_ = os.WriteFile(failPath, []byte(time.Now().Format(time.RFC3339Nano)), 0o644)
 }
 
 // Fetch 拉取远程图片并返回字节和 Content-Type（带缓存）。

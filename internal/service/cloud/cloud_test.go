@@ -3,8 +3,10 @@ package cloud
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +62,47 @@ func TestQuarkListAndResolve(t *testing.T) {
 	if link.Headers["Cookie"] != "kps=abc" {
 		t.Fatalf("resolve must carry cookie header: %#v", link.Headers)
 	}
+}
+
+func TestQuarkListPaginates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/file/sort" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		page, _ := strconv.Atoi(r.URL.Query().Get("_page"))
+		w.Write([]byte(`{"status":200,"code":0,"data":{"list":[` + quarkPagePayload(page) + `]}}`))
+	}))
+	defer srv.Close()
+
+	p, err := New(TypeQuark, map[string]any{"cookie": "kps=abc", "base": srv.URL}, srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := p.List(context.Background(), "0")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(entries) != 101 {
+		t.Fatalf("entries = %d, want 101", len(entries))
+	}
+	if entries[100].ID != "f100" || entries[100].Name != "Movie.100.mkv" {
+		t.Fatalf("last entry wrong: %#v", entries[100])
+	}
+}
+
+func quarkPagePayload(page int) string {
+	count := 100
+	offset := 0
+	if page > 1 {
+		count = 1
+		offset = 100
+	}
+	items := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		n := offset + i
+		items = append(items, fmt.Sprintf(`{"fid":"f%d","file_name":"Movie.%03d.mkv","dir":false,"size":%d}`, n, n, n))
+	}
+	return strings.Join(items, ",")
 }
 
 func TestQuarkForce302(t *testing.T) {
@@ -125,6 +168,41 @@ func Test115ListAndResolve(t *testing.T) {
 	}
 	if link.Proxy {
 		t.Fatalf("115 should default to 302 (no proxy)")
+	}
+}
+
+func Test115ListPaginates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/files" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		count := 100
+		if offset > 0 {
+			count = 1
+		}
+		items := make([]string, 0, count)
+		for i := 0; i < count; i++ {
+			n := offset + i
+			items = append(items, fmt.Sprintf(`{"fid":"%d","n":"Movie.%03d.mkv","s":%d,"pc":"pick%d"}`, n, n, n, n))
+		}
+		w.Write([]byte(`{"state":true,"data":[` + strings.Join(items, ",") + `]}`))
+	}))
+	defer srv.Close()
+
+	p, err := New(Type115, map[string]any{"cookie": "UID=1; CID=2", "base": srv.URL}, srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := p.List(context.Background(), "0")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(entries) != 101 {
+		t.Fatalf("entries = %d, want 101", len(entries))
+	}
+	if entries[100].ID != "100" || entries[100].PickCode != "pick100" {
+		t.Fatalf("last entry wrong: %#v", entries[100])
 	}
 }
 

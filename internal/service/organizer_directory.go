@@ -108,16 +108,15 @@ func (o *OrganizerService) defaultDestRoot(ctx context.Context, override string)
 // OrganizeDirectory organizes every video file found under opts.SourcePath into
 // the destination root, applying dedup + 洗版 (resolution replacement).
 func (o *OrganizerService) OrganizeDirectory(ctx context.Context, opts OrganizeOptions) (*OrganizeResult, error) {
-	source := strings.TrimSpace(o.defaultSourceRoot(ctx, opts.SourcePath))
-	if source == "" {
+	requestedSource := strings.TrimSpace(o.defaultSourceRoot(ctx, opts.SourcePath))
+	if requestedSource == "" {
 		return nil, errors.New("source path required")
 	}
-	source = filepath.Clean(source)
-	info, statErr := os.Stat(source)
+	source, info, statErr := resolveAccessibleMappedPath(requestedSource)
 	if statErr != nil {
-		return nil, fmt.Errorf("source directory not accessible: %s", source)
+		return nil, fmt.Errorf("source directory not accessible: %s", filepath.Clean(requestedSource))
 	}
-	dest := filepath.Clean(o.defaultDestRoot(ctx, opts.DestPath))
+	dest := resolveMappedDestinationPath(o.defaultDestRoot(ctx, opts.DestPath))
 	if dest == "" || dest == "." {
 		return nil, errors.New("destination path required")
 	}

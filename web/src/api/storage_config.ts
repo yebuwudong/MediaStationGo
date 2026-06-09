@@ -32,6 +32,22 @@ export interface StorageConfig {
   updated_at: string
 }
 
+export interface CloudUploadResult {
+  source_path: string
+  dest_path: string
+  uploaded: number
+  skipped: number
+  bytes: number
+  errors?: string[]
+  items?: Array<{
+    source: string
+    target: string
+    action: 'upload' | 'skip' | 'error'
+    size?: number
+    reason?: string
+  }>
+}
+
 export const storageAPI = {
   status: () =>
     api
@@ -53,6 +69,20 @@ export const storageAPI = {
         config,
       })
       .then((r) => r.data),
+
+  uploadLocal: (
+    type: StorageType,
+    input: {
+      source_path: string
+      dest_path: string
+      recursive: boolean
+      include_sidecars: boolean
+      overwrite: boolean
+    },
+  ) =>
+    api
+      .post<{ result: CloudUploadResult; error?: string }>(`/admin/storage/${type}/upload-local`, input)
+      .then((r) => r.data),
 }
 
 // cloudAPI drives 网盘 browsing, QR login and 302 import.
@@ -67,6 +97,11 @@ export const cloudAPI = {
   import: (type: StorageType, ref: string, name: string, size: number) =>
     api
       .post(`/admin/cloud/${type}/import`, { ref, name, size })
+      .then((r) => r.data),
+
+  mount: (type: StorageType, dir = '', name = '', media_type = 'movie') =>
+    api
+      .post(`/admin/cloud/${type}/mount`, { dir, name, media_type })
       .then((r) => r.data),
 
   qrStart: (type: StorageType) =>

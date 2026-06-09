@@ -44,6 +44,7 @@ type SchedulerService struct {
 	scanner    *ScannerService
 	transcoder *TranscoderService
 	organizer  *OrganizerService
+	storageCfg *StorageConfigService
 	hub        *Hub
 	cacheDir   string
 
@@ -70,6 +71,7 @@ func NewSchedulerService(
 	scanner *ScannerService,
 	transcoder *TranscoderService,
 	organizer *OrganizerService,
+	storageCfg *StorageConfigService,
 	hub *Hub,
 	cacheDir string,
 ) *SchedulerService {
@@ -79,6 +81,7 @@ func NewSchedulerService(
 		scanner:    scanner,
 		transcoder: transcoder,
 		organizer:  organizer,
+		storageCfg: storageCfg,
 		hub:        hub,
 		cacheDir:   cacheDir,
 		stopCh:     make(chan struct{}),
@@ -92,6 +95,16 @@ func (s *SchedulerService) Start(ctx context.Context) {
 			name:     "library_scan",
 			interval: 60 * time.Minute,
 			run:      s.jobScanLibraries,
+		},
+		{
+			name:     "cloud_sync",
+			interval: s.cloudSyncInterval(ctx),
+			run:      s.jobSyncCloudLibraries,
+		},
+		{
+			name:     "cloud_upload",
+			interval: s.cloudUploadInterval(ctx),
+			run:      s.jobUploadLocalToCloud,
 		},
 		{
 			name:     "organize_source",
@@ -225,6 +238,137 @@ func (s *SchedulerService) jobScanLibraries(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// jobUploadLocalToCloud copies local media files into the configured external
+// storage backend. It is opt-in and never deletes the local source files.
+func (s *SchedulerService) jobUploadLocalToCloud(ctx context.Context) error {
+	manual, _ := ctx.Value(schedulerManualRunKey{}).(bool)
+	if s.storageCfg == nil || (!manual && !s.autoCloudUploadEnabled(ctx)) {
+		return nil
+	}
+	input := s.cloudUploadInput(ctx)
+	if strings.TrimSpace(input.Type) == "" || strings.TrimSpace(input.SourcePath) == "" {
+		return nil
+	}
+	res, err := s.storageCfg.UploadLocal(ctx, input)
+	if s.log != nil && res != nil {
+		s.log.Info("cloud upload finished",
+			zap.String("type", input.Type),
+			zap.String("source", res.SourcePath),
+			zap.String("dest", res.DestPath),
+			zap.Int("uploaded", res.Uploaded),
+			zap.Int("skipped", res.Skipped),
+			zap.Int64("bytes", res.Bytes),
+			zap.Int("errors", len(res.Errors)),
+		)
+	}
+	return err
+}
+
+func (s *SchedulerService) cloudUploadInput(ctx context.Context) CloudUploadInput {
+	get := func(key string) string {
+		if s.repo == nil || s.repo.Setting == nil {
+			return ""
+		}
+		v, _ := s.repo.Setting.Get(ctx, key)
+		return strings.TrimSpace(v)
+	}
+	return CloudUploadInput{
+		Type:            get(CloudUploadProviderKey),
+		SourcePath:      get(CloudUploadSourceDirKey),
+		DestPath:        get(CloudUploadDestPathKey),
+		Recursive:       parseBoolSetting(get(CloudUploadRecursiveKey), true),
+		IncludeSidecars: parseBoolSetting(get(CloudUploadSidecarsKey), true),
+		Overwrite:       parseBoolSetting(get(CloudUploadOverwriteKey), false),
+	}
+}
+
+func (s *SchedulerService) autoCloudUploadEnabled(ctx context.Context) bool {
+	if s.repo == nil || s.repo.Setting == nil {
+		return false
+	}
+	v, err := s.repo.Setting.Get(ctx, CloudUploadAutoEnabledKey)
+	if err != nil {
+		return false
+	}
+	return parseBoolSetting(v, false)
+}
+
+func (s *SchedulerService) cloudUploadInterval(ctx context.Context) time.Duration {
+	const fallback = time.Hour
+	if s.repo == nil || s.repo.Setting == nil {
+		return fallback
+	}
+	v, err := s.repo.Setting.Get(ctx, CloudUploadIntervalSecondsKey)
+	if err != nil {
+		return fallback
+	}
+	seconds, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || seconds <= 0 {
+		return fallback
+	}
+	if seconds < 300 {
+		seconds = 300
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+// jobSyncCloudLibraries keeps mounted cloud:// libraries refreshed without
+// enabling full disk scans. It imports remote cloud files as STRM-backed media
+// rows; the actual bytes stay on the provider and playback continues through
+// /api/cloud/play 302/proxy.
+func (s *SchedulerService) jobSyncCloudLibraries(ctx context.Context) error {
+	manual, _ := ctx.Value(schedulerManualRunKey{}).(bool)
+	if s.scanner == nil || (!manual && !s.autoCloudSyncEnabled(ctx)) {
+		return nil
+	}
+	libs, err := s.repo.Library.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, l := range libs {
+		if !l.Enabled {
+			continue
+		}
+		if _, _, ok := parseCloudLibraryPath(l.Path); !ok {
+			continue
+		}
+		if _, err := s.scanner.ScanLibrary(ctx, l.ID); err != nil {
+			s.log.Warn("cloud sync failed", zap.String("library", l.ID), zap.Error(err))
+		}
+	}
+	return nil
+}
+
+func (s *SchedulerService) autoCloudSyncEnabled(ctx context.Context) bool {
+	if s.repo == nil || s.repo.Setting == nil {
+		return true
+	}
+	v, err := s.repo.Setting.Get(ctx, "cloud.auto_sync_enabled")
+	if err != nil {
+		return true
+	}
+	return parseBoolSetting(v, true)
+}
+
+func (s *SchedulerService) cloudSyncInterval(ctx context.Context) time.Duration {
+	const fallback = 30 * time.Minute
+	if s.repo == nil || s.repo.Setting == nil {
+		return fallback
+	}
+	v, err := s.repo.Setting.Get(ctx, "cloud.sync_interval_seconds")
+	if err != nil {
+		return fallback
+	}
+	seconds, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || seconds <= 0 {
+		return fallback
+	}
+	if seconds < 300 {
+		seconds = 300
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 // periodicScanEnabled reports whether the operator opted into periodic full

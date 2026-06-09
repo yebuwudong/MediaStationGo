@@ -92,6 +92,70 @@ func resolveAccessibleLibraryPath(path string) (string, error) {
 	return "", fmt.Errorf("path is not an accessible directory: %s", abs)
 }
 
+func resolveAccessibleMappedPath(path string) (string, os.FileInfo, error) {
+	input := strings.TrimSpace(path)
+	if input == "" {
+		return "", nil, errors.New("path required")
+	}
+	candidates := mappedPathCandidates(input)
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil {
+			return filepath.Clean(candidate), info, nil
+		}
+	}
+	abs, err := filepath.Abs(input)
+	if err != nil {
+		return "", nil, fmt.Errorf("invalid path: %w", err)
+	}
+	return "", nil, fmt.Errorf("path is not accessible: %s", abs)
+}
+
+func resolveMappedDestinationPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	clean := filepath.Clean(path)
+	if _, err := os.Stat(clean); err == nil {
+		return clean
+	}
+	for _, candidate := range mappedPathCandidates(clean) {
+		if candidate == clean {
+			continue
+		}
+		return filepath.Clean(candidate)
+	}
+	return clean
+}
+
+func mappedPathCandidates(input string) []string {
+	var candidates []string
+	add := func(candidate string) {
+		candidate = filepath.Clean(filepath.FromSlash(strings.TrimSpace(candidate)))
+		if candidate == "" || candidate == "." {
+			return
+		}
+		for _, existing := range candidates {
+			if sameLibraryPath(existing, candidate) {
+				return
+			}
+		}
+		candidates = append(candidates, candidate)
+	}
+	clean := filepath.Clean(input)
+	add(clean)
+	for _, candidate := range dockerVolumePathCandidates(clean) {
+		add(candidate)
+	}
+	if abs, err := filepath.Abs(input); err == nil {
+		add(abs)
+		for _, candidate := range dockerVolumePathCandidates(abs) {
+			add(candidate)
+		}
+	}
+	return candidates
+}
+
 func isAccessibleDir(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()

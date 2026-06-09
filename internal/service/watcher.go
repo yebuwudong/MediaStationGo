@@ -99,6 +99,9 @@ func (w *WatcherService) Refresh(ctx context.Context) error {
 		if !l.Enabled {
 			continue
 		}
+		if _, _, ok := parseCloudLibraryPath(l.Path); ok {
+			continue
+		}
 		for _, dir := range listDirsForWatch(l.Path) {
 			current[dir] = l.ID
 		}

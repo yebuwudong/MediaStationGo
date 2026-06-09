@@ -99,6 +99,20 @@ func schemaHandler(_ *service.Container) gin.HandlerFunc {
 					},
 				},
 				{
+					"key":   "cloud-upload",
+					"label": "网盘转存",
+					"items": []gin.H{
+						{"key": "cloud.upload_auto_enabled", "type": "toggle", "label": "启用自动转存"},
+						{"key": "cloud.upload_provider", "type": "select", "label": "转存目标"},
+						{"key": "cloud.upload_source_dir", "type": "text", "label": "本地源目录"},
+						{"key": "cloud.upload_dest_path", "type": "text", "label": "网盘目标目录"},
+						{"key": "cloud.upload_recursive", "type": "toggle", "label": "递归扫描源目录"},
+						{"key": "cloud.upload_sidecars", "type": "toggle", "label": "同步 NFO / 海报 / 字幕"},
+						{"key": "cloud.upload_overwrite", "type": "toggle", "label": "覆盖远端同名文件"},
+						{"key": "cloud.upload_interval_seconds", "type": "number", "label": "自动转存间隔秒数"},
+					},
+				},
+				{
 					"key":   "adult",
 					"label": "Adult / NSFW",
 					"items": []gin.H{

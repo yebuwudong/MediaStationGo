@@ -64,11 +64,26 @@ func (p *PlaybackService) RecentHistory(ctx context.Context, userID string, limi
 	if err != nil {
 		return nil, err
 	}
+	mediaIDs := make([]string, 0, len(rows))
+	for i := range rows {
+		if rows[i].MediaID != "" {
+			mediaIDs = append(mediaIDs, rows[i].MediaID)
+		}
+	}
+	mediaByID := map[string]model.Media{}
+	if len(mediaIDs) > 0 {
+		var mediaRows []model.Media
+		if err := p.repo.DB.WithContext(ctx).Where("id IN ?", mediaIDs).Find(&mediaRows).Error; err == nil {
+			for _, media := range mediaRows {
+				mediaByID[media.ID] = media
+			}
+		}
+	}
 	items := make([]HistoryItem, 0, len(rows))
 	for i := range rows {
-		var m model.Media
-		if err := p.repo.DB.Where("id = ?", rows[i].MediaID).First(&m).Error; err == nil {
-			items = append(items, HistoryItem{PlaybackHistory: rows[i], Media: &m})
+		if m, ok := mediaByID[rows[i].MediaID]; ok {
+			media := m
+			items = append(items, HistoryItem{PlaybackHistory: rows[i], Media: &media})
 		} else {
 			items = append(items, HistoryItem{PlaybackHistory: rows[i]})
 		}

@@ -249,6 +249,39 @@ func TestEmbyPlaybackInfoRespectsDirectPlayOnly(t *testing.T) {
 	}
 }
 
+func TestEmbyPlaybackInfoKeepsSTRMBehindStreamEndpoint(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "夸克网盘", Path: `cloud://quark/0`, Type: "movie", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	media := model.Media{
+		Base:      model.Base{ID: "cloud-1"},
+		LibraryID: lib.ID,
+		Title:     "Cloud Movie",
+		Path:      `cloud://quark/f1`,
+		STRMURL:   `/api/cloud/play/quark?ref=f1`,
+	}
+	if err := svc.repo.DB.Create(&media).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	pb, err := svc.PlaybackInfo(t.Context(), "cloud-1", "user-1")
+	if err != nil {
+		t.Fatalf("playback info: %v", err)
+	}
+	src := pb["MediaSources"].([]map[string]any)[0]
+	if src["IsRemote"] != true {
+		t.Fatalf("strm media should be marked remote: %#v", src)
+	}
+	if src["DirectStreamUrl"] != "/Videos/cloud-1/stream" {
+		t.Fatalf("strm playback must stay behind token-aware stream endpoint: %#v", src)
+	}
+	if src["Path"] != "/api/cloud/play/quark?ref=f1" {
+		t.Fatalf("path should expose the strm target for diagnostics: %#v", src)
+	}
+}
+
 func newTestEmbyService(t *testing.T) *EmbyService {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})

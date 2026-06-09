@@ -423,14 +423,25 @@ func (e *EmbyService) episodeItems(ctx context.Context, rows []model.Media, p It
 func (e *EmbyService) payloadsForMedia(ctx context.Context, rows []model.Media, userID string) ([]map[string]any, error) {
 	userFavs := map[string]bool{}
 	userPos := map[string]int64{}
-	if userID != "" {
+	if userID != "" && len(rows) > 0 {
+		mediaIDs := make([]string, 0, len(rows))
+		for _, row := range rows {
+			if strings.TrimSpace(row.ID) != "" {
+				mediaIDs = append(mediaIDs, row.ID)
+			}
+		}
+		if len(mediaIDs) == 0 {
+			mediaIDs = []string{"__none__"}
+		}
 		var favs []model.Favorite
-		_ = e.repo.DB.WithContext(ctx).Where("user_id = ?", userID).Find(&favs).Error
+		favQuery := e.repo.DB.WithContext(ctx).Where("user_id = ?", userID).Where("media_id IN ?", mediaIDs)
+		_ = favQuery.Find(&favs).Error
 		for _, f := range favs {
 			userFavs[f.MediaID] = true
 		}
 		var hist []model.PlaybackHistory
-		_ = e.repo.DB.WithContext(ctx).Where("user_id = ?", userID).Find(&hist).Error
+		histQuery := e.repo.DB.WithContext(ctx).Where("user_id = ?", userID).Where("media_id IN ?", mediaIDs)
+		_ = histQuery.Find(&hist).Error
 		for _, h := range hist {
 			userPos[h.MediaID] = h.PositionMs
 		}
@@ -522,9 +533,18 @@ func (e *EmbyService) LatestItems(ctx context.Context, userID, parentID string, 
 		return nil, err
 	}
 	favs := map[string]bool{}
-	if userID != "" {
+	if userID != "" && len(rows) > 0 {
+		mediaIDs := make([]string, 0, len(rows))
+		for _, row := range rows {
+			if strings.TrimSpace(row.ID) != "" {
+				mediaIDs = append(mediaIDs, row.ID)
+			}
+		}
+		if len(mediaIDs) == 0 {
+			mediaIDs = []string{"__none__"}
+		}
 		var fr []model.Favorite
-		_ = e.repo.DB.WithContext(ctx).Where("user_id = ?", userID).Find(&fr).Error
+		_ = e.repo.DB.WithContext(ctx).Where("user_id = ? AND media_id IN ?", userID, mediaIDs).Find(&fr).Error
 		for _, f := range fr {
 			favs[f.MediaID] = true
 		}
@@ -1231,9 +1251,12 @@ func (e *EmbyService) mediaSource(m *model.Media, asEmbedded, directOnly bool) m
 		}
 	}
 	if strings.TrimSpace(m.STRMURL) != "" {
-		// STRM 重定向：客户端直接拉远端，跳过我们这一层。
+		// STRM / cloud:// media still plays through /Videos/{id}/stream.
+		// That route delegates to StreamService, which appends the caller's
+		// token to internal /api/cloud/play redirects and only then 302s to the
+		// provider/CDN. Returning m.STRMURL directly here would make Emby/Yamby
+		// clients hit /api/cloud/play without an auth token and fail with 401.
 		src["IsRemote"] = true
-		src["DirectStreamUrl"] = m.STRMURL
 		src["Path"] = m.STRMURL
 	}
 	return src

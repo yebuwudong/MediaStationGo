@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
-import { Cloud, FileVideo, Folder, Loader2, QrCode, Save, Send } from 'lucide-react'
+import { Cloud, FileVideo, Folder, Loader2, QrCode, Save, Send, Upload } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 import {
@@ -212,9 +212,123 @@ function StorageForm({ type }: { type: StorageType }) {
           保存
         </button>
       </div>
+      <StorageUploadPanel type={type} />
       {isCloud(type) && <CloudBrowser type={type} />}
     </form>
   )
+}
+
+function StorageUploadPanel({ type }: { type: StorageType }) {
+  const [sourcePath, setSourcePath] = useState('')
+  const [destPath, setDestPath] = useState('/MediaStationGo')
+  const [recursive, setRecursive] = useState(true)
+  const [includeSidecars, setIncludeSidecars] = useState(true)
+  const [overwrite, setOverwrite] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  const supported = type === 'alist' || type === 'webdav'
+
+  const submit = async () => {
+    if (!supported) {
+      toast.error('本地直传目前支持 Alist / WebDAV。115/夸克建议先挂载到 Alist，再通过 Alist 转存。')
+      return
+    }
+    if (!sourcePath.trim()) {
+      toast.error('请填写本地源目录或文件路径')
+      return
+    }
+    setBusy(true)
+    try {
+      const { result, error } = await storageAPI.uploadLocal(type, {
+        source_path: sourcePath.trim(),
+        dest_path: destPath.trim() || '/',
+        recursive,
+        include_sidecars: includeSidecars,
+        overwrite,
+      })
+      const errText = error || (result.errors && result.errors.length > 0 ? ` · 错误 ${result.errors.length}` : '')
+      toast.success(`转存完成：上传 ${result.uploaded} · 跳过 ${result.skipped} · ${fmtBytes(result.bytes)}${errText}`)
+    } catch (err: unknown) {
+      toast.error((err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? '转存失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-gray-200 bg-gray-50/70 p-4">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <h3 className="flex items-center gap-2 font-display text-base font-semibold text-ink-600">
+            <Upload size={16} /> 本地媒体转存到此存储
+          </h3>
+          <p className="mt-1 text-xs text-ink-50">
+            复制本地媒体文件到外部存储，保留本地源文件；自动跳过远端已存在文件。
+          </p>
+        </div>
+        {!supported && (
+          <span className="rounded-full bg-amber-100 px-2 py-1 text-xs text-amber-700">
+            直传待接
+          </span>
+        )}
+      </div>
+      {!supported && (
+        <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          115 / 夸克原生上传需要私有分片上传协议。本版本先支持 Alist / WebDAV：把 115 或夸克挂到 Alist 后，选择 Alist 即可把本地文件转存到对应网盘。
+        </p>
+      )}
+      <div className="grid gap-3 lg:grid-cols-2">
+        <label className="block">
+          <span className="mb-1 block text-sm text-ink-100">本地源目录 / 文件</span>
+          <input
+            className="input-base"
+            placeholder="例如 /media/电影 或 F:\\media\\Movies"
+            value={sourcePath}
+            onChange={(event) => setSourcePath(event.target.value)}
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-sm text-ink-100">网盘目标目录</span>
+          <input
+            className="input-base"
+            placeholder="/MediaStationGo"
+            value={destPath}
+            onChange={(event) => setDestPath(event.target.value)}
+          />
+        </label>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-4 text-sm text-ink-100">
+        <label className="flex items-center gap-2">
+          <input type="checkbox" className="h-4 w-4 accent-primary-400" checked={recursive} onChange={(event) => setRecursive(event.target.checked)} />
+          递归目录
+        </label>
+        <label className="flex items-center gap-2">
+          <input type="checkbox" className="h-4 w-4 accent-primary-400" checked={includeSidecars} onChange={(event) => setIncludeSidecars(event.target.checked)} />
+          同步 NFO / 海报 / 字幕
+        </label>
+        <label className="flex items-center gap-2">
+          <input type="checkbox" className="h-4 w-4 accent-primary-400" checked={overwrite} onChange={(event) => setOverwrite(event.target.checked)} />
+          覆盖远端同名文件
+        </label>
+        <button type="button" className="neon-button ml-auto" disabled={busy || !supported} onClick={submit}>
+          {busy ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+          {busy ? '转存中…' : '开始转存'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function fmtBytes(value: number): string {
+  if (!value) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let size = value
+  let idx = 0
+  while (size >= 1024 && idx < units.length - 1) {
+    size /= 1024
+    idx++
+  }
+  return `${size.toFixed(size >= 10 || idx === 0 ? 0 : 1)} ${units[idx]}`
 }
 
 // QRLoginPanel drives the 115 QR-code login: start → render image → poll →
@@ -293,6 +407,8 @@ function CloudBrowser({ type }: { type: StorageType }) {
   const [stack, setStack] = useState<{ id: string; name: string }[]>([{ id: '', name: '根目录' }])
   const [items, setItems] = useState<CloudEntry[]>([])
   const [loading, setLoading] = useState(false)
+  const [mounting, setMounting] = useState(false)
+  const [mountMediaType, setMountMediaType] = useState('movie')
   const [error, setError] = useState('')
 
   const cur = stack[stack.length - 1]
@@ -329,18 +445,56 @@ function CloudBrowser({ type }: { type: StorageType }) {
     }
   }
 
+  const mountCurrent = async () => {
+    setMounting(true)
+    try {
+      const label = TYPE_LABEL[type] ?? type
+      const name = cur.id ? `${label} · ${cur.name}` : label
+      const res = await cloudAPI.mount(type, cur.id, name, mountMediaType)
+      const scan = (res as { scan?: { added?: number; updated?: number; removed?: number; visited?: number } }).scan
+      toast.success(`已挂载为媒体库并扫描：新增 ${scan?.added ?? 0} · 更新 ${scan?.updated ?? 0} · 访问 ${scan?.visited ?? 0}`)
+    } catch (err: unknown) {
+      toast.error((err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? '挂载失败')
+    } finally {
+      setMounting(false)
+    }
+  }
+
   return (
     <div className="mt-2 rounded-lg border border-gray-200 p-3" onClick={(e) => e.preventDefault()}>
-      <div className="mb-2 flex flex-wrap items-center gap-1 text-xs text-ink-50">
-        <span className="text-ink-100">网盘资源:</span>
-        {stack.map((s, i) => (
-          <span key={i}>
-            <button type="button" className="hover:text-brand-500" onClick={() => goTo(i)}>
-              {s.name}
-            </button>
-            {i < stack.length - 1 && <span className="mx-1">/</span>}
-          </span>
-        ))}
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-1 text-xs text-ink-50">
+          <span className="text-ink-100">网盘资源:</span>
+          {stack.map((s, i) => (
+            <span key={i}>
+              <button type="button" className="hover:text-brand-500" onClick={() => goTo(i)}>
+                {s.name}
+              </button>
+              {i < stack.length - 1 && <span className="mx-1">/</span>}
+            </span>
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            className="rounded border border-gray-200 bg-white px-2 py-0.5 text-xs text-ink-100"
+            value={mountMediaType}
+            onChange={(event) => setMountMediaType(event.target.value)}
+          >
+            <option value="movie">电影</option>
+            <option value="tv">剧集</option>
+            <option value="anime">动漫</option>
+            <option value="variety">综艺</option>
+            <option value="adult">成人</option>
+          </select>
+          <button
+            type="button"
+            className="rounded border border-brand-400/40 px-2 py-0.5 text-xs text-brand-500 hover:bg-brand-400/10"
+            disabled={mounting || loading}
+            onClick={mountCurrent}
+          >
+            {mounting ? '挂载扫描中…' : '挂载当前目录为媒体库'}
+          </button>
+        </div>
       </div>
       {loading ? (
         <div className="flex justify-center py-4 text-ink-50">

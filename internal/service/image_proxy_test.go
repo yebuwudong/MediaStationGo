@@ -1,10 +1,13 @@
 package service
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"go.uber.org/zap"
@@ -76,6 +79,46 @@ func TestImageProxyServesPosterUnderLibraryRoot(t *testing.T) {
 	if got := rec.Body.Bytes(); string(got) != string(realPoster) {
 		t.Fatalf("served %q, want real poster bytes", string(got))
 	}
+}
+
+func TestImageProxyCachesFailedRemoteImageFetch(t *testing.T) {
+	var calls int32
+	proxy := NewImageProxy(&config.Config{Cache: config.CacheConfig{CacheDir: filepath.Join(t.TempDir(), "cache")}}, zap.NewNop())
+	proxy.client = &http.Client{Transport: imageRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		atomic.AddInt32(&calls, 1)
+		return &http.Response{
+			StatusCode: http.StatusBadGateway,
+			Status:     "502 Bad Gateway",
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("upstream unavailable")),
+			Request:    req,
+		}, nil
+	})}
+	raw := "https://image.tmdb.org/t/p/w500/poster.jpg"
+	for i := 0; i < 2; i++ {
+		rec := httptest.NewRecorder()
+		if err := proxy.Serve(t.Context(), rec, httptest.NewRequest(http.MethodGet, "/api/img", nil), raw); err != nil {
+			t.Fatal(err)
+		}
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		if rec.Body.Len() != len(transparent1x1PNG) {
+			t.Fatalf("body length = %d, want placeholder %d", rec.Body.Len(), len(transparent1x1PNG))
+		}
+		if got := rec.Header().Get("Cache-Control"); got != imagePlaceholderCacheControl {
+			t.Fatalf("Cache-Control = %q, want %q", got, imagePlaceholderCacheControl)
+		}
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("upstream calls = %d, want 1 due to negative cache", got)
+	}
+}
+
+type imageRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f imageRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func TestIsPrivateHost(t *testing.T) {

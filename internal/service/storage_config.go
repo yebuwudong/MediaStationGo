@@ -319,7 +319,7 @@ func (s *StorageConfigService) CloudImport(ctx context.Context, typ, fileRef, na
 	m := &model.Media{
 		LibraryID:    lib.ID,
 		Title:        title,
-		Path:         "cloud://" + typ + "/" + fileRef,
+		Path:         cloudMediaPath(typ, fileRef),
 		SizeBytes:    size,
 		Container:    container,
 		STRMURL:      "/api/cloud/play/" + typ + "?ref=" + url.QueryEscape(fileRef),
