@@ -4,11 +4,14 @@
 #
 # Stage 1 (frontend) :  Node 20  -> static SPA bundle
 # Stage 2 (backend)  :  Go 1.25  -> single static binary (CGO_ENABLED=0)
-# Stage 3 (runtime)  :  Alpine 3.19 -> ffmpeg + tzdata + non-root user
+# Stage 3 (runtime)  :  Alpine 3.23 -> ffmpeg + tzdata + non-root user
 #
 # Build:
 #   docker buildx build --platform linux/amd64,linux/arm64 \
 #     -t mediastation-go:latest --push .
+#
+# Optional Intel VAAPI/QSV runtime packages:
+#   docker buildx build --build-arg WITH_VAAPI=true ...
 # =============================================================================
 
 # ---- Stage 1: frontend (always build on the host architecture) -------------
@@ -32,20 +35,23 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o mediastation-go ./cmd/server
 
 # ---- Stage 3: runtime ------------------------------------------------------
-FROM alpine:3.19
-# ffmpeg plus optional VAAPI packages. Intel media driver is x86_64-only.
-# NVENC requires the proprietary NVIDIA Container Toolkit on the host —
-# no extra packages needed inside the image, only --gpus all on docker run.
+FROM alpine:3.23
+ARG WITH_VAAPI=false
+# Default runtime keeps only the packages needed by normal deployments.
+# VAAPI/mesa drivers pull a large graphics dependency tree, so they are opt-in
+# for users who explicitly build an Intel hardware-acceleration image.
+# NVENC requires the proprietary NVIDIA Container Toolkit on the host only.
 RUN apk add --no-cache \
         ffmpeg \
         tzdata \
         ca-certificates \
-        wget \
         su-exec \
-    && if [ "$(apk --print-arch)" = "x86_64" ]; then \
-        apk add --no-cache intel-media-driver libva-utils mesa-va-gallium; \
-    else \
-        apk add --no-cache libva-utils mesa-va-gallium || true; \
+    && if [ "$WITH_VAAPI" = "true" ]; then \
+        if [ "$(apk --print-arch)" = "x86_64" ]; then \
+            apk add --no-cache intel-media-driver libva-utils mesa-va-gallium; \
+        else \
+            apk add --no-cache libva-utils mesa-va-gallium || true; \
+        fi; \
     fi \
     && rm -rf /var/cache/apk/*
 
@@ -71,7 +77,7 @@ ENV MEDIASTATION_APP_PORT=8080 \
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD wget -q --spider http://127.0.0.1:8080/api/health || exit 1
+    CMD busybox wget -q --spider http://127.0.0.1:8080/api/health || exit 1
 
 # Tiny entrypoint that lets us swap to a different UID/GID via PUID/PGID
 # (handy on NAS deployments where bind-mounted volumes belong to a non-root

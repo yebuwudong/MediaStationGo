@@ -70,7 +70,7 @@ services:
       MEDIASTATION_TRANSCODER_IDLE_TIMEOUT_SECONDS: ${MEDIASTATION_TRANSCODER_IDLE_TIMEOUT_SECONDS:-120}
 
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/health || exit 1"]
+      test: ["CMD-SHELL", "busybox wget -qO- http://127.0.0.1:8080/api/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5

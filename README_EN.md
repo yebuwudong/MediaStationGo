@@ -638,6 +638,8 @@ When playback stops, a transcode job is cancelled, or the service shuts down, th
 
 The default HLS profile is NAS-friendly: `MEDIASTATION_TRANSCODER_ENABLED=true` is the global switch, and disabling it prevents ffmpeg transcode jobs from starting; `MEDIASTATION_TRANSCODER_HARDWARE_ACCEL=false` is the hardware acceleration switch, and hardware encoders are used only when it is enabled together with `MEDIASTATION_TRANSCODER_ENCODER=nvenc/qsv/vaapi`; `MEDIASTATION_TRANSCODER_REALTIME=true` throttles input to playback speed, `MEDIASTATION_TRANSCODER_THREADS=2` caps software encoding threads, `MEDIASTATION_TRANSCODER_MAX_CONCURRENT=1` limits simultaneous transcodes, and `MEDIASTATION_TRANSCODER_IDLE_TIMEOUT_SECONDS=120` stops ffmpeg after the player stops requesting segments.
 
+The default Docker image now uses a trimmed runtime layer and does not bundle Intel VAAPI / mesa driver packages by default, reducing the Docker Hub vulnerability-scan surface. If you need a custom Intel VAAPI/QSV image, build with `docker buildx build --build-arg WITH_VAAPI=true ...`; NVIDIA NVENC still mainly depends on NVIDIA Container Toolkit on the host and GPU access when the container runs.
+
 ---
 
 ## 🔍 Metadata Strategy
