@@ -86,7 +86,7 @@ func (s *StorageConfigService) List(ctx context.Context) ([]StorageView, error) 
 		var cfg map[string]any
 		_ = json.Unmarshal([]byte(plain), &cfg)
 		// Redact secrets when listing.
-		for _, k := range []string{"password", "secret_key", "token"} {
+		for _, k := range []string{"password", "secret_key", "token", "cookie", "access_key"} {
 			if v, ok := cfg[k]; ok && fmt.Sprint(v) != "" {
 				cfg[k] = "********"
 			}
@@ -184,7 +184,7 @@ func (s *StorageConfigService) Test(ctx context.Context, in StorageInput) error 
 		}
 		defer resp.Body.Close()
 		return nil
-	case cloud.TypeQuark, cloud.Type115:
+	case cloud.TypeQuark, cloud.Type115, cloud.TypeCloudDrive2:
 		p, err := cloud.New(in.Type, cfg, s.client)
 		if err != nil {
 			return err
@@ -268,6 +268,8 @@ func cloudLibraryName(typ string) string {
 		return "夸克网盘"
 	case cloud.Type115:
 		return "115 网盘"
+	case cloud.TypeCloudDrive2:
+		return "CloudDrive2"
 	default:
 		return typ
 	}
@@ -333,7 +335,7 @@ func (s *StorageConfigService) CloudImport(ctx context.Context, typ, fileRef, na
 
 func validStorageType(t string) bool {
 	switch t {
-	case "alist", "s3", "webdav", cloud.TypeQuark, cloud.Type115:
+	case "alist", "s3", "webdav", cloud.TypeQuark, cloud.Type115, cloud.TypeCloudDrive2:
 		return true
 	}
 	return false

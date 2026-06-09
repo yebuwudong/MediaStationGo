@@ -122,6 +122,8 @@ func cloudMountLibraryName(typ, dir string) string {
 		base = "夸克网盘"
 	case cloud.Type115:
 		base = "115 网盘"
+	case cloud.TypeCloudDrive2:
+		base = "CloudDrive2"
 	}
 	if dir == "" || dir == "0" {
 		return base
@@ -133,6 +135,10 @@ func cloudMountLibraryName(typ, dir string) string {
 // QR image URL for the frontend to render.
 func cloud115QRStartHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if c.Param("type") != cloud.Type115 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "qr login is only supported for 115"})
+			return
+		}
 		sess, err := cloud.QRStart(c.Request.Context(), nil)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -146,6 +152,10 @@ func cloud115QRStartHandler(svc *service.Container) gin.HandlerFunc {
 // session cookie so the frontend can save it as the storage credential.
 func cloud115QRPollHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if c.Param("type") != cloud.Type115 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "qr login is only supported for 115"})
+			return
+		}
 		var sess cloud.QRSession
 		if err := c.ShouldBindJSON(&sess); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

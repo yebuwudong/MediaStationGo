@@ -1,6 +1,6 @@
 import { api } from './client'
 
-export type StorageType = 'alist' | 's3' | 'webdav' | 'cloud115' | 'quark'
+export type StorageType = 'alist' | 's3' | 'webdav' | 'cloud115' | 'quark' | 'clouddrive2'
 
 export interface CloudEntry {
   id: string

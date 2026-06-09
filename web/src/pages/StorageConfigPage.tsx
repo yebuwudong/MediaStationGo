@@ -10,7 +10,7 @@ import {
   type StorageType,
 } from '../api/storage_config'
 
-const CLOUD_TYPES: StorageType[] = ['cloud115', 'quark']
+const CLOUD_TYPES: StorageType[] = ['cloud115', 'quark', 'clouddrive2']
 const isCloud = (t: StorageType) => CLOUD_TYPES.includes(t)
 const TYPE_LABEL: Record<string, string> = {
   alist: 'ALIST',
@@ -18,6 +18,7 @@ const TYPE_LABEL: Record<string, string> = {
   s3: 'S3',
   cloud115: '115网盘',
   quark: '夸克网盘',
+  clouddrive2: 'CloudDrive2',
 }
 
 // StorageConfigPage manages the Alist / S3 / WebDAV adapters used by
@@ -34,13 +35,13 @@ export function StorageConfigPage() {
         <div>
           <h1 className="font-display text-3xl font-bold text-ink-600">外部存储</h1>
           <p className="text-sm text-ink-50">
-            配置 Alist / S3 / WebDAV / 网盘(115 / 夸克)后端,Cookie 加密存储 + 在线测试,网盘资源通过 302 直链播放
+            配置 Alist / S3 / WebDAV / CloudDrive2 / 网盘(115 / 夸克)后端，支持本地转存、网盘挂载和 302/反代播放
           </p>
         </div>
       </div>
 
       <div className="flex gap-2 border-b border-gray-200">
-        {(['alist', 'webdav', 's3', 'cloud115', 'quark'] as StorageType[]).map((t) => (
+        {(['alist', 'webdav', 'clouddrive2', 's3', 'cloud115', 'quark'] as StorageType[]).map((t) => (
           <button
             key={t}
             onClick={() => setActive(t)}
@@ -85,6 +86,13 @@ const FIELD_DEFS: Record<StorageType, { key: string; label: string; secret?: boo
   ],
   quark: [
     { key: 'cookie', label: 'Cookie(从 pan.quark.cn 复制整段)', secret: true, placeholder: '__pus=...; __kp=...; kps=...' },
+    { key: 'force_302', label: '强制 302 直链(true/false,默认反代)' },
+  ],
+  clouddrive2: [
+    { key: 'url', label: 'CloudDrive2 WebDAV URL', placeholder: 'http://host.docker.internal:19798/dav 或 http://NAS-IP:19798/dav' },
+    { key: 'username', label: '用户名' },
+    { key: 'password', label: '密码 / Token', secret: true },
+    { key: 'token', label: 'Authorization Token(可选)', secret: true, placeholder: 'Bearer ... 或 Basic ...' },
     { key: 'force_302', label: '强制 302 直链(true/false,默认反代)' },
   ],
 }
@@ -226,11 +234,11 @@ function StorageUploadPanel({ type }: { type: StorageType }) {
   const [overwrite, setOverwrite] = useState(false)
   const [busy, setBusy] = useState(false)
 
-  const supported = type === 'alist' || type === 'webdav'
+  const supported = type === 'alist' || type === 'webdav' || type === 'clouddrive2'
 
   const submit = async () => {
     if (!supported) {
-      toast.error('本地直传目前支持 Alist / WebDAV。115/夸克建议先挂载到 Alist，再通过 Alist 转存。')
+      toast.error('本地直传目前支持 Alist / WebDAV / CloudDrive2。115/123/夸克建议通过 CloudDrive2 或 Alist 桥接后转存。')
       return
     }
     if (!sourcePath.trim()) {
@@ -274,7 +282,12 @@ function StorageUploadPanel({ type }: { type: StorageType }) {
       </div>
       {!supported && (
         <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          115 / 夸克原生上传需要私有分片上传协议。本版本先支持 Alist / WebDAV：把 115 或夸克挂到 Alist 后，选择 Alist 即可把本地文件转存到对应网盘。
+          115 / 夸克原生上传需要私有分片上传协议。推荐把 115、123、夸克等挂载到 CloudDrive2 或 Alist 后，在这里选择 CloudDrive2 / Alist 转存。
+        </p>
+      )}
+      {type === 'clouddrive2' && (
+        <p className="mb-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+          CloudDrive2 已经对接 115、123、阿里、夸克等网盘；这里通过它的 WebDAV 入口浏览、挂载和上传，播放默认走服务端反代以携带认证头。
         </p>
       )}
       <div className="grid gap-3 lg:grid-cols-2">

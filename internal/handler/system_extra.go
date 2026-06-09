@@ -104,7 +104,13 @@ func schemaHandler(_ *service.Container) gin.HandlerFunc {
 					"label": "网盘转存",
 					"items": []gin.H{
 						{"key": "cloud.upload_auto_enabled", "type": "toggle", "label": "启用自动转存"},
-						{"key": "cloud.upload_provider", "type": "select", "label": "转存目标"},
+						{"key": "cloud.upload_provider", "type": "select", "label": "转存目标", "options": []gin.H{
+							{"value": "clouddrive2", "label": "CloudDrive2（推荐，可桥接 115/123/阿里/夸克）"},
+							{"value": "alist", "label": "Alist（可桥接多网盘）"},
+							{"value": "webdav", "label": "WebDAV"},
+							{"value": "cloud115", "label": "115 原生（待接分片上传）"},
+							{"value": "quark", "label": "夸克原生（待接分片上传）"},
+						}},
 						{"key": "cloud.upload_source_dir", "type": "text", "label": "本地源目录"},
 						{"key": "cloud.upload_dest_path", "type": "text", "label": "网盘目标目录"},
 						{"key": "cloud.upload_recursive", "type": "toggle", "label": "递归扫描源目录"},

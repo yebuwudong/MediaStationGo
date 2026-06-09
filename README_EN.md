@@ -362,6 +362,19 @@ If qBittorrent also runs in Docker, mount the same host download directory as `/
 
 With smart classification enabled, downloads are saved to folders such as `/downloads/动画电影`, `/downloads/国产剧`, and `/downloads/综艺`.
 
+### Cloud Drives and CloudDrive2
+
+MediaStationGo supports Alist, WebDAV, 115, Quark, and CloudDrive2 as external storage backends. For most users, CloudDrive2 or Alist is the recommended bridge layer: CloudDrive2 already integrates many cloud drives such as 115, 123Pan, Aliyun Drive, and Quark, while MediaStationGo can use its WebDAV endpoint for browsing, library mounting, local-media upload, and authenticated proxy playback.
+
+Typical setup:
+
+1. Mount your 115 / 123Pan / Aliyun / Quark drive inside CloudDrive2.
+2. Select `CloudDrive2` in MediaStationGo → External Storage.
+3. Fill the CloudDrive2 WebDAV URL, for example `http://host.docker.internal:19798/dav` or `http://NAS-IP:19798/dav`.
+4. Save the config, then browse the cloud directory or mount it as a media library.
+
+The native 115 adapter still supports cookie / QR login, directory browsing, and 302 playback. For local file upload, prefer CloudDrive2 / Alist bridging instead of maintaining every provider's private chunk-upload protocol inside this project.
+
 ---
 
 ## 🐳 Docker Compose Configuration

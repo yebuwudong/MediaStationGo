@@ -291,7 +291,7 @@ const GROUPS: SettingGroup[] = [
   {
     key: 'cloud-upload',
     label: '网盘转存',
-    description: '把本地媒体复制上传到外部存储。推荐：将 115/夸克挂载到 Alist 后，使用 Alist 作为转存目标。',
+    description: '把本地媒体复制上传到外部存储。推荐：将 115、123、夸克等挂载到 CloudDrive2 或 Alist 后，使用桥接目标转存。',
     items: [
       {
         key: 'cloud.upload_auto_enabled',
@@ -306,7 +306,8 @@ const GROUPS: SettingGroup[] = [
         type: 'select',
         defaultValue: 'alist',
         options: [
-          { value: 'alist', label: 'Alist（推荐，可桥接 115/夸克）' },
+          { value: 'clouddrive2', label: 'CloudDrive2（推荐，可桥接 115/123/阿里/夸克）' },
+          { value: 'alist', label: 'Alist（可桥接多网盘）' },
           { value: 'webdav', label: 'WebDAV' },
           { value: 'cloud115', label: '115 原生（待接分片上传）' },
           { value: 'quark', label: '夸克原生（待接分片上传）' },

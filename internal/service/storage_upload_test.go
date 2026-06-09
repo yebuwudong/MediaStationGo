@@ -146,6 +146,52 @@ func TestSchedulerCloudUploadUsesConfiguredLocalSource(t *testing.T) {
 	}
 }
 
+func TestStorageConfigUploadLocalToCloudDrive2(t *testing.T) {
+	var uploaded []string
+	dav := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "MKCOL":
+			w.WriteHeader(http.StatusCreated)
+		case http.MethodHead:
+			w.WriteHeader(http.StatusNotFound)
+		case http.MethodPut:
+			uploaded = append(uploaded, r.URL.Path)
+			w.WriteHeader(http.StatusCreated)
+		default:
+			t.Fatalf("unexpected method %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer dav.Close()
+
+	_, storage := newStorageUploadTestService(t)
+	if _, err := storage.Save(t.Context(), StorageInput{
+		Type: "clouddrive2",
+		Config: map[string]any{
+			"url":      dav.URL + "/dav",
+			"username": "user",
+			"password": "pass",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "Movie.mkv"), []byte("movie"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := storage.UploadLocal(t.Context(), CloudUploadInput{
+		Type:       "clouddrive2",
+		SourcePath: source,
+		DestPath:   "/MediaStationGo",
+		Recursive:  true,
+	})
+	if err != nil {
+		t.Fatalf("upload local: %v", err)
+	}
+	if res.Uploaded != 1 || len(uploaded) != 1 || uploaded[0] != "/dav/MediaStationGo/Movie.mkv" {
+		t.Fatalf("result = %+v uploaded=%#v", res, uploaded)
+	}
+}
+
 func newStorageUploadTestService(t *testing.T) (*repository.Container, *StorageConfigService) {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})

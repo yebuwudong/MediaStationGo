@@ -24,7 +24,7 @@ const (
 	CloudUploadSidecarsKey         = "cloud.upload_sidecars"
 	CloudUploadOverwriteKey        = "cloud.upload_overwrite"
 	CloudUploadIntervalSecondsKey  = "cloud.upload_interval_seconds"
-	CloudUploadUnsupportedProvider = "本地文件直传目前支持 Alist / WebDAV；115/夸克原生上传需要各自的分片上传私有接口，建议先用 Alist 挂载 115/夸克后选择 Alist 转存。"
+	CloudUploadUnsupportedProvider = "本地文件直传目前支持 Alist / WebDAV / CloudDrive2；115/夸克原生上传需要各自的分片上传私有接口，建议先用 CloudDrive2 或 Alist 桥接后转存。"
 )
 
 type CloudUploadInput struct {
@@ -130,6 +130,8 @@ func (s *StorageConfigService) uploader(ctx context.Context, typ string) (storag
 	case "alist":
 		return newAlistUploader(view.Config), nil
 	case "webdav":
+		return newWebDAVUploader(view.Config), nil
+	case "clouddrive2":
 		return newWebDAVUploader(view.Config), nil
 	case "s3":
 		return nil, errors.New("s3 local upload is not implemented yet")

@@ -303,6 +303,75 @@ func Test115QRFlow(t *testing.T) {
 	}
 }
 
+func TestCloudDrive2WebDAVListAndResolve(t *testing.T) {
+	var gotAuth, gotDepth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotDepth = r.Header.Get("Depth")
+		if r.Method != "PROPFIND" {
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+		if r.URL.Path != "/dav" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusMultiStatus)
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:">
+  <d:response>
+    <d:href>/dav/</d:href>
+    <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/dav/115/</d:href>
+    <d:propstat><d:prop><d:displayname>115</d:displayname><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/dav/123/Movie.mkv</d:href>
+    <d:propstat><d:prop><d:displayname>Movie.mkv</d:displayname><d:getcontentlength>789</d:getcontentlength><d:resourcetype/></d:prop></d:propstat>
+  </d:response>
+</d:multistatus>`))
+	}))
+	defer srv.Close()
+
+	p, err := New(TypeCloudDrive2, map[string]any{"url": srv.URL + "/dav", "username": "u", "password": "p"}, srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := p.List(context.Background(), "")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if gotDepth != "1" {
+		t.Fatalf("Depth = %q, want 1", gotDepth)
+	}
+	if !strings.HasPrefix(gotAuth, "Basic ") {
+		t.Fatalf("missing basic auth: %q", gotAuth)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("entries = %#v", entries)
+	}
+	if !entries[0].IsDir || entries[0].ID != "/115" {
+		t.Fatalf("dir entry wrong: %#v", entries[0])
+	}
+	if entries[1].IsDir || entries[1].ID != "/123/Movie.mkv" || entries[1].Size != 789 {
+		t.Fatalf("file entry wrong: %#v", entries[1])
+	}
+	link, err := p.Resolve(context.Background(), entries[1].ID)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if link.URL != srv.URL+"/dav/123/Movie.mkv" {
+		t.Fatalf("bad url: %s", link.URL)
+	}
+	if !link.Proxy {
+		t.Fatalf("clouddrive2 should default to proxy mode")
+	}
+	if !strings.HasPrefix(link.Headers["Authorization"], "Basic ") {
+		t.Fatalf("resolve must carry basic auth: %#v", link.Headers)
+	}
+}
+
 func TestUnsupportedProvider(t *testing.T) {
 	if _, err := New("dropbox", nil, nil); err != ErrUnsupported {
 		t.Fatalf("want ErrUnsupported, got %v", err)

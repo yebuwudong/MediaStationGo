@@ -5,7 +5,7 @@ import toast from 'react-hot-toast'
 import {
   Activity, Bell, Clock, CloudDownload, Compass, Film,
   Cast, Globe, HardDrive, Heart, Home, Image, KeySquare,
-  ListMusic, LogOut, Rss, Search,
+  ListMusic, LogOut, Rss, Search, Trash2,
   Settings, Sliders, Sparkles, UserCog,
   Library as LibraryIcon, User as UserIcon, ChevronDown, Menu, X
 } from 'lucide-react'
@@ -32,6 +32,7 @@ export function Layout() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false)
   const [isProfileOpen, setIsProfileOpen] = useState(false)
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ media: true })
   const [profiles, setProfiles] = useState<PlayProfile[]>([])
   const [searchFocused, setSearchFocused] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -82,6 +83,26 @@ export function Layout() {
   const isAdmin = user?.role === 'admin'
   const can = (key: string) => isAdmin || isSuper || (permissions ?? {})[key] === true
   const activeProfile = profiles.find((p) => p.id === activeProfileId) ?? null
+  const sidebarExpanded = isSidebarOpen || isMobileDrawerOpen
+  const isRouteIn = (paths: string[]) =>
+    paths.some((path) => (path === '/' ? location.pathname === '/' : location.pathname.startsWith(path)))
+  const toggleGroup = (key: string) =>
+    setOpenGroups((current) => ({ ...current, [key]: !current[key] }))
+
+  useEffect(() => {
+    const groupPaths: Record<string, string[]> = {
+      media: ['/', '/libraries', '/library', '/poster-wall', '/discover', '/search', '/dlna', '/ai'],
+      personal: ['/favourites', '/playlists', '/playlist', '/history', '/profile', '/play-profiles'],
+      downloads: ['/downloads', '/download-clients', '/subscriptions', '/site-search'],
+      tools: ['/storage', '/storage-config', '/files', '/strm', '/duplicates', '/tasks', '/scheduler', '/recycle', '/stats'],
+      system: ['/admin', '/sites', '/notify-channels', '/license', '/settings', '/assistant'],
+    }
+    const active = Object.entries(groupPaths).find(([, paths]) => isRouteIn(paths))?.[0]
+    if (active) {
+      setOpenGroups((current) => (current[active] ? current : { ...current, [active]: true }))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname])
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -150,56 +171,97 @@ export function Layout() {
       </div>
 
       {/* Navigation List */}
-      <nav className="flex-1 overflow-y-auto px-4 py-6 space-y-6 scrollbar-hide">
-        {/* Navigation Group: Main */}
-        <div>
-          <SectionHeader label="影音中心" visible={isSidebarOpen || isMobileDrawerOpen} />
-          <div className="space-y-1">
-            <SidebarLink to="/" icon={<Home size={18} />} label="系统首页" end collapsed={!isSidebarOpen && !isMobileDrawerOpen} />
-            <SidebarLink to="/libraries" icon={<LibraryIcon size={18} />} label="媒体库" collapsed={!isSidebarOpen && !isMobileDrawerOpen} />
-            <SidebarLink to="/poster-wall" icon={<Image size={18} />} label="海报墙" collapsed={!isSidebarOpen && !isMobileDrawerOpen} />
-            {can('can_view_discover') && <SidebarLink to="/discover" icon={<Compass size={18} />} label="精彩发现" collapsed={!isSidebarOpen && !isMobileDrawerOpen} />}
-            {can('can_use_ai') && <SidebarLink to="/search" icon={<Search size={18} />} label="智能搜索" collapsed={!isSidebarOpen && !isMobileDrawerOpen} />}
-            {can('can_cast') && <SidebarLink to="/dlna" icon={<Cast size={18} />} label="DLNA 投屏" collapsed={!isSidebarOpen && !isMobileDrawerOpen} />}
-            {can('can_use_ai_assistant') && <SidebarLink to="/ai" icon={<Sparkles size={18} />} label="AI 助理" collapsed={!isSidebarOpen && !isMobileDrawerOpen} />}
-          </div>
-        </div>
+      <nav className="flex-1 overflow-y-auto px-4 py-5 space-y-2 scrollbar-hide">
+        <SidebarGroup
+          id="media"
+          icon={<Home size={18} />}
+          label="影音中心"
+          collapsed={!sidebarExpanded}
+          open={openGroups.media ?? true}
+          active={isRouteIn(['/', '/libraries', '/library', '/poster-wall', '/discover', '/search', '/dlna', '/ai'])}
+          onToggle={toggleGroup}
+        >
+          <SidebarLink to="/" icon={<Home size={16} />} label="系统首页" end child />
+          <SidebarLink to="/libraries" icon={<LibraryIcon size={16} />} label="媒体库" child />
+          <SidebarLink to="/poster-wall" icon={<Image size={16} />} label="海报墙" child />
+          {can('can_view_discover') && <SidebarLink to="/discover" icon={<Compass size={16} />} label="精彩发现" child />}
+          {can('can_use_ai') && <SidebarLink to="/search" icon={<Search size={16} />} label="智能搜索" child />}
+          {can('can_cast') && <SidebarLink to="/dlna" icon={<Cast size={16} />} label="DLNA 投屏" child />}
+          {can('can_use_ai_assistant') && <SidebarLink to="/ai" icon={<Sparkles size={16} />} label="AI 助理" child />}
+        </SidebarGroup>
 
-        {/* Navigation Group: Personal */}
-        <div>
-          <SectionHeader label="个人空间" visible={isSidebarOpen || isMobileDrawerOpen} />
-          <div className="space-y-1">
-            <SidebarLink to="/favourites" icon={<Heart size={18} />} label="我的收藏" collapsed={!isSidebarOpen && !isMobileDrawerOpen} />
-            <SidebarLink to="/playlists" icon={<ListMusic size={18} />} label="播放列表" collapsed={!isSidebarOpen && !isMobileDrawerOpen} />
-            <SidebarLink to="/history" icon={<Clock size={18} />} label="观看历史" collapsed={!isSidebarOpen && !isMobileDrawerOpen} />
-            <SidebarLink to="/profile" icon={<UserIcon size={18} />} label="账号信息" collapsed={!isSidebarOpen && !isMobileDrawerOpen} />
-          </div>
-        </div>
+        <SidebarGroup
+          id="personal"
+          icon={<UserIcon size={18} />}
+          label="个人空间"
+          collapsed={!sidebarExpanded}
+          open={openGroups.personal ?? false}
+          active={isRouteIn(['/favourites', '/playlists', '/playlist', '/history', '/profile', '/play-profiles'])}
+          onToggle={toggleGroup}
+        >
+          <SidebarLink to="/favourites" icon={<Heart size={16} />} label="我的收藏" child />
+          <SidebarLink to="/playlists" icon={<ListMusic size={16} />} label="播放列表" child />
+          <SidebarLink to="/history" icon={<Clock size={16} />} label="观看历史" child />
+          <SidebarLink to="/profile" icon={<UserIcon size={16} />} label="账号信息" child />
+          <SidebarLink to="/play-profiles" icon={<UserCog size={16} />} label="观影 Profile" child />
+        </SidebarGroup>
 
-        {/* Navigation Group: Automation */}
-        {(can('can_manage_downloads') || can('can_manage_subscriptions') || can('can_manage_sites')) && <div>
-          <SectionHeader label="下载订阅" visible={isSidebarOpen || isMobileDrawerOpen} />
-          <div className="space-y-1">
-            {can('can_manage_downloads') && <SidebarLink to="/downloads" icon={<CloudDownload size={18} />} label="下载中心" collapsed={!isSidebarOpen && !isMobileDrawerOpen} />}
-            {isAdmin && <SidebarLink to="/download-clients" icon={<Sliders size={18} />} label="下载器管理" collapsed={!isSidebarOpen && !isMobileDrawerOpen} />}
-            {can('can_manage_subscriptions') && <SidebarLink to="/subscriptions" icon={<Rss size={18} />} label="订阅管理" collapsed={!isSidebarOpen && !isMobileDrawerOpen} />}
-            {can('can_manage_sites') && <SidebarLink to="/site-search" icon={<Search size={18} />} label="站点检索" collapsed={!isSidebarOpen && !isMobileDrawerOpen} />}
-          </div>
-        </div>}
+        {(can('can_manage_downloads') || can('can_manage_subscriptions') || can('can_manage_sites')) && (
+          <SidebarGroup
+            id="downloads"
+            icon={<CloudDownload size={18} />}
+            label="下载订阅"
+            collapsed={!sidebarExpanded}
+            open={openGroups.downloads ?? false}
+            active={isRouteIn(['/downloads', '/download-clients', '/subscriptions', '/site-search'])}
+            onToggle={toggleGroup}
+          >
+            {can('can_manage_downloads') && <SidebarLink to="/downloads" icon={<CloudDownload size={16} />} label="下载中心" child />}
+            {can('can_manage_subscriptions') && <SidebarLink to="/subscriptions" icon={<Rss size={16} />} label="订阅管理" child />}
+            {can('can_manage_sites') && <SidebarLink to="/site-search" icon={<Search size={16} />} label="站点检索" child />}
+            {isAdmin && <SidebarLink to="/download-clients" icon={<Sliders size={16} />} label="下载器管理" child />}
+          </SidebarGroup>
+        )}
 
-        {/* Navigation Group: Admin Dashboard */}
         {isAdmin && (
-          <div>
-            <SectionHeader label="统一管理" visible={isSidebarOpen || isMobileDrawerOpen} />
-            <div className="space-y-1">
-              <SidebarLink to="/admin" icon={<Settings size={18} />} label="媒体与用户" collapsed={!isSidebarOpen && !isMobileDrawerOpen} />
-              <SidebarLink to="/sites" icon={<Globe size={18} />} label="站点与下载器" collapsed={!isSidebarOpen && !isMobileDrawerOpen} />
-              <SidebarLink to="/storage" icon={<HardDrive size={18} />} label="存储与文件" collapsed={!isSidebarOpen && !isMobileDrawerOpen} />
-              <SidebarLink to="/stats" icon={<Activity size={18} />} label="运行状态" collapsed={!isSidebarOpen && !isMobileDrawerOpen} />
-              <SidebarLink to="/license" icon={<KeySquare size={18} />} label="授权许可" collapsed={!isSidebarOpen && !isMobileDrawerOpen} />
-              <SidebarLink to="/settings" icon={<Sliders size={18} />} label="系统设置" collapsed={!isSidebarOpen && !isMobileDrawerOpen} />
-            </div>
-          </div>
+          <>
+            <SidebarGroup
+              id="tools"
+              icon={<HardDrive size={18} />}
+              label="存储工具"
+              collapsed={!sidebarExpanded}
+              open={openGroups.tools ?? false}
+              active={isRouteIn(['/storage', '/storage-config', '/files', '/strm', '/duplicates', '/tasks', '/scheduler', '/recycle', '/stats'])}
+              onToggle={toggleGroup}
+            >
+              <SidebarLink to="/storage" icon={<HardDrive size={16} />} label="存储与文件" child />
+              <SidebarLink to="/storage-config" icon={<CloudDownload size={16} />} label="外部存储" child />
+              <SidebarLink to="/files" icon={<LibraryIcon size={16} />} label="文件管理" child />
+              <SidebarLink to="/strm" icon={<Cast size={16} />} label="STRM 管理" child />
+              <SidebarLink to="/duplicates" icon={<Image size={16} />} label="重复文件" child />
+              <SidebarLink to="/tasks" icon={<Activity size={16} />} label="任务队列" child />
+              <SidebarLink to="/scheduler" icon={<Clock size={16} />} label="计划任务" child />
+              <SidebarLink to="/recycle" icon={<Trash2 size={16} />} label="回收站" child />
+              <SidebarLink to="/stats" icon={<Activity size={16} />} label="运行状态" child />
+            </SidebarGroup>
+
+            <SidebarGroup
+              id="system"
+              icon={<Settings size={18} />}
+              label="系统管理"
+              collapsed={!sidebarExpanded}
+              open={openGroups.system ?? false}
+              active={isRouteIn(['/admin', '/sites', '/notify-channels', '/license', '/settings', '/assistant'])}
+              onToggle={toggleGroup}
+            >
+              <SidebarLink to="/admin" icon={<Settings size={16} />} label="媒体与用户" child />
+              <SidebarLink to="/sites" icon={<Globe size={16} />} label="站点管理" child />
+              <SidebarLink to="/notify-channels" icon={<Bell size={16} />} label="通知渠道" child />
+              <SidebarLink to="/assistant" icon={<Sparkles size={16} />} label="AI 会话" child />
+              <SidebarLink to="/license" icon={<KeySquare size={16} />} label="授权许可" child />
+              <SidebarLink to="/settings" icon={<Sliders size={16} />} label="系统设置" child />
+            </SidebarGroup>
+          </>
         )}
       </nav>
 
@@ -469,13 +531,62 @@ export function Layout() {
   )
 }
 
-function SectionHeader({ label, visible }: { label: string; visible: boolean }) {
-  if (!visible) return <div className="h-5" />;
+interface SidebarGroupProps {
+  id: string;
+  icon: React.ReactNode;
+  label: string;
+  children: React.ReactNode;
+  collapsed?: boolean;
+  open?: boolean;
+  active?: boolean;
+  onToggle: (id: string) => void;
+}
+
+function SidebarGroup({ id, icon, label, children, collapsed, open, active, onToggle }: SidebarGroupProps) {
   return (
-    <div className="px-4 mb-2 mt-4">
-      <span className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">
-        {label}
-      </span>
+    <div className="space-y-1">
+      <button
+        type="button"
+        onClick={() => onToggle(id)}
+        className={clsx(
+          'group relative flex w-full items-center gap-3.5 rounded-xl px-4 py-3 text-sm font-bold transition-all duration-300',
+          active ? 'bg-gray-950 text-white shadow-sm' : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900',
+          collapsed && 'justify-center px-0',
+        )}
+      >
+        <span className={clsx('flex h-5 w-5 shrink-0 items-center justify-center', active ? 'text-[#c9954a]' : 'text-gray-500 group-hover:text-gray-700')}>
+          {icon}
+        </span>
+        {!collapsed && (
+          <>
+            <span className="flex-1 truncate text-left">{label}</span>
+            <ChevronDown
+              size={14}
+              className={clsx('transition-transform duration-200', open && 'rotate-180')}
+            />
+          </>
+        )}
+        {collapsed && (
+          <div className="absolute left-full ml-3 rounded-xl bg-gray-900 px-2.5 py-1.5 text-xs font-semibold text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
+            {label}
+          </div>
+        )}
+      </button>
+      <AnimatePresence initial={false}>
+        {!collapsed && open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}
+            className="overflow-hidden"
+          >
+            <div className="space-y-1 pb-1 pl-3">
+              {children}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
@@ -486,9 +597,10 @@ interface SidebarLinkProps {
   label: string;
   end?: boolean;
   collapsed?: boolean;
+  child?: boolean;
 }
 
-function SidebarLink({ to, icon, label, end, collapsed }: SidebarLinkProps) {
+function SidebarLink({ to, icon, label, end, collapsed, child }: SidebarLinkProps) {
   return (
     <NavLink
       to={to}
@@ -496,6 +608,7 @@ function SidebarLink({ to, icon, label, end, collapsed }: SidebarLinkProps) {
       className={({ isActive }) =>
         clsx(
           "flex items-center gap-3.5 rounded-xl px-4 py-3 text-sm font-semibold transition-all duration-300 relative group",
+          child && "py-2.5 text-[13px]",
           isActive
             ? "bg-[#111827] text-white shadow-sm"
             : "text-gray-500 hover:bg-gray-50 hover:text-gray-900"
