@@ -12,11 +12,13 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -53,6 +55,9 @@ type ScannerService struct {
 	probe   *FFprobeService
 	scraper *ScraperService
 	storage *StorageConfigService
+
+	cloudScanMu sync.Mutex
+	cloudScans  map[string]*cloudScanEntry
 }
 
 // NewScannerService is the constructor.
@@ -67,6 +72,7 @@ func NewScannerService(
 	return &ScannerService{
 		cfg: cfg, log: log, repo: repo, hub: hub,
 		probe: probe, scraper: scraper,
+		cloudScans: make(map[string]*cloudScanEntry),
 	}
 }
 
@@ -87,6 +93,292 @@ type ScanResult struct {
 	Probed        int    `json:"probed"`
 	LocalMetadata int    `json:"local_metadata"`
 	Removed       int64  `json:"removed"`
+}
+
+var ErrCloudScanAlreadyRunning = errors.New("cloud scan already running")
+
+// CloudScanStatus is the operator-facing state for long-running cloud scans.
+type CloudScanStatus struct {
+	LibraryID      string    `json:"library_id"`
+	Provider       string    `json:"provider"`
+	Stage          string    `json:"stage"`
+	State          string    `json:"state"`
+	StartedAt      time.Time `json:"started_at,omitempty"`
+	UpdatedAt      time.Time `json:"updated_at,omitempty"`
+	FinishedAt     time.Time `json:"finished_at,omitempty"`
+	Dirs           int       `json:"dirs"`
+	Discovered     int       `json:"discovered"`
+	Visited        int       `json:"visited"`
+	Added          int       `json:"added"`
+	Updated        int       `json:"updated"`
+	Skipped        int       `json:"skipped"`
+	Removed        int64     `json:"removed"`
+	Error          string    `json:"error,omitempty"`
+	ResumeHint     string    `json:"resume_hint,omitempty"`
+	Estimate       string    `json:"estimate_message,omitempty"`
+	FilesPerSecond float64   `json:"files_per_second,omitempty"`
+}
+
+type cloudScanEntry struct {
+	status CloudScanStatus
+	cancel context.CancelFunc
+}
+
+func (s *ScannerService) beginCloudScan(ctx context.Context, lib *model.Library, mount CloudMountInfo) (context.Context, func(*ScanResult, error), error) {
+	if s == nil || lib == nil {
+		return ctx, func(*ScanResult, error) {}, nil
+	}
+	s.cloudScanMu.Lock()
+	if s.cloudScans == nil {
+		s.cloudScans = make(map[string]*cloudScanEntry)
+	}
+	if entry := s.cloudScans[lib.ID]; entry != nil && (entry.status.State == "running" || entry.status.State == "canceling") {
+		s.cloudScanMu.Unlock()
+		return ctx, nil, ErrCloudScanAlreadyRunning
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	now := time.Now()
+	entry := &cloudScanEntry{
+		status: CloudScanStatus{
+			LibraryID:  lib.ID,
+			Provider:   mount.Provider,
+			Stage:      "listing",
+			State:      "running",
+			StartedAt:  now,
+			UpdatedAt:  now,
+			ResumeHint: "中断后再次点击扫描会从头遍历，但已入库媒体会去重更新，只补齐缺失项。",
+			Estimate:   "小目录通常几十秒；几万文件的大目录可能需要数分钟到数小时，取决于网盘接口速度。",
+		},
+		cancel: cancel,
+	}
+	s.cloudScans[lib.ID] = entry
+	s.cloudScanMu.Unlock()
+
+	finish := func(res *ScanResult, err error) {
+		s.cloudScanMu.Lock()
+		defer s.cloudScanMu.Unlock()
+		current := s.cloudScans[lib.ID]
+		if current == nil {
+			return
+		}
+		now := time.Now()
+		if res != nil {
+			current.status.Visited = res.Visited
+			current.status.Added = res.Added
+			current.status.Updated = res.Updated
+			current.status.Skipped = res.Skipped
+			current.status.Removed = res.Removed
+		}
+		current.status.UpdatedAt = now
+		current.status.FinishedAt = now
+		current.cancel = nil
+		switch {
+		case errors.Is(err, context.Canceled):
+			current.status.State = "canceled"
+			current.status.Stage = "canceled"
+			current.status.Error = ""
+		case errors.Is(err, context.DeadlineExceeded):
+			current.status.State = "error"
+			current.status.Stage = "error"
+			current.status.Error = "扫描超时：" + err.Error()
+		case err != nil:
+			current.status.State = "error"
+			current.status.Stage = "error"
+			current.status.Error = err.Error()
+		default:
+			current.status.State = "finished"
+			current.status.Stage = "finished"
+			current.status.Error = ""
+		}
+		if s.hub != nil {
+			s.hub.Publish("scan", map[string]any{
+				"library_id": lib.ID,
+				"provider":   mount.Provider,
+				"cloud":      true,
+				"finished":   true,
+				"state":      current.status.State,
+				"stage":      current.status.Stage,
+				"error":      current.status.Error,
+				"visited":    current.status.Visited,
+				"added":      current.status.Added,
+				"updated":    current.status.Updated,
+				"skipped":    current.status.Skipped,
+				"removed":    current.status.Removed,
+			})
+		}
+	}
+	return runCtx, finish, nil
+}
+
+func (s *ScannerService) updateCloudScanProgress(libraryID, stage string, dirs, discovered, visited, added, updated, skipped int, removed int64, filesPerSecond float64) {
+	if s == nil {
+		return
+	}
+	s.cloudScanMu.Lock()
+	defer s.cloudScanMu.Unlock()
+	entry := s.cloudScans[libraryID]
+	if entry == nil {
+		return
+	}
+	entry.status.Stage = stage
+	entry.status.UpdatedAt = time.Now()
+	entry.status.Dirs = dirs
+	entry.status.Discovered = discovered
+	entry.status.Visited = visited
+	entry.status.Added = added
+	entry.status.Updated = updated
+	entry.status.Skipped = skipped
+	entry.status.Removed = removed
+	entry.status.FilesPerSecond = filesPerSecond
+}
+
+// CloudScanStatuses returns the current or most recent status per cloud library.
+func (s *ScannerService) CloudScanStatuses() []CloudScanStatus {
+	if s == nil {
+		return nil
+	}
+	s.cloudScanMu.Lock()
+	defer s.cloudScanMu.Unlock()
+	out := make([]CloudScanStatus, 0, len(s.cloudScans))
+	for _, entry := range s.cloudScans {
+		out = append(out, entry.status)
+	}
+	return out
+}
+
+func (s *ScannerService) CancelCloudScan(libraryID string) bool {
+	if s == nil || strings.TrimSpace(libraryID) == "" {
+		return false
+	}
+	s.cloudScanMu.Lock()
+	defer s.cloudScanMu.Unlock()
+	entry := s.cloudScans[libraryID]
+	if entry == nil || entry.cancel == nil || (entry.status.State != "running" && entry.status.State != "canceling") {
+		return false
+	}
+	entry.status.State = "canceling"
+	entry.status.Stage = "canceling"
+	entry.status.UpdatedAt = time.Now()
+	entry.cancel()
+	return true
+}
+
+func (s *ScannerService) CancelAllCloudScans() int {
+	if s == nil {
+		return 0
+	}
+	s.cloudScanMu.Lock()
+	defer s.cloudScanMu.Unlock()
+	cancelled := 0
+	for _, entry := range s.cloudScans {
+		if entry == nil || entry.cancel == nil || (entry.status.State != "running" && entry.status.State != "canceling") {
+			continue
+		}
+		entry.status.State = "canceling"
+		entry.status.Stage = "canceling"
+		entry.status.UpdatedAt = time.Now()
+		entry.cancel()
+		cancelled++
+	}
+	return cancelled
+}
+
+func (s *ScannerService) CancelCloudScansForProvider(provider string) int {
+	if s == nil {
+		return 0
+	}
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return 0
+	}
+	s.cloudScanMu.Lock()
+	defer s.cloudScanMu.Unlock()
+	cancelled := 0
+	for _, entry := range s.cloudScans {
+		if entry == nil || entry.status.Provider != provider || entry.cancel == nil || (entry.status.State != "running" && entry.status.State != "canceling") {
+			continue
+		}
+		entry.status.State = "canceling"
+		entry.status.Stage = "canceling"
+		entry.status.UpdatedAt = time.Now()
+		entry.cancel()
+		cancelled++
+	}
+	return cancelled
+}
+
+func (s *ScannerService) StartCloudLibraryScan(libraryID string, autoScrape bool) (CloudScanStatus, bool, error) {
+	if s == nil {
+		return CloudScanStatus{}, false, errors.New("scanner unavailable")
+	}
+	lib, err := s.repo.Library.FindByID(context.Background(), libraryID)
+	if err != nil {
+		return CloudScanStatus{}, false, err
+	}
+	if lib == nil {
+		return CloudScanStatus{}, false, errors.New("library not found")
+	}
+	mount, ok := ParseCloudLibraryMount(lib.Path)
+	if !ok {
+		return CloudScanStatus{}, false, errors.New("library is not a cloud mount")
+	}
+	s.cloudScanMu.Lock()
+	if entry := s.cloudScans[libraryID]; entry != nil && (entry.status.State == "running" || entry.status.State == "canceling") {
+		status := entry.status
+		s.cloudScanMu.Unlock()
+		return status, false, nil
+	}
+	s.cloudScanMu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
+		defer cancel()
+		if autoScrape {
+			_, err = s.ScanLibrary(ctx, libraryID)
+		} else {
+			_, err = s.ScanLibraryWithoutAutoScrape(ctx, libraryID)
+		}
+		if err != nil && !errors.Is(err, ErrCloudScanAlreadyRunning) && s.log != nil {
+			s.log.Warn("cloud library background scan failed", zap.String("library_id", libraryID), zap.Error(err))
+		}
+	}()
+	status := CloudScanStatus{
+		LibraryID:  libraryID,
+		Provider:   mount.Provider,
+		Stage:      "queued",
+		State:      "queued",
+		StartedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+		ResumeHint: "中断后再次点击扫描会从头遍历，但已入库媒体会去重更新，只补齐缺失项。",
+		Estimate:   "小目录通常几十秒；几万文件的大目录可能需要数分钟到数小时，取决于网盘接口速度。",
+	}
+	return status, true, nil
+}
+
+func (s *ScannerService) StartAllCloudLibraryScans() ([]CloudScanStatus, error) {
+	if s == nil {
+		return nil, errors.New("scanner unavailable")
+	}
+	libs, err := s.repo.Library.List(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	libs = FilterShadowedCloudLibraries(libs)
+	statuses := make([]CloudScanStatus, 0, len(libs))
+	for _, lib := range libs {
+		if !lib.Enabled {
+			continue
+		}
+		if _, ok := ParseCloudLibraryMount(lib.Path); !ok {
+			continue
+		}
+		status, _, err := s.StartCloudLibraryScan(lib.ID, false)
+		if err != nil {
+			status = CloudScanStatus{LibraryID: lib.ID, State: "error", Error: err.Error(), UpdatedAt: time.Now()}
+		}
+		statuses = append(statuses, status)
+	}
+	return statuses, nil
 }
 
 // ScanLibrary walks the library root and persists discovered media files.
@@ -122,7 +414,18 @@ func (s *ScannerService) scanLibrary(ctx context.Context, libraryID string, auto
 			})
 			return res, nil
 		}
-		return s.scanCloudLibrary(ctx, lib, mount, autoScrape)
+		scanCtx, finish, err := s.beginCloudScan(ctx, lib, mount)
+		if err != nil {
+			if errors.Is(err, ErrCloudScanAlreadyRunning) {
+				return &ScanResult{LibraryID: lib.ID, Skipped: 1}, nil
+			}
+			return nil, err
+		}
+		res, err := s.scanCloudLibrary(scanCtx, lib, mount, autoScrape)
+		if finish != nil {
+			finish(res, err)
+		}
+		return res, err
 	}
 	res := &ScanResult{LibraryID: lib.ID}
 	seen := make(map[string]struct{})
@@ -238,6 +541,7 @@ func (s *ScannerService) scanCloudLibrary(ctx context.Context, lib *model.Librar
 		if elapsed.Seconds() > 0 {
 			filesPerSecond = float64(processed) / elapsed.Seconds()
 		}
+		s.updateCloudScanProgress(lib.ID, stage, dirsVisited, filesDiscovered, res.Visited, res.Added, res.Updated, res.Skipped, res.Removed, filesPerSecond)
 		s.hub.Publish("scan", map[string]any{
 			"library_id":       lib.ID,
 			"cloud":            true,
@@ -335,6 +639,11 @@ func (s *ScannerService) scanCloudLibrary(ctx context.Context, lib *model.Librar
 		return res, err
 	}
 	for _, candidate := range candidates {
+		select {
+		case <-ctx.Done():
+			return res, ctx.Err()
+		default:
+		}
 		seen[candidate.path] = struct{}{}
 		s.ingestCloudFile(ctx, lib, typ, candidate.ref, candidate.path, candidate.name, candidate.size, candidate.localMeta, res)
 		publishProgress("importing", res.Visited == 1 || res.Visited%100 == 0)
@@ -403,7 +712,7 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 		Path:         path,
 		SizeBytes:    size,
 		Container:    strings.TrimPrefix(ext, "."),
-		STRMURL:      "/api/cloud/play/" + typ + "?ref=" + url.QueryEscape(ref),
+		STRMURL:      BuildPublicAPIURL(ctx, s.repo, s.cfg, "/api/cloud/play/"+typ, url.Values{"ref": []string{ref}}),
 		ScrapeStatus: "pending",
 	}
 	if ext == ".strm" {
@@ -658,6 +967,7 @@ func (s *ScannerService) pruneMissingCloudMedia(ctx context.Context, libraryID s
 			continue
 		}
 		res := s.repo.DB.WithContext(ctx).
+			Unscoped().
 			Where("id = ?", row.ID).
 			Delete(&model.Media{})
 		if res.Error != nil {

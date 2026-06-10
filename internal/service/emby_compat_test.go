@@ -100,6 +100,45 @@ func TestEmbyItemsExposeSeriesSeasonEpisodeHierarchy(t *testing.T) {
 	}
 }
 
+func TestEmbyCloudAnimeUsesSeriesNameFromChineseSeasonFolder(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "OpenList · 国漫", Path: `cloud://openlist/国漫`, Type: "anime", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	for _, media := range []model.Media{
+		{
+			Base:       model.Base{ID: "cloud-ep-1"},
+			LibraryID:  lib.ID,
+			Title:      "04",
+			Path:       `cloud://openlist/国漫/剑来/第二季/04.mkv`,
+			SeasonNum:  2,
+			EpisodeNum: 4,
+		},
+		{
+			Base:       model.Base{ID: "cloud-ep-2"},
+			LibraryID:  lib.ID,
+			Title:      "05",
+			Path:       `cloud://openlist/国漫/剑来/第二季/05.mkv`,
+			SeasonNum:  2,
+			EpisodeNum: 5,
+		},
+	} {
+		if err := svc.repo.DB.Create(&media).Error; err != nil {
+			t.Fatalf("create media: %v", err)
+		}
+	}
+
+	root, err := svc.Items(t.Context(), ItemsParams{ParentID: lib.ID, Limit: 50})
+	if err != nil {
+		t.Fatalf("library items: %v", err)
+	}
+	items := root["Items"].([]map[string]any)
+	if len(items) != 1 || items[0]["Type"] != "Series" || items[0]["Name"] != "剑来" {
+		t.Fatalf("cloud anime should be grouped as one series named 剑来, got %#v", items)
+	}
+}
+
 func TestEmbyRootItemsExposeLibraries(t *testing.T) {
 	svc := newTestEmbyService(t)
 	for _, lib := range []model.Library{

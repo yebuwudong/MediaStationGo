@@ -27,6 +27,8 @@ data/
 cache/
 logs/
 .tmp-deploy-data/
+.tmp-deploy-smoke-data/
+.tmp-deploy-smoke-cache/
 .tmp-deploy-cache/
 .tmp-deploy-server.*
 .mediastation.pid

@@ -53,6 +53,9 @@ func saveStorageConfigHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		if in.Enabled != nil && !*in.Enabled && svc.Scan != nil {
+			_ = svc.Scan.CancelCloudScansForProvider(in.Type)
+		}
 		c.JSON(http.StatusOK, row)
 	}
 }

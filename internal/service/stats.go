@@ -34,14 +34,14 @@ func NewStatsService(log *zap.Logger, repo *repository.Container) *StatsService 
 
 // Snapshot is the JSON returned by /api/stats.
 type Snapshot struct {
-	Libraries      int64        `json:"libraries"`
-	MediaCount     int64        `json:"media_count"`
-	UsersCount     int64        `json:"users_count"`
-	TotalSizeBytes int64        `json:"total_size_bytes"`
-	TotalSeconds   int64        `json:"total_seconds"`
+	Libraries      int64         `json:"libraries"`
+	MediaCount     int64         `json:"media_count"`
+	UsersCount     int64         `json:"users_count"`
+	TotalSizeBytes int64         `json:"total_size_bytes"`
+	TotalSeconds   int64         `json:"total_seconds"`
 	RecentlyAdded  []model.Media `json:"recently_added"`
-	Hardware       Hardware     `json:"hardware"`
-	GeneratedAt    time.Time    `json:"generated_at"`
+	Hardware       Hardware      `json:"hardware"`
+	GeneratedAt    time.Time     `json:"generated_at"`
 }
 
 // Hardware is the live CPU / memory / disk readings.
@@ -58,10 +58,26 @@ type Hardware struct {
 // Compute builds a fresh snapshot.
 func (s *StatsService) Compute(ctx context.Context, dataDir string) (*Snapshot, error) {
 	snap := &Snapshot{GeneratedAt: time.Now()}
-	if err := s.repo.DB.Model(&model.Library{}).Count(&snap.Libraries).Error; err != nil {
+	libs, err := s.repo.Library.List(ctx)
+	if err != nil {
 		return nil, err
 	}
-	if err := s.repo.DB.Model(&model.Media{}).Count(&snap.MediaCount).Error; err != nil {
+	libs = FilterShadowedCloudLibraries(libs)
+	activeLibraryIDs := make([]string, 0, len(libs))
+	for _, lib := range libs {
+		if !lib.Enabled {
+			continue
+		}
+		activeLibraryIDs = append(activeLibraryIDs, lib.ID)
+	}
+	snap.Libraries = int64(len(activeLibraryIDs))
+	mediaQuery := s.repo.DB.Model(&model.Media{})
+	if len(activeLibraryIDs) == 0 {
+		mediaQuery = mediaQuery.Where("1 = 0")
+	} else {
+		mediaQuery = mediaQuery.Where("library_id IN ?", activeLibraryIDs)
+	}
+	if err := mediaQuery.Count(&snap.MediaCount).Error; err != nil {
 		return nil, err
 	}
 	if err := s.repo.DB.Model(&model.User{}).Count(&snap.UsersCount).Error; err != nil {
@@ -72,7 +88,13 @@ func (s *StatsService) Compute(ctx context.Context, dataDir string) (*Snapshot, 
 		Seconds int64
 	}
 	var sum sumRow
-	if err := s.repo.DB.Model(&model.Media{}).
+	sumQuery := s.repo.DB.Model(&model.Media{})
+	if len(activeLibraryIDs) == 0 {
+		sumQuery = sumQuery.Where("1 = 0")
+	} else {
+		sumQuery = sumQuery.Where("library_id IN ?", activeLibraryIDs)
+	}
+	if err := sumQuery.
 		Select("COALESCE(SUM(size_bytes),0) as size, COALESCE(SUM(duration_sec),0) as seconds").
 		Scan(&sum).Error; err != nil {
 		return nil, err
@@ -80,7 +102,13 @@ func (s *StatsService) Compute(ctx context.Context, dataDir string) (*Snapshot, 
 	snap.TotalSizeBytes = sum.Size
 	snap.TotalSeconds = sum.Seconds
 
-	if err := s.repo.DB.Model(&model.Media{}).
+	recentQuery := s.repo.DB.Model(&model.Media{})
+	if len(activeLibraryIDs) == 0 {
+		recentQuery = recentQuery.Where("1 = 0")
+	} else {
+		recentQuery = recentQuery.Where("library_id IN ?", activeLibraryIDs)
+	}
+	if err := recentQuery.
 		Order("created_at desc").Limit(12).
 		Find(&snap.RecentlyAdded).Error; err != nil {
 		return nil, err

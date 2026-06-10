@@ -151,7 +151,13 @@ export function hlsURL(mediaId: string): string {
 export function imageURL(remote?: string): string {
   if (!remote) return ''
   if (remote.startsWith('/api/img')) return remote
+  if (remote.startsWith('/api/')) return withQuery(remote, tokenQuery())
   return `/api/img?url=${encodeURIComponent(remote)}&${tokenQuery()}`
+}
+
+function withQuery(url: string, query: string): string {
+  if (!query) return url
+  return `${url}${url.includes('?') ? '&' : '?'}${query}`
 }
 
 // getToken returns the current auth token

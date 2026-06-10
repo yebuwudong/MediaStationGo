@@ -35,6 +35,8 @@ func ApplyRuntimeSetting(cfg *config.Config, key, value string) {
 	switch key {
 	case "ffmpeg.path", "app.ffmpeg_path":
 		cfg.App.FFmpegPath = value
+	case "app.server_url", "server.url", "public.server_url", "strm.base_url":
+		cfg.App.ServerURL = strings.TrimRight(value, "/")
 	case "ffprobe.path", "app.ffprobe_path":
 		cfg.App.FFprobePath = value
 	case "ffprobe.max_concurrent", "app.ffprobe_max_concurrent":

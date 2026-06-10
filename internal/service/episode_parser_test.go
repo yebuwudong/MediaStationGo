@@ -18,9 +18,13 @@ func TestParseEpisode(t *testing.T) {
 		{`Some Show/S02/Some Show - E04.mkv`, 2, 4},
 		{`剧集/第2季/剧集 第05集.mkv`, 2, 5},
 		{"日剧 第03集.mkv", 1, 3},
+		{"日剧 第十集.mkv", 1, 10},
+		{"日剧 第二十五话.mkv", 1, 25},
 		{"日剧 第12话.mkv", 1, 12},
 		{"综艺 第4期下.mkv", 1, 4},
 		{`综艺/Season 06/综艺 第17期.mkv`, 6, 17},
+		{`动漫/第二季/04.mkv`, 2, 4},
+		{`动漫/第十季/第十一集.mkv`, 10, 11},
 		{"Movie.2020.1080p.mkv", 0, 0},
 	}
 	for _, tc := range cases {

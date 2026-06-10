@@ -1,11 +1,12 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
-import { Cloud, FileVideo, Folder, Loader2, QrCode, Save, Send, Trash2, Upload } from 'lucide-react'
+import { Cloud, FileVideo, Folder, Loader2, PauseCircle, QrCode, RefreshCw, Save, Send, Trash2, Upload } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 import { libraryAPI } from '../api/library'
 import {
   cloudAPI,
   storageAPI,
+  type CloudScanStatus,
   type CloudEntry,
   type QRSession,
   type StorageType,
@@ -117,12 +118,14 @@ const FIELD_DEFS: Record<StorageType, { key: string; label: string; secret?: boo
     { key: 'url', label: 'WebDAV URL(浏览/挂载)', placeholder: 'http://NAS-IP:5244/dav/' },
     { key: 'username', label: 'WebDAV 用户名' },
     { key: 'password', label: 'WebDAV 密码', secret: true },
+    { key: 'timeout_seconds', label: '请求超时秒数', placeholder: '120' },
     { key: 'force_302', label: '强制 302 直链(true/false,默认反代)' },
   ],
   webdav: [
     { key: 'url', label: 'URL', placeholder: 'https://example.com/dav/' },
     { key: 'username', label: '用户名' },
     { key: 'password', label: '密码', secret: true },
+    { key: 'timeout_seconds', label: '请求超时秒数', placeholder: '120' },
   ],
   s3: [
     { key: 'endpoint', label: 'Endpoint', placeholder: 'https://s3.amazonaws.com' },
@@ -145,6 +148,7 @@ const FIELD_DEFS: Record<StorageType, { key: string; label: string; secret?: boo
     { key: 'username', label: '用户名' },
     { key: 'password', label: '密码 / Token', secret: true },
     { key: 'token', label: 'Authorization Token(可选)', secret: true, placeholder: 'Bearer ... 或 Basic ...' },
+    { key: 'timeout_seconds', label: '请求超时秒数', placeholder: '120' },
     { key: 'force_302', label: '强制 302 直链(true/false,默认反代)' },
   ],
 }
@@ -169,7 +173,7 @@ function StorageForm({ type }: { type: StorageType }) {
         next[f.key] = v === '********' ? '' : v ?? ''
       }
       setConfig(next)
-      setEnabled(r.enabled)
+      setEnabled(r.enabled ?? true)
     } catch {
       const next: Record<string, string> = {}
       for (const f of fields) next[f.key] = ''
@@ -480,6 +484,9 @@ function CloudBrowser({ type }: { type: StorageType }) {
   const [loading, setLoading] = useState(false)
   const [mounting, setMounting] = useState(false)
   const [batchMounting, setBatchMounting] = useState(false)
+  const [scanBusy, setScanBusy] = useState(false)
+  const [cancelBusy, setCancelBusy] = useState(false)
+  const [scanStatuses, setScanStatuses] = useState<CloudScanStatus[]>([])
   const [mountMediaType, setMountMediaType] = useState('auto')
   const [error, setError] = useState('')
 
@@ -504,6 +511,11 @@ function CloudBrowser({ type }: { type: StorageType }) {
     setMounts(libs.filter((lib) => cloudLibraryProvider(lib.path) === type))
   }
 
+  const loadScanStatus = async () => {
+    const r = await storageAPI.cloudScanStatus()
+    setScanStatuses((r.items ?? []).filter((item) => !type || item.provider === type))
+  }
+
   useEffect(() => {
     load(cur.id).catch(() => undefined)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -511,6 +523,15 @@ function CloudBrowser({ type }: { type: StorageType }) {
 
   useEffect(() => {
     loadMounts().catch(() => undefined)
+    loadScanStatus().catch(() => undefined)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [type])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      loadScanStatus().catch(() => undefined)
+    }, 3000)
+    return () => window.clearInterval(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [type])
 
@@ -600,8 +621,82 @@ function CloudBrowser({ type }: { type: StorageType }) {
     await loadMounts()
   }
 
+  const scanAllCloudLibraries = async () => {
+    setScanBusy(true)
+    try {
+      const r = await storageAPI.scanAllCloud()
+      setScanStatuses(r.items ?? [])
+      toast.success(r.message ?? '已开始扫描所有启用的网盘媒体库')
+    } catch (err: unknown) {
+      toast.error((err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? '启动扫描失败')
+    } finally {
+      setScanBusy(false)
+    }
+  }
+
+  const cancelCloudScans = async () => {
+    setCancelBusy(true)
+    try {
+      const r = await storageAPI.cancelCloudScan('', type)
+      toast.success(r.message ?? `已中断 ${r.cancelled} 个扫描任务`)
+      await loadScanStatus()
+    } catch (err: unknown) {
+      toast.error((err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? '中断扫描失败')
+    } finally {
+      setCancelBusy(false)
+    }
+  }
+
   return (
     <div className="mt-2 rounded-lg border border-gray-200 p-3" onClick={(e) => e.preventDefault()}>
+      <div className="mb-3 rounded border border-emerald-100 bg-emerald-50/60 p-2">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-xs font-semibold text-ink-100">网盘媒体库扫描</div>
+            <p className="text-xs text-ink-50">
+              只需在系统设置填写公开域名，扫描会自动为网盘媒体生成 STRM/302 播放入口；中断后再次扫描会去重补齐。
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="rounded border border-emerald-300 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50"
+              disabled={scanBusy}
+              onClick={scanAllCloudLibraries}
+            >
+              {scanBusy ? <Loader2 size={13} className="inline animate-spin" /> : <RefreshCw size={13} className="inline" />}
+              {' '}一键扫描全部网盘库
+            </button>
+            <button
+              type="button"
+              className="rounded border border-red-200 px-2 py-1 text-xs text-red-500 hover:bg-red-50"
+              disabled={cancelBusy}
+              onClick={cancelCloudScans}
+            >
+              {cancelBusy ? <Loader2 size={13} className="inline animate-spin" /> : <PauseCircle size={13} className="inline" />}
+              {' '}中断当前网盘扫描
+            </button>
+          </div>
+        </div>
+        {scanStatuses.length > 0 && (
+          <div className="grid gap-1 text-xs text-ink-50 md:grid-cols-2">
+            {scanStatuses.slice(0, 6).map((item) => (
+              <div key={item.library_id} className="rounded bg-white/80 px-2 py-1">
+                <span className="font-mono text-ink-100">{item.state}</span>
+                {' · '}
+                {item.provider}
+                {' · 目录 '}
+                {item.dirs}
+                {' · 发现 '}
+                {item.discovered}
+                {' · 入库 '}
+                {item.added + item.updated}
+                {item.error ? <span className="text-red-500"> · {item.error}</span> : null}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
       {mounts.length > 0 && (
         <div className="mb-3 rounded border border-blue-100 bg-blue-50/60 p-2">
           <div className="mb-1 text-xs font-semibold text-ink-100">已挂载目录</div>

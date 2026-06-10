@@ -510,11 +510,15 @@ func (s *TelegramBotService) cmdHideAdult(ctx context.Context, msg *TelegramMess
 
 // cmdStatus 处理 /status 命令。
 func (s *TelegramBotService) cmdStatus(ctx context.Context) (telegramCommandReply, error) {
+	libraryIDs, err := s.activeTelegramStatsLibraryIDs(ctx)
+	if err != nil {
+		return telegramCommandReply{}, err
+	}
 	var mediaCount int64
-	s.repo.DB.Model(&model.Media{}).Count(&mediaCount)
+	s.mediaStatsQuery(libraryIDs).Count(&mediaCount)
 
 	var totalSize int64
-	s.repo.DB.Raw("SELECT COALESCE(SUM(size_bytes), 0) FROM media").Scan(&totalSize)
+	s.mediaStatsQuery(libraryIDs).Select("COALESCE(SUM(size_bytes), 0)").Row().Scan(&totalSize)
 	totalSizeGB := float64(totalSize) / 1024 / 1024 / 1024
 
 	return telegramCommandReply{Text: fmt.Sprintf(
@@ -605,30 +609,42 @@ func (s *TelegramBotService) cmdDownloads(ctx context.Context) (telegramCommandR
 
 // cmdStats 处理 /stats 命令。
 func (s *TelegramBotService) cmdStats(ctx context.Context) (telegramCommandReply, error) {
+	libs, err := s.activeTelegramStatsLibraries(ctx)
+	if err != nil {
+		return telegramCommandReply{}, err
+	}
+	libraryIDs := make([]string, 0, len(libs))
+	for _, lib := range libs {
+		libraryIDs = append(libraryIDs, lib.ID)
+	}
 	var totalMedia int64
-	s.repo.DB.Model(&model.Media{}).Count(&totalMedia)
+	s.mediaStatsQuery(libraryIDs).Count(&totalMedia)
 
 	var totalSize int64
-	s.repo.DB.Raw("SELECT COALESCE(SUM(size_bytes), 0) FROM media").Scan(&totalSize)
+	s.mediaStatsQuery(libraryIDs).Select("COALESCE(SUM(size_bytes), 0)").Row().Scan(&totalSize)
 
 	type LibStat struct {
 		Name  string
 		Type  string
 		Count int64
 	}
-	var libs []LibStat
-	s.repo.DB.Raw(
-		"SELECT l.name, l.type, COUNT(m.id) as count FROM libraries l LEFT JOIN media m ON m.library_id = l.id GROUP BY l.id ORDER BY count DESC",
-	).Scan(&libs)
+	stats := make([]LibStat, 0, len(libs))
+	for _, lib := range libs {
+		var count int64
+		if err := s.repo.DB.WithContext(ctx).Model(&model.Media{}).Where("library_id = ?", lib.ID).Count(&count).Error; err != nil {
+			return telegramCommandReply{}, err
+		}
+		stats = append(stats, LibStat{Name: lib.Name, Type: lib.Type, Count: count})
+	}
 
 	var sb strings.Builder
 	sb.WriteString("<b>媒体库统计</b>\n\n")
 	sb.WriteString(fmt.Sprintf("📚 总数: <b>%d</b>\n", totalMedia))
 	sb.WriteString(fmt.Sprintf("💾 大小: <b>%s</b>\n", formatSize(totalSize)))
 
-	if len(libs) > 0 {
+	if len(stats) > 0 {
 		sb.WriteString("\n<b>各库分布:</b>\n")
-		for _, l := range libs {
+		for _, l := range stats {
 			icon := "🎬"
 			switch l.Type {
 			case "tv":
@@ -643,6 +659,44 @@ func (s *TelegramBotService) cmdStats(ctx context.Context) (telegramCommandReply
 	}
 
 	return telegramCommandReply{Text: sb.String()}, nil
+}
+
+func (s *TelegramBotService) activeTelegramStatsLibraries(ctx context.Context) ([]model.Library, error) {
+	if s == nil || s.repo == nil || s.repo.Library == nil {
+		return nil, nil
+	}
+	libs, err := s.repo.Library.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	libs = FilterShadowedCloudLibraries(libs)
+	out := libs[:0]
+	for _, lib := range libs {
+		if lib.Enabled {
+			out = append(out, lib)
+		}
+	}
+	return out, nil
+}
+
+func (s *TelegramBotService) activeTelegramStatsLibraryIDs(ctx context.Context) ([]string, error) {
+	libs, err := s.activeTelegramStatsLibraries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(libs))
+	for _, lib := range libs {
+		ids = append(ids, lib.ID)
+	}
+	return ids, nil
+}
+
+func (s *TelegramBotService) mediaStatsQuery(libraryIDs []string) *gorm.DB {
+	q := s.repo.DB.Model(&model.Media{})
+	if len(libraryIDs) == 0 {
+		return q.Where("1 = 0")
+	}
+	return q.Where("library_id IN ?", libraryIDs)
 }
 
 // ── Polling ──
@@ -670,6 +724,9 @@ func (s *TelegramBotService) StartPolling(ctx context.Context) {
 		botToken := cfg["bot_token"]
 		if botToken == "" {
 			continue
+		}
+		if err := registerTelegramBotCommands(ctx, cfg); err != nil && s.log != nil {
+			s.log.Warn("telegram setMyCommands failed", zap.Error(sanitizeTelegramError(err)))
 		}
 
 		s.pollingMu.Lock()
@@ -1294,11 +1351,14 @@ func userNameOrFallback(user *model.User) string {
 
 // SetWebhook 注册 Telegram Bot Webhook URL。
 func (s *TelegramBotService) SetWebhook(ctx context.Context, botToken, webhookURL string) error {
+	cfg := map[string]string{"bot_token": botToken}
+	if err := registerTelegramBotCommands(ctx, cfg); err != nil && s.log != nil {
+		s.log.Warn("telegram setMyCommands failed", zap.Error(sanitizeTelegramError(err)))
+	}
 	payload := map[string]interface{}{
 		"url":             webhookURL,
 		"allowed_updates": []string{"message", "callback_query"},
 	}
-	cfg := map[string]string{"bot_token": botToken}
 	return telegramPostJSON(ctx, cfg, "setWebhook", payload, 15*time.Second)
 }
 

@@ -38,6 +38,9 @@ func registerAdminRoutes(api *gin.RouterGroup, cfg *config.Config, svc *service.
 		admin.POST("/storage/:type/upload-local", storageUploadLocalHandler(svc))
 
 		// Cloud disk (115 / 夸克) browsing, QR login and 302 import.
+		admin.POST("/cloud/scan-all", cloudScanAllHandler(svc))
+		admin.POST("/cloud/scan/cancel", cloudScanCancelHandler(svc))
+		admin.GET("/cloud/scan/status", cloudScanStatusHandler(svc))
 		admin.GET("/cloud/:type/list", cloudListHandler(svc))
 		admin.POST("/cloud/:type/import", cloudImportHandler(svc))
 		admin.POST("/cloud/:type/mount", cloudMountHandler(svc))

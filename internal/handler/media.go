@@ -6,10 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/middleware"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
@@ -68,6 +66,11 @@ func createLibraryHandler(svc *service.Container) gin.HandlerFunc {
 func deleteLibraryHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := c.Param("id")
+		if lib, err := svc.Repo.Library.FindByID(c.Request.Context(), id); err == nil && lib != nil {
+			if _, ok := service.ParseCloudLibraryMount(lib.Path); ok && svc.Scan != nil {
+				_ = svc.Scan.CancelCloudScan(id)
+			}
+		}
 		if err := svc.Media.DeleteLibrary(c.Request.Context(), id); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -102,23 +105,7 @@ func scanLibraryHandler(svc *service.Container) gin.HandlerFunc {
 					"estimate_message": "小目录通常几十秒；几万文件的大目录可能需要数分钟到数小时，取决于网盘接口速度",
 				})
 			}
-			go func(libraryID string) {
-				ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
-				defer cancel()
-				if _, err := svc.Scan.ScanLibraryWithoutAutoScrape(ctx, libraryID); err != nil {
-					if svc.Log != nil {
-						svc.Log.Warn("cloud library async scan failed", zap.String("library_id", libraryID), zap.Error(err))
-					}
-					if svc.WSHub != nil {
-						svc.WSHub.Publish("scan", gin.H{
-							"library_id": libraryID,
-							"cloud":      true,
-							"finished":   true,
-							"error":      err.Error(),
-						})
-					}
-				}
-			}(id)
+			_, _, _ = svc.Scan.StartCloudLibraryScan(id, false)
 			c.JSON(http.StatusAccepted, gin.H{
 				"library_id":       id,
 				"visited":          0,

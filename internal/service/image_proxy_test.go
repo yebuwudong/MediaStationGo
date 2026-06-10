@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
+	"github.com/ShukeBta/MediaStationGo/internal/service/cloud"
 )
 
 func TestImageProxyServesLocalImagePath(t *testing.T) {
@@ -112,6 +113,38 @@ func TestImageProxyCachesFailedRemoteImageFetch(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
 		t.Fatalf("upstream calls = %d, want 1 due to negative cache", got)
+	}
+}
+
+func TestImageProxyCachesCloudResolvedImage(t *testing.T) {
+	var calls int32
+	proxy := NewImageProxy(&config.Config{Cache: config.CacheConfig{CacheDir: filepath.Join(t.TempDir(), "cache")}}, zap.NewNop())
+	proxy.client = &http.Client{Transport: imageRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		atomic.AddInt32(&calls, 1)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"image/png"}},
+			Body:       io.NopCloser(strings.NewReader(string(transparent1x1PNG))),
+			Request:    req,
+		}, nil
+	})}
+
+	link := &cloud.DirectLink{URL: "http://cloud-provider.invalid/poster.png"}
+	for i := 0; i < 2; i++ {
+		rec := httptest.NewRecorder()
+		if err := proxy.ServeCloudResolved(t.Context(), rec, httptest.NewRequest(http.MethodGet, "/api/cloud/play/openlist?ref=poster.png", nil), "openlist:poster.png", link); err != nil {
+			t.Fatal(err)
+		}
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		if got := rec.Header().Get("Cache-Control"); got != imageBrowserCacheControl {
+			t.Fatalf("Cache-Control = %q, want %q", got, imageBrowserCacheControl)
+		}
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("upstream calls = %d, want 1 due to cloud image cache", got)
 	}
 }
 

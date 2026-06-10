@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
@@ -124,4 +125,41 @@ var telegramSupportedCommandSet = map[string]struct{}{
 	"/capacity": {}, "/users": {}, "/gencode": {}, "/renew_user": {}, "/delete_user": {}, "/unbind": {}, "/unbind_duplicates": {}, "/unbind_inactive": {},
 	"/devicepolicy": {}, "/policy": {}, "/antishare": {}, "/cleanup": {}, "/cleanup_mode": {}, "/cleanup_rule": {},
 	"/ban": {}, "/unban": {}, "/status": {}, "/search": {}, "/downloads": {}, "/stats": {},
+}
+
+type telegramBotCommand struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+}
+
+func telegramBotCommandMenu() []telegramBotCommand {
+	return []telegramBotCommand{
+		{Command: "start", Description: "绑定账号或打开主菜单"},
+		{Command: "menu", Description: "打开功能菜单"},
+		{Command: "help", Description: "查看命令帮助"},
+		{Command: "account", Description: "查看账号状态"},
+		{Command: "signin", Description: "签到"},
+		{Command: "devices", Description: "查看登录设备"},
+		{Command: "kick", Description: "踢下线设备"},
+		{Command: "hideadult", Description: "隐藏/显示成人媒体库"},
+		{Command: "redeem", Description: "兑换注册码或续期码"},
+		{Command: "register", Description: "注册新账号"},
+		{Command: "status", Description: "系统运行状态(管理员)"},
+		{Command: "search", Description: "搜索媒体库(管理员)"},
+		{Command: "downloads", Description: "下载列表(管理员)"},
+		{Command: "stats", Description: "媒体库统计(管理员)"},
+		{Command: "users", Description: "用户管理(管理员)"},
+		{Command: "cleanup", Description: "删号规则巡检(管理员)"},
+		{Command: "cleanup_rule", Description: "保号规则管理(管理员)"},
+	}
+}
+
+func registerTelegramBotCommands(ctx context.Context, cfg map[string]string) error {
+	if strings.TrimSpace(cfg["bot_token"]) == "" {
+		return nil
+	}
+	payload := map[string]interface{}{
+		"commands": telegramBotCommandMenu(),
+	}
+	return telegramPostJSON(ctx, cfg, "setMyCommands", payload, 15*time.Second)
 }

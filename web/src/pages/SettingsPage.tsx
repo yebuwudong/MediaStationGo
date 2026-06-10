@@ -48,6 +48,13 @@ const GROUPS: SettingGroup[] = [
         ],
       },
       {
+        key: 'app.server_url',
+        label: '公开访问域名 / STRM 域名',
+        type: 'text',
+        hint: '例如 http://NAS-IP:18080 或 https://media.example.com。填写后网盘媒体扫描会自动生成完整 STRM/302 播放入口；不填则使用同源相对路径。',
+        placeholder: 'http://192.168.1.125:18080',
+      },
+      {
         key: 'playback.direct_only',
         label: '客户端直连解码（释放宿主机资源）',
         type: 'toggle',

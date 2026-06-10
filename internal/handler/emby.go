@@ -610,6 +610,10 @@ func embyItemImageHandler(svc *service.Container) gin.HandlerFunc {
 			c.Status(http.StatusNotFound)
 			return
 		}
+		if typ, ref, ok := parseCloudPlayImageURL(raw); ok {
+			serveCloudResolvedLink(svc, c, typ, ref)
+			return
+		}
 		if svc.ImageProxy == nil {
 			c.Status(http.StatusNotFound)
 			return
@@ -618,6 +622,28 @@ func embyItemImageHandler(svc *service.Container) gin.HandlerFunc {
 			c.Status(http.StatusNotFound)
 		}
 	}
+}
+
+func parseCloudPlayImageURL(raw string) (string, string, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", "", false
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", "", false
+	}
+	path := strings.Trim(u.Path, "/")
+	const prefix = "api/cloud/play/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", "", false
+	}
+	typ := strings.TrimSpace(strings.TrimPrefix(path, prefix))
+	ref := strings.TrimSpace(u.Query().Get("ref"))
+	if typ == "" || ref == "" {
+		return "", "", false
+	}
+	return typ, ref, true
 }
 
 func embyShowSeasonsHandler(svc *service.Container) gin.HandlerFunc {

@@ -48,6 +48,24 @@ export interface CloudUploadResult {
   }>
 }
 
+export interface CloudScanStatus {
+  library_id: string
+  provider: string
+  stage: string
+  state: string
+  dirs: number
+  discovered: number
+  visited: number
+  added: number
+  updated: number
+  skipped: number
+  removed: number
+  error?: string
+  resume_hint?: string
+  estimate_message?: string
+  files_per_second?: number
+}
+
 export const storageAPI = {
   status: () =>
     api
@@ -82,6 +100,23 @@ export const storageAPI = {
   ) =>
     api
       .post<{ result: CloudUploadResult; error?: string }>(`/admin/storage/${type}/upload-local`, input)
+      .then((r) => r.data),
+
+  scanAllCloud: () =>
+    api
+      .post<{ items: CloudScanStatus[]; message?: string; estimate_message?: string }>('/admin/cloud/scan-all')
+      .then((r) => r.data),
+
+  cancelCloudScan: (libraryID = '', provider = '') =>
+    api
+      .post<{ cancelled: number; message?: string }>('/admin/cloud/scan/cancel', null, {
+        params: libraryID ? { library_id: libraryID } : provider ? { provider } : undefined,
+      })
+      .then((r) => r.data),
+
+  cloudScanStatus: () =>
+    api
+      .get<{ items: CloudScanStatus[] }>('/admin/cloud/scan/status')
       .then((r) => r.data),
 }
 

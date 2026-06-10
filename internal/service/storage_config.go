@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,7 +38,7 @@ func NewStorageConfigService(log *zap.Logger, repo *repository.Container, crypto
 		log:    log,
 		repo:   repo,
 		crypto: crypto,
-		client: &http.Client{Timeout: 15 * time.Second},
+		client: &http.Client{Timeout: 120 * time.Second},
 	}
 }
 
@@ -129,6 +130,7 @@ func (s *StorageConfigService) Test(ctx context.Context, in StorageInput) error 
 	if cfg == nil {
 		return errors.New("config required")
 	}
+	client := s.clientForConfig(cfg)
 	switch in.Type {
 	case "alist":
 		server := strings.TrimRight(strr(cfg["server"]), "/")
@@ -139,7 +141,7 @@ func (s *StorageConfigService) Test(ctx context.Context, in StorageInput) error 
 		if tok := strr(cfg["token"]); tok != "" {
 			req.Header.Set("Authorization", tok)
 		}
-		resp, err := s.client.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			return err
 		}
@@ -150,7 +152,7 @@ func (s *StorageConfigService) Test(ctx context.Context, in StorageInput) error 
 		return nil
 	case cloud.TypeOpenList:
 		if hasWebDAVProbeConfig(cfg) {
-			p, err := cloud.New(in.Type, cfg, s.client)
+			p, err := cloud.New(in.Type, cfg, client)
 			if err != nil {
 				return err
 			}
@@ -162,7 +164,7 @@ func (s *StorageConfigService) Test(ctx context.Context, in StorageInput) error 
 			if tok := strr(cfg["token"]); tok != "" {
 				req.Header.Set("Authorization", tok)
 			}
-			resp, err := s.client.Do(req)
+			resp, err := client.Do(req)
 			if err != nil {
 				return decorateStorageTransportError("openlist", server, err)
 			}
@@ -172,7 +174,7 @@ func (s *StorageConfigService) Test(ctx context.Context, in StorageInput) error 
 			}
 			return nil
 		}
-		p, err := cloud.New(in.Type, cfg, s.client)
+		p, err := cloud.New(in.Type, cfg, client)
 		if err != nil {
 			return err
 		}
@@ -187,7 +189,7 @@ func (s *StorageConfigService) Test(ctx context.Context, in StorageInput) error 
 			req.SetBasicAuth(user, strr(cfg["password"]))
 		}
 		req.Header.Set("Depth", "0")
-		resp, err := s.client.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			return decorateStorageTransportError("webdav", u, err)
 		}
@@ -208,14 +210,14 @@ func (s *StorageConfigService) Test(ctx context.Context, in StorageInput) error 
 		// We only verify endpoint reachability — full SigV4 is a large
 		// dependency; the upstream Vue project also stops at this level.
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ep, nil)
-		resp, err := s.client.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			return err
 		}
 		defer resp.Body.Close()
 		return nil
 	case cloud.TypeQuark, cloud.Type115, cloud.TypeCloudDrive2:
-		p, err := cloud.New(in.Type, cfg, s.client)
+		p, err := cloud.New(in.Type, cfg, client)
 		if err != nil {
 			return err
 		}
@@ -238,7 +240,10 @@ func (s *StorageConfigService) CloudProvider(ctx context.Context, typ string) (c
 	if view == nil {
 		return nil, fmt.Errorf("%s storage not configured", typ)
 	}
-	return cloud.New(typ, view.Config, s.client)
+	if !view.Enabled {
+		return nil, fmt.Errorf("%s storage disabled", typ)
+	}
+	return cloud.New(typ, view.Config, s.clientForConfig(view.Config))
 }
 
 // CloudList lists entries under dirID for the configured cloud provider.
@@ -314,6 +319,9 @@ func (s *StorageConfigService) cloudProviderWithUA(ctx context.Context, typ, cli
 	if view == nil {
 		return nil, fmt.Errorf("%s storage not configured", typ)
 	}
+	if !view.Enabled {
+		return nil, fmt.Errorf("%s storage disabled", typ)
+	}
 	cfg := view.Config
 	if strings.TrimSpace(clientUA) != "" {
 		// Copy so we never mutate the cached view config.
@@ -324,7 +332,52 @@ func (s *StorageConfigService) cloudProviderWithUA(ctx context.Context, typ, cli
 		cp["ua"] = clientUA
 		cfg = cp
 	}
-	return cloud.New(typ, cfg, s.client)
+	return cloud.New(typ, cfg, s.clientForConfig(cfg))
+}
+
+func (s *StorageConfigService) clientForConfig(cfg map[string]any) *http.Client {
+	if s == nil || s.client == nil {
+		return &http.Client{Timeout: 120 * time.Second}
+	}
+	timeout := storageTimeoutFromConfig(cfg, s.client.Timeout)
+	if timeout == s.client.Timeout {
+		return s.client
+	}
+	cp := *s.client
+	cp.Timeout = timeout
+	return &cp
+}
+
+func storageTimeoutFromConfig(cfg map[string]any, fallback time.Duration) time.Duration {
+	if fallback <= 0 {
+		fallback = 120 * time.Second
+	}
+	raw := ""
+	for _, key := range []string{"timeout_seconds", "webdav_timeout_seconds", "request_timeout_seconds"} {
+		if value := strr(cfg[key]); value != "" {
+			raw = value
+			break
+		}
+	}
+	if raw == "" {
+		return fallback
+	}
+	seconds, err := strconv.Atoi(raw)
+	if err != nil {
+		if f, ferr := strconv.ParseFloat(raw, 64); ferr == nil {
+			seconds = int(f)
+		}
+	}
+	if seconds <= 0 {
+		return fallback
+	}
+	if seconds < 5 {
+		seconds = 5
+	}
+	if seconds > 600 {
+		seconds = 600
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 // cloudLibraryName maps a provider type to a friendly Chinese library name.
@@ -392,7 +445,7 @@ func (s *StorageConfigService) CloudImport(ctx context.Context, typ, fileRef, na
 		Path:         cloudMediaPath(typ, fileRef),
 		SizeBytes:    size,
 		Container:    container,
-		STRMURL:      "/api/cloud/play/" + typ + "?ref=" + url.QueryEscape(fileRef),
+		STRMURL:      BuildPublicAPIURL(ctx, s.repo, nil, "/api/cloud/play/"+typ, url.Values{"ref": []string{fileRef}}),
 		ScrapeStatus: "pending",
 	}
 	if err := s.repo.Media.Upsert(ctx, m); err != nil {

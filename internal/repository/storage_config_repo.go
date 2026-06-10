@@ -3,7 +3,9 @@ package repository
 import (
 	"context"
 	"errors"
+	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -34,6 +36,32 @@ func (r *StorageConfigRepository) List(ctx context.Context) ([]model.StorageConf
 
 // Upsert creates or replaces a storage config keyed by Type.
 func (r *StorageConfigRepository) Upsert(ctx context.Context, c *model.StorageConfig) error {
-	return r.db.WithContext(ctx).Where("type = ?", c.Type).
-		Assign(*c).FirstOrCreate(c).Error
+	db := r.db.WithContext(ctx)
+	var existing model.StorageConfig
+	err := db.Where("type = ?", c.Type).First(&existing).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		now := time.Now()
+		c.ID = uuid.NewString()
+		c.CreatedAt = now
+		c.UpdatedAt = now
+		return db.Model(&model.StorageConfig{}).Create(map[string]any{
+			"id":         c.ID,
+			"type":       c.Type,
+			"config":     c.Config,
+			"enabled":    c.Enabled,
+			"last_error": c.LastError,
+			"created_at": c.CreatedAt,
+			"updated_at": c.UpdatedAt,
+		}).Error
+	}
+	if err != nil {
+		return err
+	}
+	c.ID = existing.ID
+	return db.Model(&model.StorageConfig{}).Where("id = ?", existing.ID).Updates(map[string]any{
+		"config":     c.Config,
+		"enabled":    c.Enabled,
+		"last_error": c.LastError,
+		"updated_at": time.Now(),
+	}).Error
 }

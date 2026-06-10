@@ -228,6 +228,18 @@ func (s *MediaService) ListLibraries(ctx context.Context) ([]model.Library, erro
 // DeleteLibrary removes a library and its media rows. The on-disk files are
 // left untouched.
 func (s *MediaService) DeleteLibrary(ctx context.Context, id string) error {
+	lib, err := s.repo.Library.FindByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if lib != nil {
+		if _, ok := ParseCloudLibraryMount(lib.Path); ok {
+			if err := s.repo.Media.PurgeByLibrary(ctx, id); err != nil {
+				return err
+			}
+			return s.repo.DB.WithContext(ctx).Unscoped().Where("id = ?", id).Delete(&model.Library{}).Error
+		}
+	}
 	if err := s.repo.Media.DeleteByLibrary(ctx, id); err != nil {
 		return err
 	}
@@ -282,6 +294,13 @@ func (s *MediaService) GetMedia(ctx context.Context, id string) (*model.Media, e
 // SoftDelete moves a media row to the recycle bin (gorm soft delete).
 // The on-disk file is kept; admins can purge it later.
 func (s *MediaService) SoftDelete(ctx context.Context, id string) error {
+	media, err := s.repo.Media.FindByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if media != nil && isCloudMediaPath(media.Path) {
+		return s.repo.DB.WithContext(ctx).Unscoped().Where("id = ?", id).Delete(&model.Media{}).Error
+	}
 	return s.repo.DB.Where("id = ?", id).Delete(&model.Media{}).Error
 }
 

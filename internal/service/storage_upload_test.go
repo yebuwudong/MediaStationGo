@@ -168,6 +168,24 @@ func TestStorageConfigOpenListHTTPSAgainstHTTPHint(t *testing.T) {
 	}
 }
 
+func TestStorageConfigCloudProviderRejectsDisabledConfig(t *testing.T) {
+	_, storage := newStorageUploadTestService(t)
+	enabled := false
+	if _, err := storage.Save(t.Context(), StorageInput{
+		Type: "openlist",
+		Config: map[string]any{
+			"url": "http://127.0.0.1:5244/dav",
+		},
+		Enabled: &enabled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := storage.CloudProvider(t.Context(), "openlist")
+	if err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Fatalf("disabled provider error = %v, want disabled", err)
+	}
+}
+
 func TestSchedulerCloudUploadUsesConfiguredLocalSource(t *testing.T) {
 	var uploaded []string
 	alist := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

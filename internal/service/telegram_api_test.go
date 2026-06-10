@@ -94,6 +94,35 @@ func TestTelegramTargetChatIDsUsesLegacyPrivateChatID(t *testing.T) {
 	}
 }
 
+func TestRegisterTelegramBotCommands(t *testing.T) {
+	var gotPath string
+	var payload struct {
+		Commands []telegramBotCommand `json:"commands"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	err := registerTelegramBotCommands(t.Context(), map[string]string{
+		"bot_token":    "123456:ABC",
+		"api_base_url": server.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/bot123456:ABC/setMyCommands" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	if len(payload.Commands) == 0 || payload.Commands[0].Command != "start" {
+		t.Fatalf("commands not registered: %#v", payload.Commands)
+	}
+}
+
 func TestTelegramProxyCandidatesDefaultLocalFallbacks(t *testing.T) {
 	got := telegramProxyCandidates(map[string]string{})
 	joined := strings.Join(got, ",")

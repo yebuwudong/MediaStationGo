@@ -31,6 +31,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
+	"github.com/ShukeBta/MediaStationGo/internal/service/cloud"
 )
 
 // transparent1x1PNG is a baseline 67-byte PNG used as a fallback when the
@@ -372,6 +373,116 @@ func (p *ImageProxy) Serve(ctx context.Context, w http.ResponseWriter, r *http.R
 	if v := resp.Header.Get("Last-Modified"); v != "" {
 		w.Header().Set("Last-Modified", v)
 	}
+	w.Header().Set("Cache-Control", imageBrowserCacheControl)
+	http.ServeContent(w, r, key, time.Now(), bytes.NewReader(data))
+	return nil
+}
+
+// ServeCloudResolved stores a cloud sidecar image in the same disk cache used
+// by remote posters, then serves it with long browser-cache headers. Cloud
+// direct links are often short-lived, so caching by the stable provider/ref
+// avoids re-resolving and re-downloading artwork every time the web UI or an
+// Emby-compatible client opens a library.
+func (p *ImageProxy) ServeCloudResolved(ctx context.Context, w http.ResponseWriter, r *http.Request, stableKey string, link *cloud.DirectLink) error {
+	if p == nil || link == nil || strings.TrimSpace(link.URL) == "" {
+		servePlaceholder(w)
+		return nil
+	}
+	stableKey = strings.TrimSpace(stableKey)
+	if stableKey == "" {
+		stableKey = link.URL
+	}
+	sum := sha1.Sum([]byte("cloud-image:" + stableKey))
+	key := "cloud-" + hex.EncodeToString(sum[:])
+	cachePath := filepath.Join(p.cacheDir, key)
+	failPath := cachePath + ".fail"
+
+	if data, err := os.ReadFile(cachePath); err == nil && len(data) > 0 {
+		w.Header().Set("Content-Type", detectContentType(data))
+		w.Header().Set("Cache-Control", imageBrowserCacheControl)
+		stat, _ := os.Stat(cachePath)
+		modTime := time.Now()
+		if stat != nil {
+			modTime = stat.ModTime()
+		}
+		http.ServeContent(w, r, key, modTime, bytes.NewReader(data))
+		return nil
+	}
+	if stat, err := os.Stat(failPath); err == nil && time.Since(stat.ModTime()) < imageNegativeCacheTTL {
+		serveCachedPlaceholder(w)
+		return nil
+	} else if err == nil {
+		_ = os.Remove(failPath)
+	}
+	if err := os.MkdirAll(p.cacheDir, 0o755); err != nil {
+		p.log.Warn("imageproxy: mkdir failed", zap.String("dir", p.cacheDir), zap.Error(err))
+		servePlaceholder(w)
+		return nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, link.URL, nil)
+	if err != nil {
+		p.log.Warn("imageproxy: build cloud image request failed", zap.Error(err))
+		servePlaceholder(w)
+		return nil
+	}
+	for k, v := range link.Headers {
+		req.Header.Set(k, v)
+	}
+	if req.Header.Get("User-Agent") == "" {
+		if ua := r.UserAgent(); ua != "" {
+			req.Header.Set("User-Agent", ua)
+		} else {
+			req.Header.Set("User-Agent", "MediaStationGo/0.1")
+		}
+	}
+	req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		p.log.Warn("imageproxy: cloud image fetch failed", zap.String("url", link.URL), zap.Error(err))
+		p.markImageFetchFailed(failPath)
+		serveCachedPlaceholder(w)
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		p.log.Warn("imageproxy: cloud image returned non-OK",
+			zap.String("url", link.URL), zap.String("status", resp.Status))
+		p.markImageFetchFailed(failPath)
+		serveCachedPlaceholder(w)
+		return nil
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if err != nil || len(data) == 0 {
+		p.log.Warn("imageproxy: read cloud image body failed", zap.String("url", link.URL), zap.Error(err))
+		p.markImageFetchFailed(failPath)
+		serveCachedPlaceholder(w)
+		return nil
+	}
+
+	p.mu.Lock()
+	tmp, tmpErr := os.CreateTemp(p.cacheDir, "img-cloud-*.tmp")
+	if tmpErr == nil {
+		if _, werr := tmp.Write(data); werr == nil {
+			tmp.Close()
+			if rerr := os.Rename(tmp.Name(), cachePath); rerr != nil {
+				_ = os.Remove(tmp.Name())
+			} else {
+				_ = os.Remove(failPath)
+			}
+		} else {
+			tmp.Close()
+			_ = os.Remove(tmp.Name())
+		}
+	}
+	p.mu.Unlock()
+
+	ctype := resp.Header.Get("Content-Type")
+	if ctype == "" {
+		ctype = detectContentType(data)
+	}
+	w.Header().Set("Content-Type", ctype)
 	w.Header().Set("Cache-Control", imageBrowserCacheControl)
 	http.ServeContent(w, r, key, time.Now(), bytes.NewReader(data))
 	return nil

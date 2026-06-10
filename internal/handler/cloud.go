@@ -3,14 +3,11 @@
 package handler
 
 import (
-	"context"
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
@@ -146,34 +143,7 @@ func cloudMountHandler(svc *service.Container) gin.HandlerFunc {
 					"estimate_message": "小目录通常几十秒；几万文件的大目录可能需要数分钟到数小时，取决于网盘接口速度",
 				})
 			}
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
-				defer cancel()
-				res, err := svc.Scan.ScanLibraryWithoutAutoScrape(ctx, libID)
-				if err != nil {
-					if svc.Log != nil {
-						svc.Log.Warn("cloud mount background scan failed", zap.String("library_id", libID), zap.Error(err))
-					}
-					if svc.WSHub != nil {
-						svc.WSHub.Publish("scan", gin.H{
-							"library_id": libID,
-							"cloud":      true,
-							"finished":   true,
-							"error":      err.Error(),
-						})
-					}
-					return
-				}
-				if svc.Log != nil {
-					svc.Log.Info("cloud mount background scan finished",
-						zap.String("library_id", libID),
-						zap.Int("visited", res.Visited),
-						zap.Int("added", res.Added),
-						zap.Int("updated", res.Updated),
-						zap.Int("skipped", res.Skipped),
-						zap.Int64("removed", res.Removed))
-				}
-			}()
+			_, _, _ = svc.Scan.StartCloudLibraryScan(libID, false)
 		}
 		c.JSON(http.StatusAccepted, gin.H{
 			"library":          lib,
@@ -182,6 +152,62 @@ func cloudMountHandler(svc *service.Container) gin.HandlerFunc {
 			"message":          "挂载后会后台递归扫描，发现的媒体会自动加入当前媒体库",
 			"estimate_message": "小目录通常几十秒；几万文件的大目录可能需要数分钟到数小时，取决于网盘接口速度",
 		})
+	}
+}
+
+func cloudScanAllHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if svc.Scan == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "scanner unavailable"})
+			return
+		}
+		statuses, err := svc.Scan.StartAllCloudLibraryScans()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusAccepted, gin.H{
+			"items":            statuses,
+			"scan_queued":      true,
+			"message":          "已开始扫描所有启用的网盘媒体库",
+			"resume_message":   "中断后再次点击扫描会重新遍历，但已入库媒体会去重更新，只补齐缺失项。",
+			"estimate_message": "小目录通常几十秒；几万文件的大目录可能需要数分钟到数小时，取决于网盘接口速度",
+		})
+	}
+}
+
+func cloudScanCancelHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if svc.Scan == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "scanner unavailable"})
+			return
+		}
+		libraryID := strings.TrimSpace(c.Query("library_id"))
+		provider := strings.TrimSpace(c.Query("provider"))
+		cancelled := 0
+		if libraryID != "" {
+			if svc.Scan.CancelCloudScan(libraryID) {
+				cancelled = 1
+			}
+		} else if provider != "" {
+			cancelled = svc.Scan.CancelCloudScansForProvider(provider)
+		} else {
+			cancelled = svc.Scan.CancelAllCloudScans()
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"cancelled": cancelled,
+			"message":   "已发送中断信号；正在等待当前网盘请求返回后停止",
+		})
+	}
+}
+
+func cloudScanStatusHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if svc.Scan == nil {
+			c.JSON(http.StatusOK, gin.H{"items": []service.CloudScanStatus{}})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"items": svc.Scan.CloudScanStatuses()})
 	}
 }
 
@@ -253,47 +279,74 @@ func cloudPlayHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "ref required"})
 			return
 		}
-		link, err := svc.StorageCfg.CloudResolve(c.Request.Context(), typ, ref, c.Request.UserAgent())
-		if err != nil {
+		serveCloudResolvedLink(svc, c, typ, ref)
+	}
+}
+
+func serveCloudResolvedLink(svc *service.Container, c *gin.Context, typ, ref string) {
+	if svc == nil || svc.StorageCfg == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "cloud storage service unavailable"})
+		return
+	}
+	link, err := svc.StorageCfg.CloudResolve(c.Request.Context(), typ, ref, c.Request.UserAgent())
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	if isCloudImageRef(ref) && svc.ImageProxy != nil {
+		if err := svc.ImageProxy.ServeCloudResolved(c.Request.Context(), c.Writer, c.Request, typ+":"+ref, link); err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-			return
 		}
-		if !link.Proxy {
-			// Pure offload: send the client straight to the cloud CDN.
-			c.Redirect(http.StatusFound, link.URL)
-			return
-		}
-		// Proxy mode: the direct link needs auth headers the browser cannot
-		// carry. Stream through with Range forwarding.
-		method := c.Request.Method
-		if method == "" {
-			method = http.MethodGet
-		}
-		req, err := http.NewRequestWithContext(c.Request.Context(), method, link.URL, nil)
-		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-			return
-		}
-		for k, v := range link.Headers {
-			req.Header.Set(k, v)
-		}
-		if rng := c.GetHeader("Range"); rng != "" {
-			req.Header.Set("Range", rng)
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-			return
-		}
-		defer resp.Body.Close()
-		for _, h := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges"} {
-			if v := resp.Header.Get(h); v != "" {
-				c.Header(h, v)
-			}
-		}
-		c.Status(resp.StatusCode)
-		if c.Request.Method != http.MethodHead {
-			_, _ = io.Copy(c.Writer, resp.Body)
+		return
+	}
+	if isCloudImageRef(ref) {
+		c.Header("Cache-Control", "public, max-age=2592000, immutable")
+	}
+	if !link.Proxy {
+		// Pure offload: send the client straight to the cloud CDN.
+		c.Redirect(http.StatusFound, link.URL)
+		return
+	}
+	// Proxy mode: the direct link needs auth headers the browser cannot
+	// carry. Stream through with Range forwarding.
+	method := c.Request.Method
+	if method == "" {
+		method = http.MethodGet
+	}
+	req, err := http.NewRequestWithContext(c.Request.Context(), method, link.URL, nil)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	for k, v := range link.Headers {
+		req.Header.Set(k, v)
+	}
+	if rng := c.GetHeader("Range"); rng != "" {
+		req.Header.Set("Range", rng)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+	for _, h := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges"} {
+		if v := resp.Header.Get(h); v != "" {
+			c.Header(h, v)
 		}
 	}
+	c.Status(resp.StatusCode)
+	if c.Request.Method != http.MethodHead {
+		_, _ = io.Copy(c.Writer, resp.Body)
+	}
+}
+
+func isCloudImageRef(ref string) bool {
+	ref = strings.ToLower(strings.TrimSpace(ref))
+	for _, suffix := range []string{".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"} {
+		if strings.HasSuffix(ref, suffix) {
+			return true
+		}
+	}
+	return false
 }

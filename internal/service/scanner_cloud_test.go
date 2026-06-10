@@ -103,6 +103,13 @@ func TestScanCloudLibraryImportsRecursivePlayableMedia(t *testing.T) {
 	if got := countMedia(t, repos); got != 0 {
 		t.Fatalf("media count after prune = %d, want 0", got)
 	}
+	var allRows int64
+	if err := repos.DB.Unscoped().Model(&model.Media{}).Count(&allRows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if allRows != 0 {
+		t.Fatalf("unscoped media count after cloud prune = %d, want 0", allRows)
+	}
 }
 
 func TestCloudLibraryPathParsing(t *testing.T) {
@@ -155,6 +162,27 @@ func TestCloudMountConflictDetectsNestedMounts(t *testing.T) {
 	}
 	if shadow := CloudLibraryShadowed([]model.Library{root, child}, root); shadow == nil || !shadow.Nested {
 		t.Fatalf("root should be shadowed by child, got %#v", shadow)
+	}
+}
+
+func TestCancelCloudScansForProviderSignalsRunningScan(t *testing.T) {
+	scanner := NewScannerService(&config.Config{}, zap.NewNop(), repository.New(nil), NewHub(zap.NewNop()), nil, nil)
+	cancelled := false
+	scanner.cloudScans["lib-1"] = &cloudScanEntry{
+		status: CloudScanStatus{LibraryID: "lib-1", Provider: "openlist", State: "running"},
+		cancel: func() {
+			cancelled = true
+		},
+	}
+
+	if got := scanner.CancelCloudScansForProvider("openlist"); got != 1 {
+		t.Fatalf("cancelled = %d, want 1", got)
+	}
+	if !cancelled {
+		t.Fatal("cancel func was not called")
+	}
+	if state := scanner.cloudScans["lib-1"].status.State; state != "canceling" {
+		t.Fatalf("state = %q, want canceling", state)
 	}
 }
 

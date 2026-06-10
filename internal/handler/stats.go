@@ -32,8 +32,14 @@ func applyStatsVisibility(c *gin.Context, svc *service.Container, snap *service.
 	if err != nil {
 		return err
 	}
+	libs = service.FilterShadowedCloudLibraries(libs)
 	var visibleLibraries int64
+	activeLibraryIDs := make([]string, 0, len(libs))
 	for _, lib := range libs {
+		if !lib.Enabled {
+			continue
+		}
+		activeLibraryIDs = append(activeLibraryIDs, lib.ID)
 		if service.LibraryVisibleForUser(c.Request.Context(), svc.Repo, lib, visibility) {
 			visibleLibraries++
 		}
@@ -41,6 +47,7 @@ func applyStatsVisibility(c *gin.Context, svc *service.Container, snap *service.
 	snap.Libraries = visibleLibraries
 
 	q := applyMediaVisibilityQuery(svc.Repo.DB.WithContext(c.Request.Context()).Model(&model.Media{}), visibility)
+	q = applyActiveLibraryQuery(q, activeLibraryIDs)
 	if err := q.Count(&snap.MediaCount).Error; err != nil {
 		return err
 	}
@@ -49,7 +56,7 @@ func applyStatsVisibility(c *gin.Context, svc *service.Container, snap *service.
 		Seconds int64
 	}
 	var sum sumRow
-	if err := applyMediaVisibilityQuery(svc.Repo.DB.WithContext(c.Request.Context()).Model(&model.Media{}), visibility).
+	if err := applyActiveLibraryQuery(applyMediaVisibilityQuery(svc.Repo.DB.WithContext(c.Request.Context()).Model(&model.Media{}), visibility), activeLibraryIDs).
 		Select("COALESCE(SUM(size_bytes),0) as size, COALESCE(SUM(duration_sec),0) as seconds").
 		Scan(&sum).Error; err != nil {
 		return err
@@ -58,7 +65,7 @@ func applyStatsVisibility(c *gin.Context, svc *service.Container, snap *service.
 	snap.TotalSeconds = sum.Seconds
 
 	var recent []model.Media
-	if err := applyMediaVisibilityQuery(svc.Repo.DB.WithContext(c.Request.Context()).Model(&model.Media{}), visibility).
+	if err := applyActiveLibraryQuery(applyMediaVisibilityQuery(svc.Repo.DB.WithContext(c.Request.Context()).Model(&model.Media{}), visibility), activeLibraryIDs).
 		Order("created_at desc").
 		Limit(12).
 		Find(&recent).Error; err != nil {
@@ -79,4 +86,11 @@ func applyMediaVisibilityQuery(q *gorm.DB, visibility service.MediaVisibility) *
 		q = q.Where("library_id IN ?", visibility.AllowedLibraryIDs)
 	}
 	return q
+}
+
+func applyActiveLibraryQuery(q *gorm.DB, libraryIDs []string) *gorm.DB {
+	if len(libraryIDs) == 0 {
+		return q.Where("1 = 0")
+	}
+	return q.Where("library_id IN ?", libraryIDs)
 }

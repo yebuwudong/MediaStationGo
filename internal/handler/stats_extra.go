@@ -129,14 +129,18 @@ func statsTopContentHandler(svc *service.Container) gin.HandlerFunc {
 // statsLibrariesHandler returns per-library counts + size.
 func statsLibrariesHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var libs []model.Library
-		if err := svc.Repo.DB.Find(&libs).Error; err != nil {
+		libs, err := svc.Repo.Library.List(c.Request.Context())
+		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		libs = service.FilterShadowedCloudLibraries(libs)
 		out := make([]gin.H, 0, len(libs))
 		visibility := mediaVisibilityForRequest(c, svc)
 		for _, l := range libs {
+			if !l.Enabled {
+				continue
+			}
 			if !service.LibraryVisibleForUser(c.Request.Context(), svc.Repo, l, visibility) {
 				continue
 			}

@@ -20,11 +20,13 @@ export type SeriesCard = { key: string; rep: Media; count: number }
 
 export function getSeriesKey(media: Media): string {
   if (media.series_id) return `series:${media.series_id}`
+  const fromPath = seriesTitleFromPath(media.path)
   if (isEpisodeLike(media)) {
-    return `lib:${media.library_id}|show:${normalizeTitle(seriesTitle(media))}`
+    return `lib:${media.library_id}|show:${normalizeTitle(fromPath || seriesTitle(media))}`
   }
   if (media.tmdb_id && media.tmdb_id > 0) return `tmdb:${media.tmdb_id}`
   if (media.bangumi_id && media.bangumi_id > 0) return `bgm:${media.bangumi_id}`
+  if (fromPath) return `lib:${media.library_id}|show:${normalizeTitle(fromPath)}`
   return `lib:${media.library_id}|${normalizeTitle(media.title)}`
 }
 

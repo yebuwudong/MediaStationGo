@@ -108,6 +108,11 @@ func (s *NotifyChannelService) Create(ctx context.Context, in ChannelInput) (*ch
 	if err := s.repo.NotifyChannel.Create(ctx, n); err != nil {
 		return nil, err
 	}
+	if n.Type == "telegram" && n.Enabled {
+		if err := registerTelegramBotCommands(ctx, telegramStringConfigFromAny(in.Config)); err != nil && s.log != nil {
+			s.log.Warn("telegram setMyCommands failed", zap.Error(sanitizeTelegramError(err)))
+		}
+	}
 	v := toView(*n)
 	return &v, nil
 }
@@ -146,6 +151,11 @@ func (s *NotifyChannelService) Update(ctx context.Context, id string, in Channel
 	}
 	if err := s.repo.NotifyChannel.Update(ctx, existing); err != nil {
 		return nil, err
+	}
+	if existing.Type == "telegram" && existing.Enabled {
+		if err := registerTelegramBotCommands(ctx, telegramStringConfigFromAny(in.Config)); err != nil && s.log != nil {
+			s.log.Warn("telegram setMyCommands failed", zap.Error(sanitizeTelegramError(err)))
+		}
 	}
 	row, err := s.repo.NotifyChannel.FindByID(ctx, id)
 	if err != nil || row == nil {
