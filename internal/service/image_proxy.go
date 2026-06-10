@@ -236,6 +236,77 @@ func serveCachedPlaceholder(w http.ResponseWriter) {
 	_, _ = w.Write(transparent1x1PNG)
 }
 
+func (p *ImageProxy) cloudImageCachePaths(stableKey string) (string, string, string) {
+	stableKey = strings.TrimSpace(stableKey)
+	if stableKey == "" {
+		stableKey = "unknown"
+	}
+	sum := sha1.Sum([]byte("cloud-image:" + stableKey))
+	key := "cloud-" + hex.EncodeToString(sum[:])
+	cachePath := filepath.Join(p.cacheDir, key)
+	return key, cachePath, cachePath + ".fail"
+}
+
+func serveCachedImageFile(w http.ResponseWriter, r *http.Request, key, cachePath string) bool {
+	data, err := os.ReadFile(cachePath)
+	if err != nil || len(data) == 0 {
+		return false
+	}
+	w.Header().Set("Content-Type", detectContentType(data))
+	w.Header().Set("Cache-Control", imageBrowserCacheControl)
+	stat, _ := os.Stat(cachePath)
+	modTime := time.Now()
+	if stat != nil {
+		modTime = stat.ModTime()
+	}
+	http.ServeContent(w, r, key, modTime, bytes.NewReader(data))
+	return true
+}
+
+func freshNegativeImageCache(failPath string) bool {
+	stat, err := os.Stat(failPath)
+	if err != nil {
+		return false
+	}
+	if time.Since(stat.ModTime()) < imageNegativeCacheTTL {
+		return true
+	}
+	_ = os.Remove(failPath)
+	return false
+}
+
+// CloudImageCached reports whether a stable cloud-image ref already has a
+// usable positive or short-lived negative cache entry. Scanner pre-warm uses it
+// to avoid repeatedly resolving the same cloud sidecar image.
+func (p *ImageProxy) CloudImageCached(stableKey string) bool {
+	if p == nil {
+		return false
+	}
+	_, cachePath, failPath := p.cloudImageCachePaths(stableKey)
+	if stat, err := os.Stat(cachePath); err == nil && stat.Size() > 0 {
+		return true
+	}
+	return freshNegativeImageCache(failPath)
+}
+
+// ServeCloudCached serves an already-local cloud sidecar image without asking
+// the cloud provider for a fresh direct link. It returns true when it wrote a
+// response, including a fresh negative-cache placeholder.
+func (p *ImageProxy) ServeCloudCached(w http.ResponseWriter, r *http.Request, stableKey string) bool {
+	if p == nil {
+		return false
+	}
+	key, cachePath, failPath := p.cloudImageCachePaths(stableKey)
+	if serveCachedImageFile(w, r, key, cachePath) {
+		return true
+	}
+	if freshNegativeImageCache(failPath) {
+		serveCachedPlaceholder(w)
+		return true
+	}
+	return false
+}
+
 // Serve writes the requested image to w. Caller is expected to validate
 // the JWT before invoking it.
 func (p *ImageProxy) Serve(ctx context.Context, w http.ResponseWriter, r *http.Request, raw string) error {
@@ -392,46 +463,60 @@ func (p *ImageProxy) ServeCloudResolved(ctx context.Context, w http.ResponseWrit
 	if stableKey == "" {
 		stableKey = link.URL
 	}
-	sum := sha1.Sum([]byte("cloud-image:" + stableKey))
-	key := "cloud-" + hex.EncodeToString(sum[:])
-	cachePath := filepath.Join(p.cacheDir, key)
-	failPath := cachePath + ".fail"
+	key, cachePath, failPath := p.cloudImageCachePaths(stableKey)
 
-	if data, err := os.ReadFile(cachePath); err == nil && len(data) > 0 {
-		w.Header().Set("Content-Type", detectContentType(data))
-		w.Header().Set("Cache-Control", imageBrowserCacheControl)
-		stat, _ := os.Stat(cachePath)
-		modTime := time.Now()
-		if stat != nil {
-			modTime = stat.ModTime()
-		}
-		http.ServeContent(w, r, key, modTime, bytes.NewReader(data))
+	if serveCachedImageFile(w, r, key, cachePath) {
 		return nil
 	}
-	if stat, err := os.Stat(failPath); err == nil && time.Since(stat.ModTime()) < imageNegativeCacheTTL {
+	if freshNegativeImageCache(failPath) {
 		serveCachedPlaceholder(w)
 		return nil
-	} else if err == nil {
-		_ = os.Remove(failPath)
 	}
-	if err := os.MkdirAll(p.cacheDir, 0o755); err != nil {
-		p.log.Warn("imageproxy: mkdir failed", zap.String("dir", p.cacheDir), zap.Error(err))
-		servePlaceholder(w)
+
+	data, ctype, err := p.fetchAndCacheCloudImage(ctx, stableKey, link, r.UserAgent())
+	if err != nil {
+		p.log.Warn("imageproxy: cloud image fetch failed", zap.String("url", link.URL), zap.Error(err))
+		serveCachedPlaceholder(w)
 		return nil
 	}
+
+	w.Header().Set("Content-Type", ctype)
+	w.Header().Set("Cache-Control", imageBrowserCacheControl)
+	http.ServeContent(w, r, key, time.Now(), bytes.NewReader(data))
+	return nil
+}
+
+// PrefetchCloudResolved downloads a cloud sidecar image into the local cache
+// without writing an HTTP response. It is intentionally best-effort; callers
+// should queue it with low concurrency so large cloud libraries do not overload
+// small NAS devices.
+func (p *ImageProxy) PrefetchCloudResolved(ctx context.Context, stableKey string, link *cloud.DirectLink) error {
+	if p == nil || link == nil || strings.TrimSpace(link.URL) == "" {
+		return nil
+	}
+	if p.CloudImageCached(stableKey) {
+		return nil
+	}
+	_, _, err := p.fetchAndCacheCloudImage(ctx, stableKey, link, "MediaStationGo/0.1")
+	return err
+}
+
+func (p *ImageProxy) fetchAndCacheCloudImage(ctx context.Context, stableKey string, link *cloud.DirectLink, userAgent string) ([]byte, string, error) {
+	if err := os.MkdirAll(p.cacheDir, 0o755); err != nil {
+		return nil, "", err
+	}
+	_, cachePath, failPath := p.cloudImageCachePaths(stableKey)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, link.URL, nil)
 	if err != nil {
-		p.log.Warn("imageproxy: build cloud image request failed", zap.Error(err))
-		servePlaceholder(w)
-		return nil
+		return nil, "", err
 	}
 	for k, v := range link.Headers {
 		req.Header.Set(k, v)
 	}
 	if req.Header.Get("User-Agent") == "" {
-		if ua := r.UserAgent(); ua != "" {
-			req.Header.Set("User-Agent", ua)
+		if strings.TrimSpace(userAgent) != "" {
+			req.Header.Set("User-Agent", userAgent)
 		} else {
 			req.Header.Set("User-Agent", "MediaStationGo/0.1")
 		}
@@ -440,25 +525,22 @@ func (p *ImageProxy) ServeCloudResolved(ctx context.Context, w http.ResponseWrit
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		p.log.Warn("imageproxy: cloud image fetch failed", zap.String("url", link.URL), zap.Error(err))
 		p.markImageFetchFailed(failPath)
-		serveCachedPlaceholder(w)
-		return nil
+		return nil, "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		p.log.Warn("imageproxy: cloud image returned non-OK",
-			zap.String("url", link.URL), zap.String("status", resp.Status))
 		p.markImageFetchFailed(failPath)
-		serveCachedPlaceholder(w)
-		return nil
+		return nil, "", errors.New("cloud image returned " + resp.Status)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
-	if err != nil || len(data) == 0 {
-		p.log.Warn("imageproxy: read cloud image body failed", zap.String("url", link.URL), zap.Error(err))
+	if err != nil {
 		p.markImageFetchFailed(failPath)
-		serveCachedPlaceholder(w)
-		return nil
+		return nil, "", err
+	}
+	if len(data) == 0 {
+		p.markImageFetchFailed(failPath)
+		return nil, "", errors.New("cloud image body is empty")
 	}
 
 	p.mu.Lock()
@@ -482,10 +564,7 @@ func (p *ImageProxy) ServeCloudResolved(ctx context.Context, w http.ResponseWrit
 	if ctype == "" {
 		ctype = detectContentType(data)
 	}
-	w.Header().Set("Content-Type", ctype)
-	w.Header().Set("Cache-Control", imageBrowserCacheControl)
-	http.ServeContent(w, r, key, time.Now(), bytes.NewReader(data))
-	return nil
+	return data, ctype, nil
 }
 
 func (p *ImageProxy) markImageFetchFailed(failPath string) {

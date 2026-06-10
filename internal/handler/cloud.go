@@ -284,6 +284,11 @@ func cloudPlayHandler(svc *service.Container) gin.HandlerFunc {
 }
 
 func serveCloudResolvedLink(svc *service.Container, c *gin.Context, typ, ref string) {
+	if isCloudImageRef(ref) && svc != nil && svc.ImageProxy != nil {
+		if svc.ImageProxy.ServeCloudCached(c.Writer, c.Request, typ+":"+ref) {
+			return
+		}
+	}
 	if svc == nil || svc.StorageCfg == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "cloud storage service unavailable"})
 		return

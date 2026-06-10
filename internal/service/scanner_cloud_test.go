@@ -422,6 +422,9 @@ func TestScanCloudLibraryReadsRemoteNFOAndArtwork(t *testing.T) {
 				_, _ = w.Write([]byte(`<tvshow><title>剑来</title><year>2024</year><plot>天地有剑气</plot></tvshow>`))
 			case "/dav/Anime/JianLai/Season1/JianLai.S01E01.nfo":
 				_, _ = w.Write([]byte(`<episodedetails><showtitle>剑来</showtitle><title>第一集</title><season>1</season><episode>1</episode></episodedetails>`))
+			case "/dav/Anime/JianLai/poster.jpg":
+				w.Header().Set("Content-Type", "image/jpeg")
+				_, _ = w.Write([]byte("cloud-poster-bytes"))
 			default:
 				t.Fatalf("unexpected get path %s", r.URL.Path)
 			}
@@ -455,6 +458,8 @@ func TestScanCloudLibraryReadsRemoteNFOAndArtwork(t *testing.T) {
 	}
 	scanner := NewScannerService(&config.Config{}, log, repos, NewHub(log), nil, nil)
 	scanner.SetStorageConfig(storage)
+	imageProxy := NewImageProxy(&config.Config{Cache: config.CacheConfig{CacheDir: t.TempDir()}}, log)
+	scanner.SetImageProxy(imageProxy)
 
 	res, err := scanner.ScanLibrary(t.Context(), lib.ID)
 	if err != nil {
@@ -476,7 +481,27 @@ func TestScanCloudLibraryReadsRemoteNFOAndArtwork(t *testing.T) {
 	if media.PosterURL != "/api/cloud/play/openlist?ref=%2FAnime%2FJianLai%2Fposter.jpg" {
 		t.Fatalf("poster url = %q", media.PosterURL)
 	}
+	rec := httptest.NewRecorder()
+	if !imageProxy.ServeCloudCached(rec, httptest.NewRequest(http.MethodGet, media.PosterURL, nil), "openlist:/Anime/JianLai/poster.jpg") {
+		t.Fatal("cloud poster should be cached locally during scan before media is exposed")
+	}
+	if got := rec.Body.String(); got != "cloud-poster-bytes" {
+		t.Fatalf("cached poster body = %q", got)
+	}
 	if media.ScrapeStatus != "matched" {
 		t.Fatalf("scrape status = %q", media.ScrapeStatus)
+	}
+}
+
+func TestParseCloudImagePlaybackURL(t *testing.T) {
+	typ, ref, ok := parseCloudImagePlaybackURL("http://nas.local/api/cloud/play/openlist?ref=%2FAnime%2FJianLai%2Fposter.jpg")
+	if !ok || typ != "openlist" || ref != "/Anime/JianLai/poster.jpg" {
+		t.Fatalf("parse cloud image url = typ=%q ref=%q ok=%v", typ, ref, ok)
+	}
+	if _, _, ok := parseCloudImagePlaybackURL("/api/cloud/play/openlist?ref=%2FAnime%2FJianLai%2Fmovie.mkv"); ok {
+		t.Fatal("video cloud url should not be treated as artwork")
+	}
+	if _, _, ok := parseCloudImagePlaybackURL("https://image.tmdb.org/t/p/w500/poster.jpg"); ok {
+		t.Fatal("remote HTTP poster should not be treated as cloud artwork")
 	}
 }

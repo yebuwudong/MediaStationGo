@@ -131,6 +131,9 @@ func TestImageProxyCachesCloudResolvedImage(t *testing.T) {
 	})}
 
 	link := &cloud.DirectLink{URL: "http://cloud-provider.invalid/poster.png"}
+	if proxy.ServeCloudCached(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/cloud/play/openlist?ref=poster.png", nil), "openlist:poster.png") {
+		t.Fatal("ServeCloudCached returned true before the cloud image was cached")
+	}
 	for i := 0; i < 2; i++ {
 		rec := httptest.NewRecorder()
 		if err := proxy.ServeCloudResolved(t.Context(), rec, httptest.NewRequest(http.MethodGet, "/api/cloud/play/openlist?ref=poster.png", nil), "openlist:poster.png", link); err != nil {
@@ -145,6 +148,50 @@ func TestImageProxyCachesCloudResolvedImage(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
 		t.Fatalf("upstream calls = %d, want 1 due to cloud image cache", got)
+	}
+
+	rec := httptest.NewRecorder()
+	if !proxy.ServeCloudCached(rec, httptest.NewRequest(http.MethodGet, "/api/cloud/play/openlist?ref=poster.png", nil), "openlist:poster.png") {
+		t.Fatal("ServeCloudCached returned false after the cloud image was cached")
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("upstream calls after ServeCloudCached = %d, want 1", got)
+	}
+	if rec.Body.Len() != len(transparent1x1PNG) {
+		t.Fatalf("cached body length = %d, want %d", rec.Body.Len(), len(transparent1x1PNG))
+	}
+}
+
+func TestImageProxyPrefetchCloudResolvedImage(t *testing.T) {
+	var calls int32
+	proxy := NewImageProxy(&config.Config{Cache: config.CacheConfig{CacheDir: filepath.Join(t.TempDir(), "cache")}}, zap.NewNop())
+	proxy.client = &http.Client{Transport: imageRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		atomic.AddInt32(&calls, 1)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"image/png"}},
+			Body:       io.NopCloser(strings.NewReader(string(transparent1x1PNG))),
+			Request:    req,
+		}, nil
+	})}
+
+	link := &cloud.DirectLink{URL: "http://cloud-provider.invalid/folder.png"}
+	if err := proxy.PrefetchCloudResolved(t.Context(), "openlist:folder.png", link); err != nil {
+		t.Fatal(err)
+	}
+	if err := proxy.PrefetchCloudResolved(t.Context(), "openlist:folder.png", link); err != nil {
+		t.Fatal(err)
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("upstream calls = %d, want 1 after prefetch cache hit", got)
+	}
+	rec := httptest.NewRecorder()
+	if !proxy.ServeCloudCached(rec, httptest.NewRequest(http.MethodGet, "/api/cloud/play/openlist?ref=folder.png", nil), "openlist:folder.png") {
+		t.Fatal("prefetched cloud image was not served from cache")
+	}
+	if rec.Body.Len() != len(transparent1x1PNG) {
+		t.Fatalf("cached body length = %d, want %d", rec.Body.Len(), len(transparent1x1PNG))
 	}
 }
 

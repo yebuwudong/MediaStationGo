@@ -162,6 +162,7 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 		}
 		return roots
 	})
+	scanner.SetImageProxy(imageProxy)
 
 	ctx, cancel := context.WithCancel(context.Background())
 

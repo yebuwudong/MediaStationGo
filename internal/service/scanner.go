@@ -56,9 +56,15 @@ type ScannerService struct {
 	scraper *ScraperService
 	storage *StorageConfigService
 
-	cloudScanMu sync.Mutex
-	cloudScans  map[string]*cloudScanEntry
-	cloudSlots  chan struct{}
+	imageProxy *ImageProxy
+
+	cloudScanMu             sync.Mutex
+	cloudScans              map[string]*cloudScanEntry
+	cloudSlots              chan struct{}
+	cloudImagePrefetchOnce  sync.Once
+	cloudImagePrefetchQueue chan cloudImagePrefetchTask
+	cloudImagePrefetchMu    sync.Mutex
+	cloudImagePrefetching   map[string]struct{}
 }
 
 // NewScannerService is the constructor.
@@ -72,9 +78,12 @@ func NewScannerService(
 ) *ScannerService {
 	return &ScannerService{
 		cfg: cfg, log: log, repo: repo, hub: hub,
-		probe: probe, scraper: scraper,
-		cloudScans: make(map[string]*cloudScanEntry),
-		cloudSlots: make(chan struct{}, 1),
+		probe:                   probe,
+		scraper:                 scraper,
+		cloudScans:              make(map[string]*cloudScanEntry),
+		cloudSlots:              make(chan struct{}, 1),
+		cloudImagePrefetchQueue: make(chan cloudImagePrefetchTask, 256),
+		cloudImagePrefetching:   make(map[string]struct{}),
 	}
 }
 
@@ -83,6 +92,146 @@ func NewScannerService(
 // while the scanner is needed earlier by watcher/download services.
 func (s *ScannerService) SetStorageConfig(storage *StorageConfigService) {
 	s.storage = storage
+}
+
+// SetImageProxy lets cloud scans warm sidecar poster/backdrop files into the
+// local image cache. This keeps library opening fast without forcing the UI or
+// Emby clients to resolve/download every cloud poster on demand.
+func (s *ScannerService) SetImageProxy(imageProxy *ImageProxy) {
+	s.imageProxy = imageProxy
+	if imageProxy != nil {
+		s.cloudImagePrefetchOnce.Do(func() {
+			go s.cloudImagePrefetchWorker()
+		})
+	}
+}
+
+func (s *ScannerService) cloudImagePrefetchWorker() {
+	for task := range s.cloudImagePrefetchQueue {
+		s.prefetchCloudImage(task)
+	}
+}
+
+func (s *ScannerService) queueCloudArtworkPrefetch(raw string) {
+	if s == nil || s.storage == nil || s.imageProxy == nil {
+		return
+	}
+	typ, ref, ok := parseCloudImagePlaybackURL(raw)
+	if !ok {
+		return
+	}
+	stableKey := typ + ":" + ref
+	if s.imageProxy.CloudImageCached(stableKey) {
+		return
+	}
+	s.cloudImagePrefetchMu.Lock()
+	if _, ok := s.cloudImagePrefetching[stableKey]; ok {
+		s.cloudImagePrefetchMu.Unlock()
+		return
+	}
+	s.cloudImagePrefetching[stableKey] = struct{}{}
+	s.cloudImagePrefetchMu.Unlock()
+
+	task := cloudImagePrefetchTask{typ: typ, ref: ref, stableKey: stableKey}
+	select {
+	case s.cloudImagePrefetchQueue <- task:
+	default:
+		s.cloudImagePrefetchMu.Lock()
+		delete(s.cloudImagePrefetching, stableKey)
+		s.cloudImagePrefetchMu.Unlock()
+		if s.log != nil {
+			s.log.Debug("cloud artwork prefetch queue full", zap.String("provider", typ), zap.String("ref", ref))
+		}
+	}
+}
+
+func (s *ScannerService) prefetchCloudImage(task cloudImagePrefetchTask) {
+	defer func() {
+		s.cloudImagePrefetchMu.Lock()
+		delete(s.cloudImagePrefetching, task.stableKey)
+		s.cloudImagePrefetchMu.Unlock()
+	}()
+	if s == nil || s.storage == nil || s.imageProxy == nil || s.imageProxy.CloudImageCached(task.stableKey) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	link, err := s.storage.CloudResolve(ctx, task.typ, task.ref, "")
+	if err != nil {
+		if s.log != nil {
+			s.log.Debug("resolve cloud artwork for prefetch failed", zap.String("provider", task.typ), zap.String("ref", task.ref), zap.Error(err))
+		}
+		return
+	}
+	if err := s.imageProxy.PrefetchCloudResolved(ctx, task.stableKey, link); err != nil && s.log != nil {
+		s.log.Debug("prefetch cloud artwork failed", zap.String("provider", task.typ), zap.String("ref", task.ref), zap.Error(err))
+	}
+}
+
+func (s *ScannerService) cacheCloudArtworkNow(ctx context.Context, raw string) {
+	if s == nil || s.storage == nil || s.imageProxy == nil {
+		return
+	}
+	typ, ref, ok := parseCloudImagePlaybackURL(raw)
+	if !ok {
+		return
+	}
+	stableKey := typ + ":" + ref
+	if s.imageProxy.CloudImageCached(stableKey) {
+		return
+	}
+	cacheCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	link, err := s.storage.CloudResolve(cacheCtx, typ, ref, "")
+	if err != nil {
+		if s.log != nil {
+			s.log.Debug("resolve cloud artwork for priority cache failed", zap.String("provider", typ), zap.String("ref", ref), zap.Error(err))
+		}
+		s.queueCloudArtworkPrefetch(raw)
+		return
+	}
+	if err := s.imageProxy.PrefetchCloudResolved(cacheCtx, stableKey, link); err != nil {
+		if s.log != nil {
+			s.log.Debug("priority cache cloud artwork failed", zap.String("provider", typ), zap.String("ref", ref), zap.Error(err))
+		}
+		s.queueCloudArtworkPrefetch(raw)
+	}
+}
+
+func (s *ScannerService) cacheCloudMetadataArtworkNow(ctx context.Context, meta *LocalMetadata) {
+	if meta == nil {
+		return
+	}
+	s.cacheCloudArtworkNow(ctx, meta.PosterURL)
+	s.cacheCloudArtworkNow(ctx, meta.BackdropURL)
+}
+
+func parseCloudImagePlaybackURL(raw string) (string, string, bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", "", false
+	}
+	path := strings.Trim(u.Path, "/")
+	const prefix = "api/cloud/play/"
+	if !strings.HasPrefix(strings.ToLower(path), prefix) {
+		return "", "", false
+	}
+	typ := strings.TrimSpace(path[len(prefix):])
+	ref := strings.TrimSpace(u.Query().Get("ref"))
+	if typ == "" || ref == "" || !isCloudArtworkRef(ref) {
+		return "", "", false
+	}
+	return typ, ref, true
+}
+
+func isCloudArtworkRef(ref string) bool {
+	ref = strings.ToLower(strings.TrimSpace(ref))
+	for _, suffix := range []string{".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"} {
+		if strings.HasSuffix(ref, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // ScanResult summarises a scan run.
@@ -124,6 +273,12 @@ type CloudScanStatus struct {
 type cloudScanEntry struct {
 	status CloudScanStatus
 	cancel context.CancelFunc
+}
+
+type cloudImagePrefetchTask struct {
+	typ       string
+	ref       string
+	stableKey string
 }
 
 func (s *ScannerService) beginCloudScan(ctx context.Context, lib *model.Library, mount CloudMountInfo) (context.Context, func(*ScanResult, error), error) {
@@ -622,6 +777,7 @@ func (s *ScannerService) scanCloudLibrary(ctx context.Context, lib *model.Librar
 		publishProgress("listing", dirsVisited == 1 || dirsVisited%20 == 0)
 		sidecars := newCloudSidecarSet(typ, entries)
 		dirMeta := s.cloudDirectoryMetadata(ctx, typ, displayDir, sidecars, inheritedMeta)
+		s.cacheCloudMetadataArtworkNow(ctx, dirMeta)
 		for _, entry := range entries {
 			select {
 			case <-ctx.Done():
@@ -654,12 +810,14 @@ func (s *ScannerService) scanCloudLibrary(ctx context.Context, lib *model.Librar
 			publishProgress("listing", filesDiscovered%100 == 0)
 			displayPath := joinCloudDisplayPath(displayDir, entry.Name)
 			path := cloudMediaPath(typ, displayPath)
+			localMeta := s.cloudFileMetadata(ctx, typ, displayPath, entry.Name, sidecars, dirMeta, librarySupportsSeasons(lib))
+			s.cacheCloudMetadataArtworkNow(ctx, localMeta)
 			candidate := cloudCandidate{
 				ref:       ref,
 				name:      entry.Name,
 				size:      entry.Size,
 				path:      path,
-				localMeta: s.cloudFileMetadata(ctx, typ, displayPath, entry.Name, sidecars, dirMeta, librarySupportsSeasons(lib)),
+				localMeta: localMeta,
 			}
 			key := cloudMediaDedupeKey(lib, displayDir, entry.Name, entry.Size)
 			if key != "" {
@@ -800,6 +958,8 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 	if localMeta != nil {
 		applyLocalMetadata(m, localMeta)
 		res.LocalMetadata++
+		s.queueCloudArtworkPrefetch(localMeta.PosterURL)
+		s.queueCloudArtworkPrefetch(localMeta.BackdropURL)
 	}
 	if err := s.repo.Media.Upsert(ctx, m); err != nil {
 		s.log.Warn("upsert cloud media failed", zap.String("path", path), zap.Error(err))
