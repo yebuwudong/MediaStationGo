@@ -22,6 +22,7 @@ services:
     image: ghcr.io/shukebta/mediastation-go:${MEDIASTATION_IMAGE_TAG:-latest}
     container_name: mediastation-go
     restart: unless-stopped
+    init: true
     pull_policy: missing
 
     ports:

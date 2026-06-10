@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, BATCH_REQUEST_TIMEOUT, LONG_REQUEST_TIMEOUT } from './client'
 import type { Library, Media, ScanResult } from '../types'
 
 export interface MediaPage {
@@ -22,15 +22,16 @@ export const libraryAPI = {
   remove: (id: string) => api.delete(`/libraries/${id}`).then((r) => r.data),
 
   scan: (id: string) =>
-    api.post<ScanResult>(`/libraries/${id}/scan`).then((r) => r.data),
+    api.post<ScanResult>(`/libraries/${id}/scan`, null, { timeout: BATCH_REQUEST_TIMEOUT }).then((r) => r.data),
 
   scrape: (id: string) =>
-    api.post(`/libraries/${id}/scrape`).then((r) => r.data),
+    api.post(`/libraries/${id}/scrape`, null, { timeout: BATCH_REQUEST_TIMEOUT }).then((r) => r.data),
 
   listMedia: (id: string, page = 1, pageSize = 50) =>
     api
       .get<MediaPage>(`/libraries/${id}/media`, {
         params: { page, page_size: pageSize },
+        timeout: LONG_REQUEST_TIMEOUT,
       })
       .then((r) => r.data),
 }

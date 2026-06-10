@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react'
-import { Link as LinkIcon, Loader2, Plus, Search, Trash2, Wand2 } from 'lucide-react'
+import { Link as LinkIcon, Loader2, Plus, Save, Search, Trash2, Wand2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 import { adminAPI } from '../api/admin'
@@ -21,6 +21,9 @@ export function StrmPage() {
   const [generateLibraryID, setGenerateLibraryID] = useState('')
   const [baseURL, setBaseURL] = useState('')
   const [outputDir, setOutputDir] = useState('')
+  const [strmEnabled, setStrmEnabled] = useState(true)
+  const [autoGenerate, setAutoGenerate] = useState(false)
+  const [savingSettings, setSavingSettings] = useState(false)
   const [overwrite, setOverwrite] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [generateResult, setGenerateResult] = useState<GenerateSTRMResult | null>(null)
@@ -45,6 +48,8 @@ export function StrmPage() {
         const settings = Object.fromEntries(rows.map((row) => [row.key, row.value]))
         setBaseURL(settings['app.server_url'] || settings['strm.base_url'] || '')
         setOutputDir(settings['strm.output_dir'] || '')
+        setStrmEnabled(settings['strm.enabled'] !== 'false')
+        setAutoGenerate(settings['strm.auto_generate_enabled'] === 'true')
       })
       .catch(() => undefined)
   }, [])
@@ -69,7 +74,7 @@ export function StrmPage() {
         base_url: baseURL.trim().replace(/\/+$/, ''),
         output_dir: outputDir.trim(),
         overwrite,
-        enabled: true,
+        enabled: autoGenerate,
         include_local: true,
       })
       setGenerateResult(result)
@@ -82,6 +87,24 @@ export function StrmPage() {
       toast.error(msg)
     } finally {
       setGenerating(false)
+    }
+  }
+
+  const saveSTRMSettings = async () => {
+    setSavingSettings(true)
+    try {
+      await Promise.all([
+        adminAPI.updateSetting('strm.enabled', String(strmEnabled)),
+        adminAPI.updateSetting('strm.auto_generate_enabled', String(autoGenerate)),
+      ])
+      toast.success(strmEnabled ? 'STRM 播放已启用' : 'STRM 播放已关闭')
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+        '保存 STRM 开关失败'
+      toast.error(msg)
+    } finally {
+      setSavingSettings(false)
     }
   }
 
@@ -185,9 +208,43 @@ export function StrmPage() {
               只需要填写自己的访问域名，系统会按媒体库内每个媒体批量生成可播放的 .strm 文件。
             </p>
           </div>
-          <span className="rounded-full border border-emerald-300/40 bg-emerald-400/10 px-3 py-1 text-xs font-semibold text-emerald-500">
-            开启后可 STRM 播放
+          <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+            strmEnabled
+              ? 'border-emerald-300/40 bg-emerald-400/10 text-emerald-500'
+              : 'border-red-300/40 bg-red-400/10 text-red-500'
+          }`}>
+            {strmEnabled ? 'STRM 播放已启用' : 'STRM 播放已关闭'}
           </span>
+        </div>
+        <div className="grid gap-3 rounded-2xl border border-gray-200 bg-white/70 p-4 md:grid-cols-[1fr_1fr_auto]">
+          <label className="flex items-start gap-3 text-sm text-ink-100">
+            <input
+              type="checkbox"
+              className="mt-1 h-4 w-4 accent-primary-400"
+              checked={strmEnabled}
+              onChange={(e) => setStrmEnabled(e.target.checked)}
+            />
+            <span>
+              <span className="block font-medium text-ink-600">启用 STRM 播放</span>
+              <span className="text-xs text-ink-50">关闭后不会跳转 STRM/网盘直链；本地文件仍按本地文件播放。</span>
+            </span>
+          </label>
+          <label className="flex items-start gap-3 text-sm text-ink-100">
+            <input
+              type="checkbox"
+              className="mt-1 h-4 w-4 accent-primary-400"
+              checked={autoGenerate}
+              onChange={(e) => setAutoGenerate(e.target.checked)}
+            />
+            <span>
+              <span className="block font-medium text-ink-600">扫描后自动刷新 STRM 文件</span>
+              <span className="text-xs text-ink-50">默认关闭，避免扫描大型网盘库时重复写文件。</span>
+            </span>
+          </label>
+          <button type="button" className="neon-button self-center" disabled={savingSettings} onClick={saveSTRMSettings}>
+            {savingSettings ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+            保存开关
+          </button>
         </div>
         <form onSubmit={onGenerate} className="grid gap-3 md:grid-cols-4">
           <select

@@ -304,8 +304,8 @@ const GROUPS: SettingGroup[] = [
         key: 'cloud.auto_sync_enabled',
         label: '自动同步网盘媒体库',
         type: 'toggle',
-        hint: '开启后后台会按间隔刷新已挂载的 cloud:// 媒体库，自动生成或更新 302/STRM 播放入口；不会下载网盘文件到本地。',
-        defaultValue: 'true',
+        hint: '默认关闭，避免 NAS 反复递归读取大型网盘目录。需要定时刷新时再开启；手动扫描仍可在外部存储页面执行。',
+        defaultValue: 'false',
       },
       {
         key: 'cloud.sync_interval_seconds',

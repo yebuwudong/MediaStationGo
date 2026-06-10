@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -95,8 +96,52 @@ func TestEmbyItemsExposeSeriesSeasonEpisodeHierarchy(t *testing.T) {
 	if sources[0]["Id"] != "ep-1" {
 		t.Fatalf("series playback should fall back to first episode: %#v", sources)
 	}
-	if sources[0]["DirectStreamUrl"] != "/Videos/ep-1/stream" {
+	if sources[0]["DirectStreamUrl"] != "/Videos/ep-1/stream.mkv" {
 		t.Fatalf("playback should use Emby-compatible stream URL: %#v", sources[0])
+	}
+}
+
+func TestEmbyVirtualSeriesArtworkUsesListCache(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "番剧", Path: `/media/anime`, Type: "anime", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	media := model.Media{
+		Base:        model.Base{ID: "ep-1"},
+		LibraryID:   lib.ID,
+		Title:       "剑来",
+		Path:        `/media/anime/剑来/Season 01/剑来 - S01E01.mkv`,
+		PosterURL:   `/poster.jpg`,
+		BackdropURL: `/backdrop.jpg`,
+		SeasonNum:   1,
+		EpisodeNum:  1,
+	}
+	if err := svc.repo.DB.Create(&media).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+	root, err := svc.Items(t.Context(), ItemsParams{ParentID: lib.ID, Limit: 50})
+	if err != nil {
+		t.Fatalf("library items: %v", err)
+	}
+	items := root["Items"].([]map[string]any)
+	seriesID := items[0]["Id"].(string)
+
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	poster, err := svc.ImageURL(cancelled, seriesID, "Primary")
+	if err != nil {
+		t.Fatalf("image url from cache: %v", err)
+	}
+	if poster != "/poster.jpg" {
+		t.Fatalf("poster = %q, want cached poster", poster)
+	}
+	backdrop, err := svc.ImageURL(cancelled, seriesID, "Backdrop")
+	if err != nil {
+		t.Fatalf("backdrop url from cache: %v", err)
+	}
+	if backdrop != "/backdrop.jpg" {
+		t.Fatalf("backdrop = %q, want cached backdrop", backdrop)
 	}
 }
 
@@ -283,7 +328,7 @@ func TestEmbyPlaybackInfoRespectsDirectPlayOnly(t *testing.T) {
 	if _, ok := src["TranscodingUrl"]; ok {
 		t.Fatalf("expected no TranscodingUrl in direct-only mode: %#v", src)
 	}
-	if src["SupportsDirectPlay"] != true || src["DirectStreamUrl"] != "/Videos/m-1/stream" {
+	if src["SupportsDirectPlay"] != true || src["DirectStreamUrl"] != "/Videos/m-1/stream.mkv" {
 		t.Fatalf("direct-only must still allow direct play: %#v", src)
 	}
 }
@@ -318,6 +363,10 @@ func TestEmbyPlaybackInfoKeepsSTRMBehindStreamEndpoint(t *testing.T) {
 	}
 	if src["Path"] != "/api/cloud/play/quark?ref=f1" {
 		t.Fatalf("path should expose the strm target for diagnostics: %#v", src)
+	}
+	streams := src["MediaStreams"].([]map[string]any)
+	if len(streams) == 0 || streams[0]["Type"] != "Video" {
+		t.Fatalf("strm media should expose a fallback video stream for Android clients: %#v", src)
 	}
 }
 

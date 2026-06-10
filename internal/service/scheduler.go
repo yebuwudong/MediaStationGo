@@ -174,24 +174,40 @@ func (s *SchedulerService) RunNow(ctx context.Context, name string) error {
 }
 
 func (s *SchedulerService) loop(ctx context.Context, j *scheduledJob) {
-	t := time.NewTicker(j.interval)
-	defer t.Stop()
-	// Run once shortly after startup so the initial state is fresh.
-	first := time.NewTimer(15 * time.Second)
-	defer first.Stop()
+	s.loopWithInitialDelay(ctx, j, 15*time.Second)
+}
+
+func (s *SchedulerService) loopWithInitialDelay(ctx context.Context, j *scheduledJob, initialDelay time.Duration) {
+	delay := initialDelay
 	for {
+		if delay < 0 {
+			delay = 0
+		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
 			return
 		case <-s.stopCh:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
 			return
-		case <-first.C:
-		case <-t.C:
+		case <-timer.C:
 		}
 		if err := s.runOnce(ctx, j); err != nil {
 			s.log.Warn("scheduled job failed",
 				zap.String("name", j.name), zap.Error(err))
 		}
+		delay = j.interval
 	}
 }
 
@@ -343,13 +359,13 @@ func (s *SchedulerService) jobSyncCloudLibraries(ctx context.Context) error {
 
 func (s *SchedulerService) autoCloudSyncEnabled(ctx context.Context) bool {
 	if s.repo == nil || s.repo.Setting == nil {
-		return true
+		return false
 	}
 	v, err := s.repo.Setting.Get(ctx, "cloud.auto_sync_enabled")
 	if err != nil {
-		return true
+		return false
 	}
-	return parseBoolSetting(v, true)
+	return parseBoolSetting(v, false)
 }
 
 func (s *SchedulerService) cloudSyncInterval(ctx context.Context) time.Duration {

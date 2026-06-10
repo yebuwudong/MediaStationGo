@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, BATCH_REQUEST_TIMEOUT } from './client'
 
 export type GenerateSTRMInput = {
   library_id: string
@@ -33,5 +33,7 @@ export const strmAPI = {
   importURL: (libraryID: string, title: string, url: string) =>
     api.post('/strm/import', { library_id: libraryID, title, url }).then((r) => r.data),
   generate: (input: GenerateSTRMInput) =>
-    api.post<GenerateSTRMResult>('/strm/generate', input).then((r) => r.data),
+    api
+      .post<GenerateSTRMResult>('/strm/generate', input, { timeout: BATCH_REQUEST_TIMEOUT })
+      .then((r) => r.data),
 }

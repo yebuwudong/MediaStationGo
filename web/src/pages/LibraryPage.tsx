@@ -13,6 +13,8 @@ import { useAuthStore } from '../stores/auth'
 import { getSeriesKey, groupSeries, isEpisodeLike, seriesTitle, type SeriesCard } from '../utils/groupSeries'
 import { useWebSocket } from '../hooks/useWebSocket'
 
+const MAX_LIBRARY_ITEMS_IN_BROWSER = 3_000
+
 export function LibraryPage() {
   const { id = '' } = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -77,9 +79,10 @@ export function LibraryPage() {
     setLoading(true)
     setItems([])
     const loadAll = async () => {
-      const pageSize = 2000
+      const pageSize = 500
       let page = 1
       let collected: Media[] = []
+      let warnedLargeLibrary = false
       try {
         for (;;) {
           const d = await libraryAPI.listMedia(id, page, pageSize)
@@ -88,6 +91,13 @@ export function LibraryPage() {
           setItems(collected)
           setTotal(d.total)
           if (collected.length >= d.total || d.items.length < pageSize) break
+          if (collected.length >= MAX_LIBRARY_ITEMS_IN_BROWSER) {
+            if (!warnedLargeLibrary) {
+              warnedLargeLibrary = true
+              toast(`媒体库条目较多，已先加载前 ${MAX_LIBRARY_ITEMS_IN_BROWSER} 条，避免浏览器卡死。请使用搜索或更细的媒体库目录浏览。`)
+            }
+            break
+          }
           page += 1
         }
       } finally {

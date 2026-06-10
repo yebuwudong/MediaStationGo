@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, BATCH_REQUEST_TIMEOUT, LONG_REQUEST_TIMEOUT } from './client'
 
 export type StorageType = 'alist' | 'openlist' | 's3' | 'webdav' | 'cloud115' | 'quark' | 'clouddrive2'
 
@@ -85,6 +85,8 @@ export const storageAPI = {
       .post<{ ok: boolean; error?: string }>(`/admin/storage/${type}/test`, {
         type,
         config,
+      }, {
+        timeout: LONG_REQUEST_TIMEOUT,
       })
       .then((r) => r.data),
 
@@ -99,7 +101,9 @@ export const storageAPI = {
     },
   ) =>
     api
-      .post<{ result: CloudUploadResult; error?: string }>(`/admin/storage/${type}/upload-local`, input)
+      .post<{ result: CloudUploadResult; error?: string }>(`/admin/storage/${type}/upload-local`, input, {
+        timeout: BATCH_REQUEST_TIMEOUT,
+      })
       .then((r) => r.data),
 
   scanAllCloud: () =>
@@ -126,6 +130,7 @@ export const cloudAPI = {
     api
       .get<{ items: CloudEntry[]; error?: string }>(`/admin/cloud/${type}/list`, {
         params: { dir },
+        timeout: LONG_REQUEST_TIMEOUT,
       })
       .then((r) => r.data),
 
@@ -136,7 +141,9 @@ export const cloudAPI = {
 
   mount: (type: StorageType, dir = '', name = '', media_type = 'movie', dir_path = '') =>
     api
-      .post(`/admin/cloud/${type}/mount`, { dir, dir_path, name, media_type })
+      .post(`/admin/cloud/${type}/mount`, { dir, dir_path, name, media_type }, {
+        timeout: LONG_REQUEST_TIMEOUT,
+      })
       .then((r) => r.data),
 
   qrStart: (type: StorageType) =>

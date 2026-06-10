@@ -58,6 +58,7 @@ type ScannerService struct {
 
 	cloudScanMu sync.Mutex
 	cloudScans  map[string]*cloudScanEntry
+	cloudSlots  chan struct{}
 }
 
 // NewScannerService is the constructor.
@@ -73,6 +74,7 @@ func NewScannerService(
 		cfg: cfg, log: log, repo: repo, hub: hub,
 		probe: probe, scraper: scraper,
 		cloudScans: make(map[string]*cloudScanEntry),
+		cloudSlots: make(chan struct{}, 1),
 	}
 }
 
@@ -230,6 +232,35 @@ func (s *ScannerService) updateCloudScanProgress(libraryID, stage string, dirs, 
 	entry.status.Skipped = skipped
 	entry.status.Removed = removed
 	entry.status.FilesPerSecond = filesPerSecond
+}
+
+func (s *ScannerService) acquireCloudScanSlot(ctx context.Context, libraryID string) (func(), error) {
+	if s == nil {
+		return func() {}, nil
+	}
+	s.cloudScanMu.Lock()
+	if s.cloudSlots == nil {
+		s.cloudSlots = make(chan struct{}, 1)
+	}
+	slots := s.cloudSlots
+	if entry := s.cloudScans[libraryID]; entry != nil {
+		entry.status.Stage = "queued"
+		entry.status.UpdatedAt = time.Now()
+	}
+	s.cloudScanMu.Unlock()
+
+	select {
+	case slots <- struct{}{}:
+		s.cloudScanMu.Lock()
+		if entry := s.cloudScans[libraryID]; entry != nil && entry.status.State == "running" {
+			entry.status.Stage = "listing"
+			entry.status.UpdatedAt = time.Now()
+		}
+		s.cloudScanMu.Unlock()
+		return func() { <-slots }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // CloudScanStatuses returns the current or most recent status per cloud library.
@@ -421,6 +452,15 @@ func (s *ScannerService) scanLibrary(ctx context.Context, libraryID string, auto
 			}
 			return nil, err
 		}
+		release, err := s.acquireCloudScanSlot(scanCtx, lib.ID)
+		if err != nil {
+			res := &ScanResult{LibraryID: lib.ID}
+			if finish != nil {
+				finish(res, err)
+			}
+			return res, err
+		}
+		defer release()
 		res, err := s.scanCloudLibrary(scanCtx, lib, mount, autoScrape)
 		if finish != nil {
 			finish(res, err)
@@ -639,6 +679,11 @@ func (s *ScannerService) scanCloudLibrary(ctx context.Context, lib *model.Librar
 	if err := walkCloud(rootDir, rootDisplayDir, nil); err != nil {
 		return res, err
 	}
+	existingPaths, err := s.existingCloudMediaPaths(ctx, lib.ID)
+	if err != nil {
+		s.log.Warn("load existing cloud media paths failed", zap.String("library_id", lib.ID), zap.Error(err))
+		existingPaths = nil
+	}
 	for _, candidate := range candidates {
 		select {
 		case <-ctx.Done():
@@ -646,7 +691,7 @@ func (s *ScannerService) scanCloudLibrary(ctx context.Context, lib *model.Librar
 		default:
 		}
 		seen[candidate.path] = struct{}{}
-		s.ingestCloudFile(ctx, lib, typ, candidate.ref, candidate.path, candidate.name, candidate.size, candidate.localMeta, res)
+		s.ingestCloudFile(ctx, lib, typ, candidate.ref, candidate.path, candidate.name, candidate.size, candidate.localMeta, existingPaths, res)
 		publishProgress("importing", res.Visited == 1 || res.Visited%100 == 0)
 	}
 	removed, err := s.pruneMissingCloudMedia(ctx, lib.ID, seen)
@@ -678,6 +723,26 @@ func (s *ScannerService) scanCloudLibrary(ctx context.Context, lib *model.Librar
 	return res, nil
 }
 
+func (s *ScannerService) existingCloudMediaPaths(ctx context.Context, libraryID string) (map[string]struct{}, error) {
+	var rows []struct {
+		Path string
+	}
+	if err := s.repo.DB.WithContext(ctx).
+		Model(&model.Media{}).
+		Select("path").
+		Where("library_id = ? AND path LIKE ?", libraryID, "cloud://%").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		if row.Path != "" {
+			out[row.Path] = struct{}{}
+		}
+	}
+	return out, nil
+}
+
 func (s *ScannerService) shadowedCloudLibrary(ctx context.Context, lib *model.Library) *CloudMountConflict {
 	libs, err := s.repo.Library.List(ctx)
 	if err != nil {
@@ -687,7 +752,7 @@ func (s *ScannerService) shadowedCloudLibrary(ctx context.Context, lib *model.Li
 	return CloudLibraryShadowed(libs, *lib)
 }
 
-func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library, typ, ref, path, name string, size int64, localMeta *LocalMetadata, res *ScanResult) {
+func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library, typ, ref, path, name string, size int64, localMeta *LocalMetadata, existingPaths map[string]struct{}, res *ScanResult) {
 	res.Visited++
 	ext := strings.ToLower(filepath.Ext(name))
 	title, year := CleanQuery(name)
@@ -706,7 +771,13 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 			}
 		}
 	}
-	isNewMedia := !s.mediaPathExists(ctx, path)
+	isNewMedia := false
+	if existingPaths != nil {
+		_, exists := existingPaths[path]
+		isNewMedia = !exists
+	} else {
+		isNewMedia = !s.mediaPathExists(ctx, path)
+	}
 	m := &model.Media{
 		LibraryID:    lib.ID,
 		Title:        title,
@@ -739,14 +810,16 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 	} else {
 		res.Updated++
 	}
-	s.hub.Publish("scan", map[string]any{
-		"library_id": lib.ID,
-		"path":       path,
-		"visited":    res.Visited,
-		"added":      res.Added,
-		"updated":    res.Updated,
-		"cloud":      true,
-	})
+	if s.hub != nil && (res.Visited == 1 || res.Visited%100 == 0) {
+		s.hub.Publish("scan", map[string]any{
+			"library_id": lib.ID,
+			"path":       path,
+			"visited":    res.Visited,
+			"added":      res.Added,
+			"updated":    res.Updated,
+			"cloud":      true,
+		})
+	}
 }
 
 func cloudSeriesTitleFromMediaPath(mediaPath string) (string, int) {

@@ -33,6 +33,8 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
+const STRMEnabledSettingKey = "strm.enabled"
+
 // StreamService serves media files with proper Range support so browsers can
 // seek into the stream.
 type StreamService struct {
@@ -77,6 +79,10 @@ func (s *StreamService) directPlayOnly(ctx context.Context) bool {
 // own relative API endpoints — never to an absolute external direct link —
 // so the JWT is never leaked off-site (e.g. to the cloud CDN).
 func withAuthToken(target string, r *http.Request) string {
+	return withAuthTokenForInternalRedirect(target, r, "")
+}
+
+func withAuthTokenForInternalRedirect(target string, r *http.Request, publicBase string) string {
 	if r == nil {
 		return target
 	}
@@ -84,7 +90,13 @@ func withAuthToken(target string, r *http.Request) string {
 		return target
 	}
 	u, err := url.Parse(target)
-	if err != nil || u.IsAbs() {
+	if err != nil {
+		return target
+	}
+	if u.IsAbs() && !isInternalAPIURL(u, r, publicBase) {
+		return target
+	}
+	if !strings.HasPrefix(strings.ToLower(u.Path), "/api/") {
 		return target
 	}
 	tok := requestToken(r)
@@ -97,6 +109,58 @@ func withAuthToken(target string, r *http.Request) string {
 		u.RawQuery = q.Encode()
 	}
 	return u.String()
+}
+
+func absoluteInternalRedirect(target string, r *http.Request) string {
+	if r == nil || target == "" || strings.HasPrefix(target, "//") {
+		return target
+	}
+	u, err := url.Parse(target)
+	if err != nil || u.IsAbs() || !strings.HasPrefix(target, "/") {
+		return target
+	}
+	scheme := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
+	if scheme == "" {
+		if r.TLS != nil {
+			scheme = "https"
+		} else {
+			scheme = "http"
+		}
+	}
+	host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
+	if host == "" {
+		host = r.Host
+	}
+	if host == "" {
+		return target
+	}
+	u.Scheme = scheme
+	u.Host = host
+	return u.String()
+}
+
+func isInternalAPIURL(u *url.URL, r *http.Request, publicBase string) bool {
+	if u == nil || !strings.HasPrefix(strings.ToLower(u.Path), "/api/") {
+		return false
+	}
+	targetHost := strings.ToLower(strings.TrimSpace(u.Host))
+	if targetHost == "" {
+		return true
+	}
+	if r != nil {
+		if host := strings.ToLower(strings.TrimSpace(r.Host)); host != "" && targetHost == host {
+			return true
+		}
+		if host := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))); host != "" && targetHost == host {
+			return true
+		}
+	}
+	if publicBase != "" {
+		if base, err := url.Parse(publicBase); err == nil && strings.EqualFold(strings.TrimSpace(base.Host), targetHost) {
+			return true
+		}
+	}
+	return false
 }
 
 // requestToken extracts the bearer JWT from the incoming request the same way
@@ -119,6 +183,17 @@ func requestToken(r *http.Request) string {
 	return ""
 }
 
+func STRMPlaybackEnabled(ctx context.Context, repo *repository.Container) bool {
+	if repo == nil || repo.Setting == nil {
+		return true
+	}
+	v, err := repo.Setting.Get(ctx, STRMEnabledSettingKey)
+	if err != nil || strings.TrimSpace(v) == "" {
+		return true
+	}
+	return parseBoolSetting(v, true)
+}
+
 // ServeFile streams the file backing the given media ID using
 // http.ServeContent so HEAD / Range / If-Modified-Since are handled for free.
 //
@@ -133,8 +208,9 @@ func (s *StreamService) ServeFile(w http.ResponseWriter, r *http.Request, mediaI
 	if m == nil {
 		return ErrMediaNotFound
 	}
-	if strings.TrimSpace(m.STRMURL) != "" {
-		http.Redirect(w, r, withAuthToken(m.STRMURL, r), http.StatusFound)
+	if strings.TrimSpace(m.STRMURL) != "" && STRMPlaybackEnabled(r.Context(), s.repo) {
+		target := withAuthTokenForInternalRedirect(m.STRMURL, r, PublicServerURL(r.Context(), s.repo, s.cfg))
+		http.Redirect(w, r, absoluteInternalRedirect(target, r), http.StatusFound)
 		return nil
 	}
 	f, err := os.Open(m.Path)

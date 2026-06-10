@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -51,6 +52,14 @@ type EmbyService struct {
 	cfg  *config.Config
 	log  *zap.Logger
 	repo *repository.Container
+
+	virtualMu      sync.RWMutex
+	virtualSeries  map[string]embySeriesCacheEntry
+	virtualSeasons map[string]embySeasonCacheEntry
+	virtualArtwork map[string]embyArtworkCacheEntry
+
+	visibilityMu    sync.RWMutex
+	visibilityCache map[string]embyVisibilityCacheEntry
 }
 
 // NewEmbyService is the constructor.
@@ -187,10 +196,10 @@ func (e *EmbyService) Views(ctx context.Context, userID string) (map[string]any,
 		return nil, err
 	}
 	libs = FilterShadowedCloudLibraries(libs)
-	visibility := UserDefaultMediaVisibility(ctx, e.repo, userID)
+	visibility := e.mediaVisibility(ctx, userID)
 	items := make([]map[string]any, 0, len(libs))
 	for _, l := range libs {
-		if !LibraryVisibleForUser(ctx, e.repo, l, visibility) {
+		if !e.libraryVisibleFromCachedVisibility(l, visibility) {
 			continue
 		}
 		items = append(items, e.libraryAsView(&l))
@@ -248,6 +257,9 @@ type ItemsParams struct {
 const (
 	embyVirtualSeriesPrefix = "msgo-series-"
 	embyVirtualSeasonPrefix = "msgo-season-"
+	embyVirtualCacheTTL     = 10 * time.Minute
+	embyVisibilityCacheTTL  = 30 * time.Second
+	embySeriesGroupingLimit = 5000
 )
 
 var (
@@ -279,6 +291,27 @@ type embySeasonGroup struct {
 	SeasonNum int
 	Series    embySeriesGroup
 	Episodes  []model.Media
+}
+
+type embySeriesCacheEntry struct {
+	group     embySeriesGroup
+	expiresAt time.Time
+}
+
+type embySeasonCacheEntry struct {
+	season    embySeasonGroup
+	expiresAt time.Time
+}
+
+type embyArtworkCacheEntry struct {
+	primary   string
+	backdrop  string
+	expiresAt time.Time
+}
+
+type embyVisibilityCacheEntry struct {
+	visibility MediaVisibility
+	expiresAt  time.Time
 }
 
 // Items paginates media in Emby's hierarchy. Episodic libraries are exposed as
@@ -513,19 +546,7 @@ func (e *EmbyService) LatestItems(ctx context.Context, userID, parentID string, 
 	q = e.applyUserMediaVisibility(ctx, q, userID)
 	if parentID != "" {
 		if episodic, err := e.libraryIsEpisodic(ctx, parentID); err == nil && episodic {
-			resp, err := e.seriesItemsForLibrary(ctx, parentID, ItemsParams{
-				UserID:     userID,
-				ParentID:   parentID,
-				Limit:      limit,
-				StartIndex: 0,
-				SortBy:     "datecreated",
-				SortOrder:  "Descending",
-			})
-			if err != nil {
-				return nil, err
-			}
-			items, _ := resp["Items"].([]map[string]any)
-			return items, nil
+			return e.latestSeriesItemsForLibrary(ctx, userID, parentID, limit)
 		}
 		q = q.Where("library_id = ?", parentID)
 	}
@@ -555,6 +576,36 @@ func (e *EmbyService) LatestItems(ctx context.Context, userID, parentID string, 
 		out = append(out, e.itemPayload(&m, favs[m.ID], 0))
 	}
 	return out, nil
+}
+
+func (e *EmbyService) latestSeriesItemsForLibrary(ctx context.Context, userID, libraryID string, limit int) ([]map[string]any, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rowLimit := limit * 40
+	if rowLimit < 200 {
+		rowLimit = 200
+	}
+	if rowLimit > embySeriesGroupingLimit {
+		rowLimit = embySeriesGroupingLimit
+	}
+	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
+		Where("library_id = ? AND (season_num > 0 OR episode_num > 0)", libraryID)
+	q = e.applyUserMediaVisibility(ctx, q, userID)
+	var rows []model.Media
+	if err := q.Order("created_at desc").Limit(rowLimit).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	groups := e.seriesGroupsFromMedia(rows)
+	sortSeriesGroups(groups, ItemsParams{SortBy: "datecreated", SortOrder: "Descending"})
+	if len(groups) > limit {
+		groups = groups[:limit]
+	}
+	items := make([]map[string]any, 0, len(groups))
+	for _, group := range groups {
+		items = append(items, e.seriesPayload(group))
+	}
+	return items, nil
 }
 
 // ResumeItems 列出有未完成播放进度的媒体。
@@ -690,8 +741,15 @@ func (e *EmbyService) seriesItemsForLibrary(ctx context.Context, libraryID strin
 	if p.SearchTerm != "" {
 		q = q.Where("title LIKE ? OR original_name LIKE ?", "%"+p.SearchTerm+"%", "%"+p.SearchTerm+"%")
 	}
+	rowLimit := p.StartIndex + maxInt(p.Limit*40, 1000)
+	if rowLimit < p.Limit {
+		rowLimit = p.Limit
+	}
+	if rowLimit > embySeriesGroupingLimit {
+		rowLimit = embySeriesGroupingLimit
+	}
 	var rows []model.Media
-	if err := q.Order("created_at desc").Find(&rows).Error; err != nil {
+	if err := q.Order("created_at desc").Limit(rowLimit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	groups := e.seriesGroupsFromMedia(rows)
@@ -723,9 +781,129 @@ func (e *EmbyService) libraryIsEpisodic(ctx context.Context, libraryID string) (
 	return count > 0, err
 }
 
+func (e *EmbyService) rememberSeriesGroup(group embySeriesGroup) {
+	if e == nil || strings.TrimSpace(group.ID) == "" {
+		return
+	}
+	expiresAt := time.Now().Add(embyVirtualCacheTTL)
+	e.virtualMu.Lock()
+	defer e.virtualMu.Unlock()
+	if e.virtualSeries == nil {
+		e.virtualSeries = make(map[string]embySeriesCacheEntry)
+	}
+	if e.virtualSeasons == nil {
+		e.virtualSeasons = make(map[string]embySeasonCacheEntry)
+	}
+	if e.virtualArtwork == nil {
+		e.virtualArtwork = make(map[string]embyArtworkCacheEntry)
+	}
+	if len(e.virtualSeries) > 2000 || len(e.virtualSeasons) > 5000 || len(e.virtualArtwork) > 7000 {
+		e.virtualSeries = make(map[string]embySeriesCacheEntry)
+		e.virtualSeasons = make(map[string]embySeasonCacheEntry)
+		e.virtualArtwork = make(map[string]embyArtworkCacheEntry)
+	}
+	e.virtualSeries[group.ID] = embySeriesCacheEntry{group: group, expiresAt: expiresAt}
+	e.virtualArtwork[group.ID] = embyArtworkCacheEntry{primary: group.PosterURL, backdrop: group.BackdropURL, expiresAt: expiresAt}
+	e.virtualArtwork[group.ID+"-bd"] = embyArtworkCacheEntry{primary: group.PosterURL, backdrop: group.BackdropURL, expiresAt: expiresAt}
+	for _, season := range e.seasonsForSeries(group) {
+		e.virtualSeasons[season.ID] = embySeasonCacheEntry{season: season, expiresAt: expiresAt}
+		e.virtualArtwork[season.ID] = embyArtworkCacheEntry{primary: season.Series.PosterURL, backdrop: season.Series.BackdropURL, expiresAt: expiresAt}
+		e.virtualArtwork[season.ID+"-bd"] = embyArtworkCacheEntry{primary: season.Series.PosterURL, backdrop: season.Series.BackdropURL, expiresAt: expiresAt}
+	}
+}
+
+func (e *EmbyService) rememberSeasonGroup(season embySeasonGroup) {
+	if e == nil || strings.TrimSpace(season.ID) == "" {
+		return
+	}
+	expiresAt := time.Now().Add(embyVirtualCacheTTL)
+	e.virtualMu.Lock()
+	defer e.virtualMu.Unlock()
+	if e.virtualSeasons == nil {
+		e.virtualSeasons = make(map[string]embySeasonCacheEntry)
+	}
+	if e.virtualArtwork == nil {
+		e.virtualArtwork = make(map[string]embyArtworkCacheEntry)
+	}
+	e.virtualSeasons[season.ID] = embySeasonCacheEntry{season: season, expiresAt: expiresAt}
+	e.virtualArtwork[season.ID] = embyArtworkCacheEntry{primary: season.Series.PosterURL, backdrop: season.Series.BackdropURL, expiresAt: expiresAt}
+	e.virtualArtwork[season.ID+"-bd"] = embyArtworkCacheEntry{primary: season.Series.PosterURL, backdrop: season.Series.BackdropURL, expiresAt: expiresAt}
+}
+
+func (e *EmbyService) cachedSeriesGroup(id string) (embySeriesGroup, bool) {
+	if e == nil || strings.TrimSpace(id) == "" {
+		return embySeriesGroup{}, false
+	}
+	now := time.Now()
+	e.virtualMu.RLock()
+	entry, ok := e.virtualSeries[id]
+	e.virtualMu.RUnlock()
+	if !ok || now.After(entry.expiresAt) {
+		if ok {
+			e.virtualMu.Lock()
+			delete(e.virtualSeries, id)
+			e.virtualMu.Unlock()
+		}
+		return embySeriesGroup{}, false
+	}
+	return entry.group, true
+}
+
+func (e *EmbyService) cachedSeasonGroup(id string) (embySeasonGroup, bool) {
+	if e == nil || strings.TrimSpace(id) == "" {
+		return embySeasonGroup{}, false
+	}
+	now := time.Now()
+	e.virtualMu.RLock()
+	entry, ok := e.virtualSeasons[id]
+	e.virtualMu.RUnlock()
+	if !ok || now.After(entry.expiresAt) {
+		if ok {
+			e.virtualMu.Lock()
+			delete(e.virtualSeasons, id)
+			e.virtualMu.Unlock()
+		}
+		return embySeasonGroup{}, false
+	}
+	return entry.season, true
+}
+
+func (e *EmbyService) cachedArtworkURL(id, imageType string) (string, bool) {
+	if e == nil || strings.TrimSpace(id) == "" {
+		return "", false
+	}
+	now := time.Now()
+	e.virtualMu.RLock()
+	entry, ok := e.virtualArtwork[id]
+	e.virtualMu.RUnlock()
+	if !ok || now.After(entry.expiresAt) {
+		if ok {
+			e.virtualMu.Lock()
+			delete(e.virtualArtwork, id)
+			e.virtualMu.Unlock()
+		}
+		return "", false
+	}
+	switch strings.ToLower(imageType) {
+	case "backdrop", "art":
+		if entry.backdrop != "" {
+			return entry.backdrop, true
+		}
+	}
+	if entry.primary != "" {
+		return entry.primary, true
+	}
+	return entry.backdrop, entry.backdrop != ""
+}
+
 func (e *EmbyService) findSeriesGroup(ctx context.Context, id, userID string) (embySeriesGroup, bool, error) {
 	if strings.TrimSpace(id) == "" {
 		return embySeriesGroup{}, false, nil
+	}
+	if strings.HasPrefix(id, embyVirtualSeriesPrefix) {
+		if group, ok := e.cachedSeriesGroup(id); ok {
+			return group, true, nil
+		}
 	}
 	var rows []model.Media
 	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).Where("season_num > 0 OR episode_num > 0")
@@ -733,11 +911,12 @@ func (e *EmbyService) findSeriesGroup(ctx context.Context, id, userID string) (e
 	if !strings.HasPrefix(id, embyVirtualSeriesPrefix) {
 		q = q.Where("series_id = ?", id)
 	}
-	if err := q.Order("season_num asc, episode_num asc, created_at asc").Find(&rows).Error; err != nil {
+	if err := q.Order("season_num asc, episode_num asc, created_at asc").Limit(embySeriesGroupingLimit).Find(&rows).Error; err != nil {
 		return embySeriesGroup{}, false, err
 	}
 	for _, group := range e.seriesGroupsFromMedia(rows) {
 		if group.ID == id {
+			e.rememberSeriesGroup(group)
 			return group, true, nil
 		}
 	}
@@ -767,18 +946,23 @@ func (e *EmbyService) findSeasonGroup(ctx context.Context, id, userID string) (e
 	if strings.TrimSpace(id) == "" || !strings.HasPrefix(id, embyVirtualSeasonPrefix) {
 		return embySeasonGroup{}, false, nil
 	}
+	if season, ok := e.cachedSeasonGroup(id); ok {
+		return season, true, nil
+	}
 	var rows []model.Media
 	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
 		Where("season_num > 0 OR episode_num > 0")
 	q = e.applyUserMediaVisibility(ctx, q, userID)
 	if err := q.
 		Order("season_num asc, episode_num asc, created_at asc").
+		Limit(embySeriesGroupingLimit).
 		Find(&rows).Error; err != nil {
 		return embySeasonGroup{}, false, err
 	}
 	for _, series := range e.seriesGroupsFromMedia(rows) {
 		for _, season := range e.seasonsForSeries(series) {
 			if season.ID == id {
+				e.rememberSeriesGroup(series)
 				return season, true, nil
 			}
 		}
@@ -875,6 +1059,7 @@ func (e *EmbyService) seasonsForSeries(series embySeriesGroup) []embySeasonGroup
 }
 
 func (e *EmbyService) seriesPayload(group embySeriesGroup) map[string]any {
+	e.rememberSeriesGroup(group)
 	imageTags := map[string]string{}
 	backdropTags := []string{}
 	if group.PosterURL != "" {
@@ -908,6 +1093,7 @@ func (e *EmbyService) seriesPayload(group embySeriesGroup) map[string]any {
 }
 
 func (e *EmbyService) seasonPayload(season embySeasonGroup) map[string]any {
+	e.rememberSeasonGroup(season)
 	imageTags := map[string]string{}
 	backdropTags := []string{}
 	if season.Series.PosterURL != "" {
@@ -949,18 +1135,16 @@ func (e *EmbyService) ImageURL(ctx context.Context, id, imageType string) (strin
 		return backdrop
 	}
 	if strings.HasPrefix(id, embyVirtualSeasonPrefix) {
-		if season, ok, err := e.findSeasonGroup(ctx, id, ""); err != nil {
-			return "", err
-		} else if ok {
-			return pick(season.Series.PosterURL, season.Series.BackdropURL), nil
+		if raw, ok := e.cachedArtworkURL(id, imageType); ok {
+			return raw, nil
 		}
+		return "", nil
 	}
 	if strings.HasPrefix(id, embyVirtualSeriesPrefix) {
-		if series, ok, err := e.findSeriesGroup(ctx, id, ""); err != nil {
-			return "", err
-		} else if ok {
-			return pick(series.PosterURL, series.BackdropURL), nil
+		if raw, ok := e.cachedArtworkURL(id, imageType); ok {
+			return raw, nil
 		}
+		return "", nil
 	}
 	m, err := e.repo.Media.FindByID(ctx, id)
 	if err == nil && m != nil {
@@ -1100,10 +1284,10 @@ func emptyUserData() map[string]any {
 }
 
 func (e *EmbyService) applyUserMediaVisibility(ctx context.Context, q *gorm.DB, userID string) *gorm.DB {
-	visibility := UserDefaultMediaVisibility(ctx, e.repo, userID)
+	visibility := e.mediaVisibility(ctx, userID)
 	if !visibility.IncludeNSFW {
 		q = q.Where("nsfw = ?", false)
-		if hidden := e.hiddenLibraryIDs(ctx, visibility); len(hidden) > 0 {
+		if hidden := visibility.HiddenLibraryIDs; len(hidden) > 0 {
 			q = q.Where("library_id NOT IN ?", hidden)
 		}
 	}
@@ -1114,7 +1298,7 @@ func (e *EmbyService) applyUserMediaVisibility(ctx context.Context, q *gorm.DB, 
 }
 
 func (e *EmbyService) filterMediaRowsForUser(ctx context.Context, rows []model.Media, userID string) []model.Media {
-	visibility := UserDefaultMediaVisibility(ctx, e.repo, userID)
+	visibility := e.mediaVisibility(ctx, userID)
 	if visibility.IncludeNSFW && len(visibility.AllowedLibraryIDs) == 0 {
 		return rows
 	}
@@ -1123,7 +1307,7 @@ func (e *EmbyService) filterMediaRowsForUser(ctx context.Context, rows []model.M
 		allowed[id] = true
 	}
 	hiddenLibraries := map[string]bool{}
-	for _, id := range e.hiddenLibraryIDs(ctx, visibility) {
+	for _, id := range visibility.HiddenLibraryIDs {
 		hiddenLibraries[id] = true
 	}
 	out := rows[:0]
@@ -1140,6 +1324,75 @@ func (e *EmbyService) filterMediaRowsForUser(ctx context.Context, rows []model.M
 		out = append(out, row)
 	}
 	return out
+}
+
+func (e *EmbyService) mediaVisibility(ctx context.Context, userID string) MediaVisibility {
+	if e == nil {
+		return MediaVisibility{IncludeNSFW: true}
+	}
+	key := strings.TrimSpace(userID)
+	now := time.Now()
+	e.visibilityMu.RLock()
+	entry, ok := e.visibilityCache[key]
+	e.visibilityMu.RUnlock()
+	if ok && now.Before(entry.expiresAt) {
+		return cloneMediaVisibility(entry.visibility)
+	}
+
+	visibility := UserDefaultMediaVisibility(ctx, e.repo, userID)
+	if !visibility.IncludeNSFW {
+		visibility.HiddenLibraryIDs = e.hiddenLibraryIDs(ctx, visibility)
+	}
+	visibility = cloneMediaVisibility(visibility)
+
+	e.visibilityMu.Lock()
+	if e.visibilityCache == nil {
+		e.visibilityCache = make(map[string]embyVisibilityCacheEntry)
+	}
+	if len(e.visibilityCache) > 1000 {
+		e.visibilityCache = make(map[string]embyVisibilityCacheEntry)
+	}
+	e.visibilityCache[key] = embyVisibilityCacheEntry{
+		visibility: cloneMediaVisibility(visibility),
+		expiresAt:  now.Add(embyVisibilityCacheTTL),
+	}
+	e.visibilityMu.Unlock()
+
+	return visibility
+}
+
+func cloneMediaVisibility(visibility MediaVisibility) MediaVisibility {
+	if visibility.AllowedLibraryIDs != nil {
+		visibility.AllowedLibraryIDs = append([]string(nil), visibility.AllowedLibraryIDs...)
+	}
+	if visibility.HiddenLibraryIDs != nil {
+		visibility.HiddenLibraryIDs = append([]string(nil), visibility.HiddenLibraryIDs...)
+	}
+	return visibility
+}
+
+func (e *EmbyService) libraryVisibleFromCachedVisibility(lib model.Library, visibility MediaVisibility) bool {
+	if len(visibility.AllowedLibraryIDs) > 0 {
+		allowed := false
+		for _, id := range visibility.AllowedLibraryIDs {
+			if id == lib.ID {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return false
+		}
+	}
+	if visibility.IncludeNSFW {
+		return true
+	}
+	for _, id := range visibility.HiddenLibraryIDs {
+		if id == lib.ID {
+			return false
+		}
+	}
+	return true
 }
 
 func (e *EmbyService) hiddenLibraryIDs(ctx context.Context, visibility MediaVisibility) []string {
@@ -1228,24 +1481,34 @@ func (e *EmbyService) playableMedia(ctx context.Context, id, userID string) (*mo
 // 直链给搜索接口）。/PlaybackInfo 走 false 路径，URL 指向 Emby 兼容
 // /Videos/{id}/stream（客户端会继续携带 X-Emby-Token 或 append api_key）。
 func (e *EmbyService) mediaSource(m *model.Media, asEmbedded, directOnly bool) map[string]any {
+	container := strings.Trim(strings.ToLower(m.Container), ". ")
+	if container == "" {
+		container = strings.TrimPrefix(strings.ToLower(filepath.Ext(m.Path)), ".")
+	}
+	if container == "" && strings.TrimSpace(m.STRMURL) != "" {
+		container = "strm"
+	}
 	src := map[string]any{
-		"Id":                   m.ID,
-		"Name":                 m.Title,
-		"Path":                 m.Path,
-		"Container":            m.Container,
-		"Size":                 m.SizeBytes,
-		"Protocol":             "Http",
-		"Type":                 "Default",
-		"IsRemote":             false,
-		"SupportsTranscoding":  !directOnly,
-		"SupportsDirectStream": true,
-		"SupportsDirectPlay":   true,
-		"SupportsProbing":      true,
-		"RunTimeTicks":         int64(m.DurationSec) * 10_000_000,
-		"MediaStreams":         e.mediaStreams(m),
+		"Id":                    m.ID,
+		"Name":                  m.Title,
+		"Path":                  m.Path,
+		"Container":             container,
+		"Size":                  m.SizeBytes,
+		"Protocol":              "Http",
+		"Type":                  "Default",
+		"IsRemote":              false,
+		"RequiresOpening":       false,
+		"RequiresClosing":       false,
+		"ReadAtNativeFramerate": false,
+		"SupportsTranscoding":   !directOnly,
+		"SupportsDirectStream":  true,
+		"SupportsDirectPlay":    true,
+		"SupportsProbing":       true,
+		"RunTimeTicks":          int64(m.DurationSec) * 10_000_000,
+		"MediaStreams":          e.mediaStreams(m),
 	}
 	if !asEmbedded {
-		src["DirectStreamUrl"] = "/Videos/" + m.ID + "/stream"
+		src["DirectStreamUrl"] = embyDirectStreamURL(m.ID, container)
 		// 直连解码模式下不下发 TranscodingUrl，迫使客户端本地解码直连，
 		// 宿主机不参与转码。
 		if !directOnly {
@@ -1262,6 +1525,15 @@ func (e *EmbyService) mediaSource(m *model.Media, asEmbedded, directOnly bool) m
 		src["Path"] = m.STRMURL
 	}
 	return src
+}
+
+func embyDirectStreamURL(mediaID, container string) string {
+	mediaID = strings.TrimSpace(mediaID)
+	container = strings.Trim(strings.ToLower(container), ". ")
+	if container == "" || container == "strm" {
+		return "/Videos/" + mediaID + "/stream"
+	}
+	return "/Videos/" + mediaID + "/stream." + container
 }
 
 func (e *EmbyService) mediaStreams(m *model.Media) []map[string]any {
@@ -1288,6 +1560,17 @@ func (e *EmbyService) mediaStreams(m *model.Media) []map[string]any {
 			"IsDefault":  true,
 			"IsForced":   false,
 			"IsExternal": false,
+		})
+	}
+	if len(streams) == 0 {
+		streams = append(streams, map[string]any{
+			"Codec":        "unknown",
+			"Type":         "Video",
+			"Index":        0,
+			"IsDefault":    true,
+			"IsForced":     false,
+			"IsExternal":   false,
+			"DisplayTitle": "Video",
 		})
 	}
 	return streams

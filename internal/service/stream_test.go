@@ -2,9 +2,18 @@ package service
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/glebarez/sqlite"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
+
+	"github.com/ShukeBta/MediaStationGo/internal/config"
+	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
 func TestWithAuthTokenPropagatesToInternalRedirect(t *testing.T) {
@@ -34,6 +43,84 @@ func TestWithAuthTokenNeverLeaksToAbsoluteURL(t *testing.T) {
 	if got != "https://cdn.115.example/x.mp4?sig=1" {
 		t.Fatalf("external URL mutated: %q", got)
 	}
+}
+
+func TestWithAuthTokenPropagatesToSameOriginAbsoluteInternalURL(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "http://media.example/Videos/m-1/stream?api_key=jwt123", nil)
+	got := withAuthTokenForInternalRedirect("http://media.example/api/cloud/play/openlist?ref=abc", r, "http://media.example")
+	u, err := url.Parse(got)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if u.Query().Get("token") != "jwt123" || u.Query().Get("ref") != "abc" {
+		t.Fatalf("same-origin internal URL should keep ref and receive token: %q", got)
+	}
+}
+
+func TestServeFileRedirectsInternalSTRMAsAbsoluteURLWithToken(t *testing.T) {
+	repos := newStreamTestRepo(t)
+	if err := repos.DB.Create(&model.Media{
+		Base:    model.Base{ID: "cloud-1"},
+		Title:   "Cloud",
+		Path:    "cloud://openlist/Movie.mkv",
+		STRMURL: "/api/cloud/play/openlist?ref=movie",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc := NewStreamService(&config.Config{}, zap.NewNop(), repos, nil)
+	req := httptest.NewRequest(http.MethodGet, "http://nas.local:18080/api/stream/cloud-1?api_key=jwt123", nil)
+	w := httptest.NewRecorder()
+
+	if err := svc.ServeFile(w, req, "cloud-1"); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", w.Code)
+	}
+	loc := w.Header().Get("Location")
+	if !strings.HasPrefix(loc, "http://nas.local:18080/api/cloud/play/openlist?") ||
+		!strings.Contains(loc, "ref=movie") ||
+		!strings.Contains(loc, "token=jwt123") {
+		t.Fatalf("redirect Location should be absolute and tokenized, got %q", loc)
+	}
+}
+
+func TestServeFileHonorsSTRMPlaybackDisabled(t *testing.T) {
+	repos := newStreamTestRepo(t)
+	if err := repos.Setting.Set(t.Context(), STRMEnabledSettingKey, "false"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.DB.Create(&model.Media{
+		Base:    model.Base{ID: "cloud-1"},
+		Title:   "Cloud",
+		Path:    "cloud://openlist/Movie.mkv",
+		STRMURL: "/api/cloud/play/openlist?ref=movie",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc := NewStreamService(&config.Config{}, zap.NewNop(), repos, nil)
+	req := httptest.NewRequest(http.MethodGet, "http://nas.local:18080/api/stream/cloud-1?api_key=jwt123", nil)
+	w := httptest.NewRecorder()
+
+	err := svc.ServeFile(w, req, "cloud-1")
+	if err != ErrMediaNotFound {
+		t.Fatalf("disabled STRM should not redirect cloud media, err=%v status=%d location=%q", err, w.Code, w.Header().Get("Location"))
+	}
+	if loc := w.Header().Get("Location"); loc != "" {
+		t.Fatalf("disabled STRM leaked redirect Location %q", loc)
+	}
+}
+
+func newStreamTestRepo(t *testing.T) *repository.Container {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Media{}, &model.Setting{}); err != nil {
+		t.Fatal(err)
+	}
+	return repository.New(db)
 }
 
 func TestRequestTokenFromBearerHeader(t *testing.T) {

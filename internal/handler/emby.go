@@ -7,6 +7,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -596,6 +597,17 @@ func embyResumeItemsHandler(svc *service.Container) gin.HandlerFunc {
 	}
 }
 
+func embyItemsCountsHandler(_ *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"MovieCount":   0,
+			"SeriesCount":  0,
+			"EpisodeCount": 0,
+			"ItemCount":    0,
+		})
+	}
+}
+
 // ─── Images ──────────────────────────────────────────────────────────────────
 
 // embyItemImageHandler 把 /Items/{id}/Images/Primary 等请求直接输出为图片。
@@ -603,14 +615,18 @@ func embyResumeItemsHandler(svc *service.Container) gin.HandlerFunc {
 // /api/img 会变成 401，所以这里复用 ImageProxy 但不再走 /api 路由。
 func embyItemImageHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+		defer cancel()
+		req := c.Request.WithContext(ctx)
 		id := c.Param("id")
 		imgType := strings.ToLower(c.Param("type"))
-		raw, err := svc.Emby.ImageURL(c.Request.Context(), id, imgType)
+		raw, err := svc.Emby.ImageURL(ctx, id, imgType)
 		if err != nil || raw == "" {
 			c.Status(http.StatusNotFound)
 			return
 		}
 		if typ, ref, ok := parseCloudPlayImageURL(raw); ok {
+			c.Request = req
 			serveCloudResolvedLink(svc, c, typ, ref)
 			return
 		}
@@ -618,7 +634,7 @@ func embyItemImageHandler(svc *service.Container) gin.HandlerFunc {
 			c.Status(http.StatusNotFound)
 			return
 		}
-		if err := svc.ImageProxy.Serve(c.Request.Context(), c.Writer, c.Request, raw); err != nil {
+		if err := svc.ImageProxy.Serve(ctx, c.Writer, req, raw); err != nil {
 			c.Status(http.StatusNotFound)
 		}
 	}
@@ -1059,6 +1075,8 @@ func registerEmbyRoutes(r *gin.Engine, jwtSecret string, svc *service.Container)
 
 		auth.GET("/Items", embyItemsHandler(svc))
 		auth.GET("/Users/:userId/Items", embyItemsHandler(svc))
+		auth.GET("/Items/Counts", embyItemsCountsHandler(svc))
+		auth.GET("/Users/:userId/Items/Counts", embyItemsCountsHandler(svc))
 		auth.GET("/Items/:id", embyItemByIDHandler(svc))
 		auth.GET("/Users/:userId/Items/:id", embyUserItemByIDHandler(svc))
 		auth.GET("/Shows/:id/Seasons", embyShowSeasonsHandler(svc))
@@ -1079,7 +1097,9 @@ func registerEmbyRoutes(r *gin.Engine, jwtSecret string, svc *service.Container)
 		auth.GET("/Videos/:id/stream.:container", embyVideoStreamHandler(svc))
 		auth.HEAD("/Videos/:id/stream.:container", embyVideoStreamHandler(svc))
 		auth.GET("/Videos/:id/original", embyVideoStreamHandler(svc))
+		auth.HEAD("/Videos/:id/original", embyVideoStreamHandler(svc))
 		auth.GET("/Videos/:id/original.:container", embyVideoStreamHandler(svc))
+		auth.HEAD("/Videos/:id/original.:container", embyVideoStreamHandler(svc))
 		auth.GET("/Videos/:id/master.m3u8", embyVideoHLSPlaylistHandler(svc))
 		auth.HEAD("/Videos/:id/master.m3u8", embyVideoHLSPlaylistHandler(svc))
 		auth.GET("/Videos/:id/main.m3u8", embyVideoHLSPlaylistHandler(svc))
@@ -1121,6 +1141,8 @@ func registerLowercaseEmbyAuthRoutes(auth *gin.RouterGroup, svc *service.Contain
 
 	auth.GET("/items", embyItemsHandler(svc))
 	auth.GET("/users/:userId/items", embyItemsHandler(svc))
+	auth.GET("/items/counts", embyItemsCountsHandler(svc))
+	auth.GET("/users/:userId/items/counts", embyItemsCountsHandler(svc))
 	auth.GET("/items/:id", embyItemByIDHandler(svc))
 	auth.GET("/users/:userId/items/:id", embyUserItemByIDHandler(svc))
 	auth.GET("/shows/:id/seasons", embyShowSeasonsHandler(svc))
@@ -1141,7 +1163,9 @@ func registerLowercaseEmbyAuthRoutes(auth *gin.RouterGroup, svc *service.Contain
 	auth.GET("/videos/:id/stream.:container", embyVideoStreamHandler(svc))
 	auth.HEAD("/videos/:id/stream.:container", embyVideoStreamHandler(svc))
 	auth.GET("/videos/:id/original", embyVideoStreamHandler(svc))
+	auth.HEAD("/videos/:id/original", embyVideoStreamHandler(svc))
 	auth.GET("/videos/:id/original.:container", embyVideoStreamHandler(svc))
+	auth.HEAD("/videos/:id/original.:container", embyVideoStreamHandler(svc))
 	auth.GET("/videos/:id/master.m3u8", embyVideoHLSPlaylistHandler(svc))
 	auth.HEAD("/videos/:id/master.m3u8", embyVideoHLSPlaylistHandler(svc))
 	auth.GET("/videos/:id/main.m3u8", embyVideoHLSPlaylistHandler(svc))

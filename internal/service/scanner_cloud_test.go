@@ -92,6 +92,14 @@ func TestScanCloudLibraryImportsRecursivePlayableMedia(t *testing.T) {
 		t.Fatalf("root media path/strm wrong: path=%q strm=%q", rows[0].Path, rows[0].STRMURL)
 	}
 
+	res, err = scanner.ScanLibrary(t.Context(), lib.ID)
+	if err != nil {
+		t.Fatalf("rescan same cloud: %v", err)
+	}
+	if res.Added != 0 || res.Updated != 2 {
+		t.Fatalf("same cloud rescan should update existing rows only, got %#v", res)
+	}
+
 	empty = true
 	res, err = scanner.ScanLibrary(t.Context(), lib.ID)
 	if err != nil {

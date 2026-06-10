@@ -1,10 +1,12 @@
 package service
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -146,6 +148,9 @@ func TestSchedulerCloudSyncImportsMountedCloudLibrary(t *testing.T) {
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
 		t.Fatal(err)
 	}
+	if err := repos.Setting.Set(t.Context(), "cloud.auto_sync_enabled", "true"); err != nil {
+		t.Fatal(err)
+	}
 	scanner := NewScannerService(&config.Config{}, log, repos, NewHub(log), nil, nil)
 	scanner.SetStorageConfig(storage)
 	scheduler := NewSchedulerService(log, repos, scanner, nil, nil, storage, NewHub(log), "")
@@ -159,5 +164,86 @@ func TestSchedulerCloudSyncImportsMountedCloudLibrary(t *testing.T) {
 	}
 	if media.STRMURL != "/api/cloud/play/quark?ref=f1" {
 		t.Fatalf("strm url = %q", media.STRMURL)
+	}
+}
+
+func TestSchedulerCloudSyncDisabledByDefault(t *testing.T) {
+	var requests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte(`{"status":200,"code":0,"data":{"list":[
+			{"fid":"f1","file_name":"Cloud.Movie.2026.mkv","dir":false,"size":1024}
+		]}}`))
+	}))
+	defer upstream.Close()
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	log := zap.NewNop()
+	storage := NewStorageConfigService(log, repos, NewCryptoService("", log))
+	if _, err := storage.Save(t.Context(), StorageInput{
+		Type: "quark",
+		Config: map[string]any{
+			"cookie": "kps=test",
+			"base":   upstream.URL,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lib := model.Library{Name: "夸克网盘", Path: "cloud://quark/0", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	scanner := NewScannerService(&config.Config{}, log, repos, NewHub(log), nil, nil)
+	scanner.SetStorageConfig(storage)
+	scheduler := NewSchedulerService(log, repos, scanner, nil, nil, storage, NewHub(log), "")
+
+	if err := scheduler.jobSyncCloudLibraries(t.Context()); err != nil {
+		t.Fatalf("disabled cloud sync should be a no-op: %v", err)
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("cloud sync made %d upstream requests while disabled by default", got)
+	}
+	if got := countMedia(t, repos); got != 0 {
+		t.Fatalf("media count = %d, want 0 while cloud sync disabled by default", got)
+	}
+}
+
+func TestSchedulerLoopWaitsIntervalAfterSlowRun(t *testing.T) {
+	scheduler := NewSchedulerService(zap.NewNop(), nil, nil, nil, nil, nil, nil, "")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	var runs atomic.Int32
+	job := &scheduledJob{
+		name:     "slow",
+		interval: 25 * time.Millisecond,
+		run: func(ctx context.Context) error {
+			runs.Add(1)
+			time.Sleep(50 * time.Millisecond)
+			return nil
+		},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		scheduler.loopWithInitialDelay(ctx, job, time.Millisecond)
+		close(done)
+	}()
+	time.Sleep(120 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("scheduler loop did not stop")
+	}
+	if got := runs.Load(); got > 2 {
+		t.Fatalf("slow job ran %d times; scheduler should not catch up missed ticks", got)
 	}
 }
