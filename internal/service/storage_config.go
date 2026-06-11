@@ -495,3 +495,52 @@ func strr(v any) string {
 	}
 	return strings.TrimSpace(fmt.Sprint(v))
 }
+
+
+// DeleteStorage 删除存储配置并清理关联数据
+func (s *StorageConfigService) DeleteStorage(ctx context.Context, storageType string) error {
+	// 查找配置
+	cfg, err := s.repo.StorageConfig.Get(ctx, storageType)
+	if err != nil || cfg == nil {
+		return fmt.Errorf("storage config not found: %s", storageType)
+	}
+
+	// 查找使用该存储的云盘库
+	libs, err := s.repo.Library.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list libraries: %w", err)
+	}
+
+	var affectedLibs []string
+	for _, lib := range libs {
+		// 检查是否是云盘库且Provider匹配
+		if mount, ok := ParseCloudLibraryMount(lib.Path); ok && mount.Provider == storageType {
+			affectedLibs = append(affectedLibs, lib.ID)
+		}
+	}
+
+	// 删除关联媒体
+	for _, libID := range affectedLibs {
+		if err := s.repo.Media.PurgeByLibrary(ctx, libID); err != nil {
+			s.log.Warn("purge media by library failed", zap.String("library_id", libID), zap.Error(err))
+		}
+	}
+
+	// 删除关联库
+	for _, libID := range affectedLibs {
+		if err := s.repo.Library.Delete(ctx, libID); err != nil {
+			s.log.Warn("delete library failed", zap.String("library_id", libID), zap.Error(err))
+		}
+	}
+
+	// 删除存储配置
+	if err := s.repo.StorageConfig.Delete(ctx, cfg.ID); err != nil {
+		return fmt.Errorf("delete storage config: %w", err)
+	}
+
+	s.log.Info("storage deleted",
+		zap.String("storage_type", storageType),
+		zap.Int("libraries_deleted", len(affectedLibs)))
+
+	return nil
+}

@@ -112,8 +112,7 @@ func registerAuthenticatedRoutes(api *gin.RouterGroup, cfg *config.Config, svc *
 		authed.DELETE("/files", middleware.AdminRequired(), deleteFileHandler(svc))
 		authed.POST("/files/transfer", middleware.AdminRequired(), transferFileHandler(svc))
 
-		// Disk usage breakdown.
-		authed.GET("/storage", middleware.AdminRequired(), storageHandler(svc))
+// 		// Disk usage breakdown.
 
 		// DLNA discovery + cast.
 		authed.GET("/dlna/devices", dlnaListHandler(svc))

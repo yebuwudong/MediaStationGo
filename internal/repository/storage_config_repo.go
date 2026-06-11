@@ -65,3 +65,19 @@ func (r *StorageConfigRepository) Upsert(ctx context.Context, c *model.StorageCo
 		"updated_at": time.Now(),
 	}).Error
 }
+
+
+// Delete removes a storage config by ID.
+func (r *StorageConfigRepository) Delete(ctx context.Context, id string) error {
+	return r.db.WithContext(ctx).Where("id = ?", id).Delete(&model.StorageConfig{}).Error
+}
+
+// FindByID returns a storage config by ID.
+func (r *StorageConfigRepository) FindByID(ctx context.Context, id string) (*model.StorageConfig, error) {
+	var c model.StorageConfig
+	err := r.db.WithContext(ctx).Where("id = ?", id).First(&c).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &c, err
+}

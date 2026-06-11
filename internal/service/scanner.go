@@ -697,6 +697,15 @@ func (s *ScannerService) scanCloudLibrary(ctx context.Context, lib *model.Librar
 	if s.storage == nil {
 		return res, fmt.Errorf("cloud storage service unavailable")
 	}
+	
+	// 验证存储配置是否存在且已启用
+	cfg, err := s.repo.StorageConfig.FindByID(ctx, mount.Provider)
+	if err != nil || cfg == nil {
+		return res, fmt.Errorf("storage config not found: %s", mount.Provider)
+	}
+	if !cfg.Enabled {
+		return res, fmt.Errorf("storage %s is disabled", mount.Provider)
+	}
 	typ := mount.Provider
 	rootDir := mount.ScanDir
 	rootDisplayDir := mount.DisplayDir
@@ -1428,3 +1437,5 @@ func (s *ScannerService) maybeGenerateSTRMAfterScan(libraryID string) {
 		}
 	}()
 }
+
+
