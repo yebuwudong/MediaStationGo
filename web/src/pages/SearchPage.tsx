@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { CheckCircle2, Info, Rss, Sparkles } from 'lucide-react'
 
@@ -9,6 +9,8 @@ import { subscriptionsAPI } from '../api/subscriptions'
 import { MediaCard } from '../components/MediaCard'
 import type { Media } from '../types'
 import { groupSeries, seriesCardLink } from '../utils/groupSeries'
+
+const LOCAL_SEARCH_PAGE_SIZE = 2000
 
 export function SearchPage() {
   const [q, setQ] = useState('')
@@ -21,6 +23,8 @@ export function SearchPage() {
   const [hasSearched, setHasSearched] = useState(false)
   const [externalItems, setExternalItems] = useState<ExternalMediaResult[]>([])
   const [subscribing, setSubscribing] = useState('')
+  const [searchTotal, setSearchTotal] = useState(0)
+  const searchSeq = useRef(0)
   const localCards = useMemo(() => groupSeries(items), [items])
 
   useEffect(() => {
@@ -31,29 +35,45 @@ export function SearchPage() {
   }, [])
 
   const doQuickSearch = useCallback((query: string) => {
+    const seq = ++searchSeq.current
     if (!query.trim()) {
       setItems([])
+      setSearchTotal(0)
       setHasSearched(false)
       setLoading(false)
       return
     }
     setHasSearched(true)
     setError('')
-    mediaAPI
-      .search(query, 60)
-      .then((d) => {
-        setItems(d.items ?? [])
-        setExternalItems([])
-        setIntent(null)
-      })
+    const loadAll = async () => {
+      let page = 1
+      let collected: Media[] = []
+      for (;;) {
+        const d = await mediaAPI.searchPage(query, page, LOCAL_SEARCH_PAGE_SIZE)
+        if (seq !== searchSeq.current) return
+        const pageItems = d.items ?? []
+        collected = collected.concat(pageItems)
+        const total = d.total ?? collected.length
+        setItems(collected)
+        setSearchTotal(total)
+        if (collected.length >= total || pageItems.length < LOCAL_SEARCH_PAGE_SIZE) break
+        page += 1
+      }
+      setExternalItems([])
+      setIntent(null)
+    }
+    loadAll()
       .catch((err) => {
+        if (seq !== searchSeq.current) return
         const msg =
           (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
           '搜索失败'
         setError(msg)
         toast.error(msg)
       })
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (seq === searchSeq.current) setLoading(false)
+      })
   }, [])
 
   // Fast LIKE search-as-you-type when AI mode is OFF.
@@ -67,12 +87,14 @@ export function SearchPage() {
   const onAISubmit = async (e: FormEvent) => {
     e.preventDefault()
     if (!q.trim()) return
+    ++searchSeq.current
     setLoading(true)
     setError('')
     setHasSearched(true)
     try {
       const data = await aiAPI.smartSearch(q)
       setItems(data.items ?? [])
+      setSearchTotal((data.items ?? []).length)
       setExternalItems(data.external_items ?? [])
       setIntent(data.intent)
     } catch (err) {
@@ -166,6 +188,7 @@ export function SearchPage() {
         <>
           <div className="text-sm font-semibold text-ink-100">
             本地媒体库 · {localCards.length} 个合集 / {items.length} 个条目
+            {loading && searchTotal > items.length ? ` · 正在加载全部结果 ${items.length}/${searchTotal}` : ''}
           </div>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
           {localCards.map((card) => (

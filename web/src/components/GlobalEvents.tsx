@@ -2,15 +2,18 @@ import { useCallback } from 'react'
 import toast from 'react-hot-toast'
 
 import { useWebSocket } from '../hooks/useWebSocket'
+import { useAuthStore } from '../stores/auth'
 
 // GlobalEvents subscribes to the WS hub and surfaces interesting events
 // as toasts. Lives at the top of the component tree so every page sees
 // the same stream without re-opening connections.
 export function GlobalEvents() {
+  const role = useAuthStore((state) => state.user?.role)
   const onEvent = useCallback((topic: string, payload: unknown) => {
     if (!payload || typeof payload !== 'object') return
     const p = payload as Record<string, unknown>
     if (topic === 'scan') {
+      if (role !== 'admin') return
       const id = `scan-${String(p.library_id ?? 'global')}`
       if (p.error) {
         toast.error(`扫描失败：${String(p.error)}`, { id })
@@ -40,7 +43,7 @@ export function GlobalEvents() {
       const queued = (p.queued as number | undefined) ?? 0
       if (queued > 0) toast.success(`订阅「${p.name}」已加入 ${queued} 项下载`)
     }
-  }, [])
+  }, [role])
 
   useWebSocket(onEvent)
   return null

@@ -461,46 +461,58 @@ func (r *MediaRepository) Search(ctx context.Context, query string, limit int) (
 }
 
 func (r *MediaRepository) SearchFiltered(ctx context.Context, query string, limit int, filter MediaQueryFilter) ([]model.Media, error) {
+	items, _, err := r.SearchFilteredPage(ctx, query, 0, limit, filter)
+	return items, err
+}
+
+func (r *MediaRepository) SearchFilteredPage(ctx context.Context, query string, offset, limit int, filter MediaQueryFilter) ([]model.Media, int64, error) {
 	query = strings.TrimSpace(query)
 	if limit <= 0 {
 		limit = 50
 	}
 	if query != "" {
-		if items, ok := r.searchFilteredFTS(ctx, query, limit, filter); ok {
-			if len(items) > 0 {
-				return items, nil
+		if items, total, ok := r.searchFilteredFTS(ctx, query, offset, limit, filter); ok {
+			if total > 0 {
+				return items, total, nil
 			}
 		}
 	}
-	return r.searchFilteredLIKE(ctx, query, limit, filter)
+	return r.searchFilteredLIKE(ctx, query, offset, limit, filter)
 }
 
-func (r *MediaRepository) searchFilteredFTS(ctx context.Context, query string, limit int, filter MediaQueryFilter) ([]model.Media, bool) {
+func (r *MediaRepository) searchFilteredFTS(ctx context.Context, query string, offset, limit int, filter MediaQueryFilter) ([]model.Media, int64, bool) {
 	if !r.searchIndexEnabled(ctx) {
-		return nil, false
+		return nil, 0, false
 	}
 	ftsQuery := mediaFTSQuery(query)
 	if ftsQuery == "" {
-		return nil, false
+		return nil, 0, false
 	}
+	var total int64
 	var items []model.Media
 	q := r.db.WithContext(ctx).
 		Table("media").
-		Select("media.*").
 		Joins("JOIN media_search_fts ON media_search_fts.media_id = media.id").
 		Where("media.deleted_at IS NULL").
 		Where("media_search_fts MATCH ?", ftsQuery)
 	q = applyQualifiedMediaQueryFilter(q, filter)
-	err := q.Order("bm25(media_search_fts), media.created_at DESC").Limit(limit).Find(&items).Error
-	if err != nil {
-		return nil, false
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, false
 	}
-	return items, true
+	if total == 0 {
+		return items, 0, true
+	}
+	err := q.Select("media.*").Order("bm25(media_search_fts), media.created_at DESC").Offset(offset).Limit(limit).Find(&items).Error
+	if err != nil {
+		return nil, 0, false
+	}
+	return items, total, true
 }
 
-func (r *MediaRepository) searchFilteredLIKE(ctx context.Context, query string, limit int, filter MediaQueryFilter) ([]model.Media, error) {
+func (r *MediaRepository) searchFilteredLIKE(ctx context.Context, query string, offset, limit int, filter MediaQueryFilter) ([]model.Media, int64, error) {
 	var items []model.Media
-	q := r.db.WithContext(ctx).Model(&model.Media{}).Limit(limit)
+	var total int64
+	q := r.db.WithContext(ctx).Model(&model.Media{})
 	q = applyMediaQueryFilter(q, filter)
 	terms := mediaSearchTerms(query)
 	for _, term := range terms {
@@ -509,6 +521,9 @@ func (r *MediaRepository) searchFilteredLIKE(ctx context.Context, query string, 
 			"(title LIKE ? ESCAPE '\\' OR original_name LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\' OR genres LIKE ? ESCAPE '\\')",
 			like, like, like, like,
 		)
+	}
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
 	}
 	if query != "" {
 		prefix := escapeLike(query) + "%"
@@ -520,8 +535,8 @@ func (r *MediaRepository) searchFilteredLIKE(ctx context.Context, query string, 
 	} else {
 		q = q.Order("created_at desc")
 	}
-	err := q.Find(&items).Error
-	return items, err
+	err := q.Offset(offset).Limit(limit).Find(&items).Error
+	return items, total, err
 }
 
 func applyQualifiedMediaQueryFilter(q *gorm.DB, filter MediaQueryFilter) *gorm.DB {

@@ -8,6 +8,13 @@ export interface MediaPage {
   page_size: number
 }
 
+export interface MediaSearchPage {
+  items: Media[]
+  total?: number
+  page?: number
+  page_size?: number
+}
+
 export const libraryAPI = {
   list: (options?: { includeHidden?: boolean }) =>
     api
@@ -38,7 +45,15 @@ export const libraryAPI = {
 
 export const mediaAPI = {
   search: (q: string, limit = 50) =>
-    api.get<{ items: Media[] }>('/media', { params: { q, limit } }).then((r) => r.data),
+    api.get<MediaSearchPage>('/media', { params: { q, limit } }).then((r) => r.data),
+
+  searchPage: (q: string, page = 1, pageSize = 50) =>
+    api
+      .get<MediaSearchPage>('/media', {
+        params: { q, page, page_size: pageSize },
+        timeout: LONG_REQUEST_TIMEOUT,
+      })
+      .then((r) => r.data),
 
   get: (id: string) => api.get<Media>(`/media/${id}`).then((r) => r.data),
 }

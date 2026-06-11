@@ -145,6 +145,17 @@ func TestListMediaVisibleIncludesMergedCloudLibraryItems(t *testing.T) {
 	if total != 2 || !slices.Equal(mediaTitles(items), []string{"云盘剧", "本地剧"}) {
 		t.Fatalf("profile-limited merged list total=%d items=%#v", total, mediaTitles(items))
 	}
+
+	searchItems, err := svc.SearchMediaVisible(t.Context(), "剧", 20, MediaVisibility{
+		IncludeNSFW:       true,
+		AllowedLibraryIDs: []string{local.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mediaTitles(searchItems); !slices.Equal(got, []string{"云盘剧", "本地剧"}) {
+		t.Fatalf("profile-limited merged search items=%#v, want local+hidden cloud", got)
+	}
 }
 
 func TestStartAllCloudLibraryScansIncludesMergedCloudMounts(t *testing.T) {

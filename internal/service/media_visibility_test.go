@@ -176,6 +176,61 @@ func TestSearchMediaVisibleHonorsLargePosterWallLimit(t *testing.T) {
 	}
 }
 
+func TestSearchMediaVisibleCanReturnHugeLibraryResultsWhenRequested(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Library{}, &model.Media{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	lib := model.Library{Name: "海量剧集", Path: "/media/huge", Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	const total = 2505
+	rows := make([]model.Media, total)
+	for i := range rows {
+		rows[i] = model.Media{
+			LibraryID:  lib.ID,
+			Title:      fmt.Sprintf("海量剧集 %04d", i),
+			Path:       fmt.Sprintf("/media/huge/show-%04d.mkv", i),
+			SeasonNum:  1,
+			EpisodeNum: i + 1,
+		}
+	}
+	if err := db.CreateInBatches(&rows, 500).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := NewMediaService(&config.Config{}, zap.NewNop(), repos).
+		SearchMediaVisible(t.Context(), "海量剧集", total, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != total {
+		t.Fatalf("huge search returned %d rows, want %d", len(items), total)
+	}
+
+	firstPage, totalRows, err := NewMediaService(&config.Config{}, zap.NewNop(), repos).
+		SearchMediaVisiblePage(t.Context(), "海量剧集", 1, 2000, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if totalRows != total || len(firstPage) != 2000 {
+		t.Fatalf("huge search page 1 len=%d total=%d, want len=2000 total=%d", len(firstPage), totalRows, total)
+	}
+	secondPage, totalRows, err := NewMediaService(&config.Config{}, zap.NewNop(), repos).
+		SearchMediaVisiblePage(t.Context(), "海量剧集", 2, 2000, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if totalRows != total || len(secondPage) != total-2000 {
+		t.Fatalf("huge search page 2 len=%d total=%d, want len=%d total=%d", len(secondPage), totalRows, total-2000, total)
+	}
+}
+
 func sortedMediaTitles(rows []model.Media) []string {
 	out := make([]string, 0, len(rows))
 	for _, row := range rows {

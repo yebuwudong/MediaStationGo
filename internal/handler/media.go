@@ -171,6 +171,22 @@ func getMediaHandler(svc *service.Container) gin.HandlerFunc {
 func searchMediaHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		q := c.Query("q")
+		if c.Query("page") != "" || c.Query("page_size") != "" {
+			page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+			size, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
+			items, total, err := svc.Media.SearchMediaVisiblePage(c.Request.Context(), q, page, size, mediaVisibilityForRequest(c, svc))
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"items":     items,
+				"total":     total,
+				"page":      page,
+				"page_size": size,
+			})
+			return
+		}
 		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 		items, err := svc.Media.SearchMediaVisible(c.Request.Context(), q, limit, mediaVisibilityForRequest(c, svc))
 		if err != nil {

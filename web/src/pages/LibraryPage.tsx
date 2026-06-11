@@ -13,8 +13,6 @@ import { useAuthStore } from '../stores/auth'
 import { getSeriesKey, groupSeries, isEpisodeLike, seriesTitle, type SeriesCard } from '../utils/groupSeries'
 import { useWebSocket } from '../hooks/useWebSocket'
 
-const MAX_LIBRARY_ITEMS_IN_BROWSER = 3_000
-
 export function LibraryPage() {
   const { id = '' } = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -24,6 +22,7 @@ export function LibraryPage() {
   const [items, setItems] = useState<Media[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [loadingAll, setLoadingAll] = useState(false)
   const [scanning, setScanning] = useState(false)
   const [scanProgress, setScanProgress] = useState('')
   const [scraping, setScraping] = useState(false)
@@ -77,12 +76,12 @@ export function LibraryPage() {
     if (!id || !library) return
     let cancelled = false
     setLoading(true)
+    setLoadingAll(true)
     setItems([])
     const loadAll = async () => {
-      const pageSize = 500
+      const pageSize = 2000
       let page = 1
       let collected: Media[] = []
-      let warnedLargeLibrary = false
       try {
         for (;;) {
           const d = await libraryAPI.listMedia(id, page, pageSize)
@@ -90,18 +89,15 @@ export function LibraryPage() {
           collected = collected.concat(d.items)
           setItems(collected)
           setTotal(d.total)
+          if (page === 1) setLoading(false)
           if (collected.length >= d.total || d.items.length < pageSize) break
-          if (collected.length >= MAX_LIBRARY_ITEMS_IN_BROWSER) {
-            if (!warnedLargeLibrary) {
-              warnedLargeLibrary = true
-              toast(`媒体库条目较多，已先加载前 ${MAX_LIBRARY_ITEMS_IN_BROWSER} 条，避免浏览器卡死。请使用搜索或更细的媒体库目录浏览。`)
-            }
-            break
-          }
           page += 1
         }
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) {
+          setLoading(false)
+          setLoadingAll(false)
+        }
       }
     }
     loadAll().catch(() => {
@@ -118,6 +114,7 @@ export function LibraryPage() {
   }, [])
 
   const onRealtimeEvent = useCallback((topic: string, payload: unknown) => {
+    if (role !== 'admin') return
     if (topic !== 'scan' || !payload || typeof payload !== 'object') return
     const p = payload as Record<string, unknown>
     if (p.library_id !== id) return
@@ -146,7 +143,7 @@ export function LibraryPage() {
       setScanning(true)
       setScanProgress(`${stage}：目录 ${p.dirs ?? 0} · 已发现 ${p.discovered ?? 0} · 已入库 ${p.visited ?? 0}${speedText}`)
     }
-  }, [id, reloadCurrentLibrary])
+  }, [id, reloadCurrentLibrary, role])
 
   useWebSocket(onRealtimeEvent)
 
@@ -249,6 +246,9 @@ export function LibraryPage() {
             <span className="text-sand-500"> ({isSeries ? seriesCards.length : total})</span>
           </h1>
           {library && <p className="text-sm text-ink-50">{library.type} · {library.path}</p>}
+          {loadingAll && !loading && total > items.length && (
+            <p className="mt-1 text-xs text-sand-500">正在继续加载全部条目：{items.length} / {total}</p>
+          )}
           {scanProgress && <p className="mt-1 text-xs text-brand-500">{scanProgress}</p>}
         </div>
         {role === 'admin' && (

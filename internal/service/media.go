@@ -29,6 +29,9 @@ type MediaVisibility struct {
 	HiddenLibraryIDs  []string
 }
 
+const maxMediaSearchLimit = 50000
+const maxMediaSearchPageSize = 2000
+
 func (v MediaVisibility) Allows(media *model.Media) bool {
 	if media == nil {
 		return false
@@ -281,11 +284,29 @@ func (s *MediaService) SearchMedia(ctx context.Context, query string, limit int)
 func (s *MediaService) SearchMediaVisible(ctx context.Context, query string, limit int, visibility MediaVisibility) ([]model.Media, error) {
 	if limit <= 0 {
 		limit = 50
-	} else if limit > 2000 {
-		limit = 2000
+	} else if limit > maxMediaSearchLimit {
+		limit = maxMediaSearchLimit
 	}
 	visibility = ExpandMediaVisibilityForMergedCloudLibraries(ctx, s.repo, visibility)
 	return s.repo.Media.SearchFiltered(ctx, query, limit, repository.MediaQueryFilter{
+		IncludeNSFW:       visibility.IncludeNSFW,
+		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
+		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
+	})
+}
+
+func (s *MediaService) SearchMediaVisiblePage(ctx context.Context, query string, page, pageSize int, visibility MediaVisibility) ([]model.Media, int64, error) {
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	if pageSize > maxMediaSearchPageSize {
+		pageSize = maxMediaSearchPageSize
+	}
+	if page < 1 {
+		page = 1
+	}
+	visibility = ExpandMediaVisibilityForMergedCloudLibraries(ctx, s.repo, visibility)
+	return s.repo.Media.SearchFilteredPage(ctx, query, (page-1)*pageSize, pageSize, repository.MediaQueryFilter{
 		IncludeNSFW:       visibility.IncludeNSFW,
 		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
 		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
