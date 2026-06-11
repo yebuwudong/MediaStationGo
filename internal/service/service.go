@@ -248,6 +248,9 @@ func (c *Container) Boot() {
 	// 启动调度器定时任务
 	c.Scheduler.Start(c.stopCtx)
 
+	// 云盘存储健康检查
+	c.BootCloudStorageHealthCheck(c.stopCtx)
+
 	// 自动扫描云盘媒体库，使内容对所有用户立即可见
 	c.BootCloudLibraries(c.stopCtx)
 
