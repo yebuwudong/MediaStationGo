@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -73,6 +74,8 @@ func main() {
 	}
 
 	repos := repository.New(db)
+	service.ApplyRuntimeSettings(context.Background(), cfg, repos, logger)
+	applyCPUThreadLimit(cfg, logger)
 	services := service.New(cfg, logger, repos)
 
 	if err := services.Auth.SeedAdmin(context.Background()); err != nil {
@@ -124,6 +127,18 @@ func main() {
 	}
 	services.Close()
 	logger.Info("MediaStationGo stopped")
+}
+
+func applyCPUThreadLimit(cfg *config.Config, logger *zap.Logger) {
+	if cfg == nil || cfg.App.MaxCPUThreads < 1 {
+		return
+	}
+	prev := runtime.GOMAXPROCS(cfg.App.MaxCPUThreads)
+	if logger != nil {
+		logger.Info("runtime CPU thread limit applied",
+			zap.Int("max_cpu_threads", cfg.App.MaxCPUThreads),
+			zap.Int("previous", prev))
+	}
 }
 
 func buildRouter(cfg *config.Config, logger *zap.Logger, svc *service.Container) *gin.Engine {

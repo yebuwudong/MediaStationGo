@@ -80,6 +80,7 @@ type AppConfig struct {
 	// NAS devices can become unresponsive when a scan starts many probe
 	// processes at once, so the default is deliberately conservative.
 	FFprobeMaxConcurrent int      `mapstructure:"ffprobe_max_concurrent"`
+	MaxCPUThreads        int      `mapstructure:"max_cpu_threads"`
 	VAAPIDevice          string   `mapstructure:"vaapi_device"`
 	CORSOrigins          []string `mapstructure:"cors_origins"`
 	ServerURL            string   `mapstructure:"server_url"`
@@ -223,6 +224,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("app.ffmpeg_path", "ffmpeg")
 	v.SetDefault("app.ffprobe_path", "ffprobe")
 	v.SetDefault("app.ffprobe_max_concurrent", 1)
+	v.SetDefault("app.max_cpu_threads", 2)
 	v.SetDefault("app.vaapi_device", "/dev/dri/renderD128")
 	v.SetDefault("app.cors_origins", []string{})
 	v.SetDefault("app.server_url", "")
@@ -307,6 +309,12 @@ func (c *Config) normalize() error {
 	}
 	if c.Database.DBPath == "" {
 		c.Database.DBPath = filepath.Join(c.App.DataDir, "mediastation.db")
+	}
+	if c.App.MaxCPUThreads < 1 {
+		c.App.MaxCPUThreads = 1
+	}
+	if c.App.MaxCPUThreads > 8 {
+		c.App.MaxCPUThreads = 8
 	}
 	if c.Database.MaxOpenConns <= 1 {
 		c.Database.MaxOpenConns = defaultDatabaseMaxOpenConns

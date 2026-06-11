@@ -5,15 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/golang-jwt/jwt/v5"
 	"go.uber.org/zap"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
+	"github.com/ShukeBta/MediaStationGo/internal/database"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
@@ -224,6 +227,67 @@ func TestLoginKeepsOnlyConfiguredActiveRefreshTokens(t *testing.T) {
 	}
 	if active != 3 {
 		t.Fatalf("active refresh tokens should be capped at 3, got %d", active)
+	}
+}
+
+func TestLoginRetriesTransientSQLiteBusy(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.Config{}
+	cfg.App.DataDir = t.TempDir()
+	cfg.Database.DBPath = filepath.Join(cfg.App.DataDir, "busy-login.db")
+	cfg.Database.WALMode = true
+	cfg.Database.BusyTimeout = 20
+	cfg.Database.MaxOpenConns = 4
+	cfg.Database.MaxIdleConns = 2
+	cfg.Secrets.JWTSecret = "test-secret"
+	log := zap.NewNop()
+	db, err := database.Open(cfg, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sqlDB.Close() }()
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	permissions := NewPermissionService(log, repos)
+	auth := NewAuthService(cfg, log, repos, NewTokenService(cfg, log, repos), permissions)
+	hash, err := bcrypt.GenerateFromPassword([]byte("password"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.User.Create(ctx, &model.User{
+		Username:     "viewer",
+		PasswordHash: string(hash),
+		Role:         "user",
+		Tier:         "free",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	tx := repos.DB.Begin()
+	if err := tx.Exec("UPDATE users SET updated_at = updated_at WHERE username = ?", "viewer").Error; err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	go func() {
+		timer := time.NewTimer(250 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-release:
+		case <-timer.C:
+		}
+		_ = tx.Rollback().Error
+	}()
+	defer close(release)
+
+	if _, err := auth.Login(ctx, "viewer", "password"); err != nil {
+		t.Fatalf("login should survive a transient sqlite write lock: %v", err)
 	}
 }
 

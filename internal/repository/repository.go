@@ -114,10 +114,14 @@ func (r *UserRepository) ReleaseDeletedUsername(ctx context.Context, username st
 // FindByUsername returns the user matching username, or (nil, nil) when absent.
 func (r *UserRepository) FindByUsername(ctx context.Context, username string) (*model.User, error) {
 	var u model.User
-	err := r.db.WithContext(ctx).Where("username = ?", username).First(&u).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) && username != "" {
-		err = r.db.WithContext(ctx).Where("LOWER(username) = LOWER(?)", username).First(&u).Error
-	}
+	err := withSQLiteBusyRetry(ctx, func() error {
+		u = model.User{}
+		err := r.db.WithContext(ctx).Where("username = ?", username).First(&u).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) && username != "" {
+			err = r.db.WithContext(ctx).Where("LOWER(username) = LOWER(?)", username).First(&u).Error
+		}
+		return err
+	})
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
@@ -130,7 +134,10 @@ func (r *UserRepository) FindByUsername(ctx context.Context, username string) (*
 // FindByID returns the user with the matching primary key, or (nil, nil).
 func (r *UserRepository) FindByID(ctx context.Context, id string) (*model.User, error) {
 	var u model.User
-	err := r.db.WithContext(ctx).Where("id = ?", id).First(&u).Error
+	err := withSQLiteBusyRetry(ctx, func() error {
+		u = model.User{}
+		return r.db.WithContext(ctx).Where("id = ?", id).First(&u).Error
+	})
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
@@ -190,8 +197,10 @@ func (r *UserRepository) UpdatePassword(ctx context.Context, id, hash string) er
 // TouchLogin updates the last login timestamp.
 func (r *UserRepository) TouchLogin(ctx context.Context, id string) error {
 	now := time.Now()
-	return r.db.WithContext(ctx).Model(&model.User{}).Where("id = ?", id).
-		Update("last_login_at", &now).Error
+	return withSQLiteBusyRetry(ctx, func() error {
+		return r.db.WithContext(ctx).Model(&model.User{}).Where("id = ?", id).
+			Update("last_login_at", &now).Error
+	})
 }
 
 // Delete removes a user (soft-delete via gorm.DeletedAt), releases the unique
@@ -896,13 +905,18 @@ type RefreshTokenRepository struct{ db *gorm.DB }
 
 // Create inserts a new refresh token record.
 func (r *RefreshTokenRepository) Create(ctx context.Context, t *model.RefreshToken) error {
-	return r.db.WithContext(ctx).Create(t).Error
+	return withSQLiteBusyRetry(ctx, func() error {
+		return r.db.WithContext(ctx).Create(t).Error
+	})
 }
 
 // FindByHash returns the refresh token matching the hash, or (nil, nil).
 func (r *RefreshTokenRepository) FindByHash(ctx context.Context, hash string) (*model.RefreshToken, error) {
 	var t model.RefreshToken
-	err := r.db.WithContext(ctx).Where("token_hash = ?", hash).First(&t).Error
+	err := withSQLiteBusyRetry(ctx, func() error {
+		t = model.RefreshToken{}
+		return r.db.WithContext(ctx).Where("token_hash = ?", hash).First(&t).Error
+	})
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
@@ -914,8 +928,10 @@ func (r *RefreshTokenRepository) FindByHash(ctx context.Context, hash string) (*
 
 // RevokeByUserID revokes all refresh tokens for a user.
 func (r *RefreshTokenRepository) RevokeByUserID(ctx context.Context, userID string) error {
-	return r.db.WithContext(ctx).Model(&model.RefreshToken{}).
-		Where("user_id = ?", userID).Update("revoked", true).Error
+	return withSQLiteBusyRetry(ctx, func() error {
+		return r.db.WithContext(ctx).Model(&model.RefreshToken{}).
+			Where("user_id = ?", userID).Update("revoked", true).Error
+	})
 }
 
 // RevokeOldestActiveByUserID keeps at most limit active refresh tokens for a
@@ -924,33 +940,39 @@ func (r *RefreshTokenRepository) RevokeOldestActiveByUserID(ctx context.Context,
 	if limit < 1 {
 		limit = 1
 	}
-	var tokens []model.RefreshToken
-	if err := r.db.WithContext(ctx).
-		Where("user_id = ? AND revoked = ? AND expires_at > ?", userID, false, time.Now()).
-		Order("created_at desc, id desc").
-		Find(&tokens).Error; err != nil {
-		return err
-	}
-	if len(tokens) <= limit {
-		return nil
-	}
-	ids := make([]string, 0, len(tokens)-limit)
-	for _, token := range tokens[limit:] {
-		ids = append(ids, token.ID)
-	}
-	return r.db.WithContext(ctx).Model(&model.RefreshToken{}).
-		Where("id IN ?", ids).Update("revoked", true).Error
+	return withSQLiteBusyRetry(ctx, func() error {
+		var tokens []model.RefreshToken
+		if err := r.db.WithContext(ctx).
+			Where("user_id = ? AND revoked = ? AND expires_at > ?", userID, false, time.Now()).
+			Order("created_at desc, id desc").
+			Find(&tokens).Error; err != nil {
+			return err
+		}
+		if len(tokens) <= limit {
+			return nil
+		}
+		ids := make([]string, 0, len(tokens)-limit)
+		for _, token := range tokens[limit:] {
+			ids = append(ids, token.ID)
+		}
+		return r.db.WithContext(ctx).Model(&model.RefreshToken{}).
+			Where("id IN ?", ids).Update("revoked", true).Error
+	})
 }
 
 // DeleteExpired removes all expired refresh tokens.
 func (r *RefreshTokenRepository) DeleteExpired(ctx context.Context) error {
-	return r.db.WithContext(ctx).Where("expires_at < ?", time.Now()).Delete(&model.RefreshToken{}).Error
+	return withSQLiteBusyRetry(ctx, func() error {
+		return r.db.WithContext(ctx).Where("expires_at < ?", time.Now()).Delete(&model.RefreshToken{}).Error
+	})
 }
 
 // Revoke revokes a specific refresh token.
 func (r *RefreshTokenRepository) Revoke(ctx context.Context, hash string) error {
-	return r.db.WithContext(ctx).Model(&model.RefreshToken{}).
-		Where("token_hash = ?", hash).Update("revoked", true).Error
+	return withSQLiteBusyRetry(ctx, func() error {
+		return r.db.WithContext(ctx).Model(&model.RefreshToken{}).
+			Where("token_hash = ?", hash).Update("revoked", true).Error
+	})
 }
 
 // HashToken returns the SHA256 hash of a token.

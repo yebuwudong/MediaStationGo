@@ -20,6 +20,7 @@ app:
   web_dir: ./web/dist
   ffmpeg_path: ffmpeg
   ffprobe_path: ffprobe
+  max_cpu_threads: 2   # hard cap for Go CPU threads; raise only on powerful hosts
   vaapi_device: /dev/dri/renderD128
   cors_origins: []     # leave empty to allow * in dev; set strict allow-list in prod
   server_url: ""       # public URL of the server (used for DLNA / casting)

@@ -25,6 +25,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.App.Port != 8080 {
 		t.Fatalf("expected default port 8080, got %d", cfg.App.Port)
 	}
+	if cfg.App.MaxCPUThreads != 2 {
+		t.Fatalf("expected default MaxCPUThreads 2, got %d", cfg.App.MaxCPUThreads)
+	}
 	if cfg.Database.DBPath == "" {
 		t.Fatalf("expected non-empty DBPath")
 	}

@@ -49,6 +49,16 @@ func ApplyRuntimeSetting(cfg *config.Config, key, value string) {
 			}
 			cfg.App.FFprobeMaxConcurrent = n
 		}
+	case "app.max_cpu_threads", "runtime.max_cpu_threads":
+		if n, err := strconv.Atoi(value); err == nil {
+			if n < 1 {
+				n = 1
+			}
+			if n > 8 {
+				n = 8
+			}
+			cfg.App.MaxCPUThreads = n
+		}
 	case "transcode.enabled", "transcoder.enabled":
 		cfg.Transcoder.Enabled = parseBoolSetting(value, true)
 	case "transcode.hw_enabled", "transcoder.hardware_accel":

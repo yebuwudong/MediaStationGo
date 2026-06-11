@@ -1049,7 +1049,6 @@ func (d *DownloadService) completedTorrentSource(torrent QBitTorrent) string {
 	for _, candidate := range []string{
 		torrent.ContentPath,
 		filepath.Join(torrent.SavePath, torrent.Name),
-		torrent.SavePath,
 	} {
 		clean := strings.TrimSpace(candidate)
 		if clean == "" || clean == "." {

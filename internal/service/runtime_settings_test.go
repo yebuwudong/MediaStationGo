@@ -30,4 +30,14 @@ func TestApplyRuntimeSettingTranscodeSwitches(t *testing.T) {
 	if cfg.Transcoder.MaxConcurrent != 1 {
 		t.Fatalf("max concurrent = %d, want 1", cfg.Transcoder.MaxConcurrent)
 	}
+
+	ApplyRuntimeSetting(cfg, "app.max_cpu_threads", "99")
+	if cfg.App.MaxCPUThreads != 8 {
+		t.Fatalf("max cpu threads = %d, want clamp 8", cfg.App.MaxCPUThreads)
+	}
+
+	ApplyRuntimeSetting(cfg, "app.max_cpu_threads", "0")
+	if cfg.App.MaxCPUThreads != 1 {
+		t.Fatalf("max cpu threads = %d, want clamp 1", cfg.App.MaxCPUThreads)
+	}
 }

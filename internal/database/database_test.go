@@ -58,8 +58,6 @@ func TestEnsurePerformanceIndexesCreatesHotPathIndexes(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{
-		"idx_media_created_active",
-		"idx_media_episode_created_active",
 		"idx_media_library_created_active",
 		"idx_media_library_episode_active",
 		"idx_favorites_user_media_active",

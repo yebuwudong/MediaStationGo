@@ -87,6 +87,26 @@ func TestDownloadCompleteAutoOrganizesContentPath(t *testing.T) {
 	}
 }
 
+func TestCompletedTorrentSourceDoesNotFallbackToSavePath(t *testing.T) {
+	root := t.TempDir()
+	savePath := filepath.Join(root, "downloads", "日番")
+	if err := os.MkdirAll(savePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewDownloadService(zap.NewNop(), newOrganizerTestRepo(t), NewHub(zap.NewNop()), nil)
+
+	got := svc.completedTorrentSource(QBitTorrent{
+		Hash:        "done123",
+		Name:        "Missing.Payload.S01",
+		SavePath:    savePath,
+		ContentPath: filepath.Join(savePath, "Missing.Payload.S01", "Missing.Payload.S01E01.mkv"),
+	})
+
+	if got != "" {
+		t.Fatalf("completedTorrentSource fell back to whole save_path %q; want empty", got)
+	}
+}
+
 func TestDownloadPollBaselinesAlreadyCompletedTorrents(t *testing.T) {
 	repos := newOrganizerTestRepo(t)
 	svc := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
