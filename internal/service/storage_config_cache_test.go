@@ -1,0 +1,81 @@
+package service
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestCloudResolveHotCacheRefreshesInBackground(t *testing.T) {
+	var resolves atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/file/download" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		n := resolves.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"status":200,"code":0,"data":[{"fid":"f1","download_url":"http://cdn.local/%d.mkv"}]}`, n)
+	}))
+	defer upstream.Close()
+
+	_, storage := newStorageUploadTestService(t)
+	if _, err := storage.Save(t.Context(), StorageInput{
+		Type: "quark",
+		Config: map[string]any{
+			"cookie": "kps=test",
+			"base":   upstream.URL,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	link, err := storage.CloudResolve(t.Context(), "quark", "f1", "Player/1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link.URL != "http://cdn.local/1.mkv" || resolves.Load() != 1 {
+		t.Fatalf("first resolve link=%#v resolves=%d", link, resolves.Load())
+	}
+	for i := 0; i < cloudResolveHotHitThreshold-1; i++ {
+		link, err = storage.CloudResolve(t.Context(), "quark", "f1", "Player/1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if link.URL != "http://cdn.local/1.mkv" || resolves.Load() != 1 {
+			t.Fatalf("cached resolve link=%#v resolves=%d", link, resolves.Load())
+		}
+	}
+
+	key := storage.resolveCacheKey("quark", "f1", "Player/1")
+	storage.resolveMu.Lock()
+	entry := storage.resolveCache[key]
+	entry.hits = cloudResolveHotHitThreshold
+	entry.expiresAt = time.Now().Add(5 * time.Second)
+	storage.resolveCache[key] = entry
+	storage.resolveMu.Unlock()
+
+	link, err = storage.CloudResolve(t.Context(), "quark", "f1", "Player/1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link.URL != "http://cdn.local/1.mkv" {
+		t.Fatalf("hot hit should return cached link immediately, got %s", link.URL)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for resolves.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if resolves.Load() < 2 {
+		t.Fatalf("background refresh did not run, resolves=%d", resolves.Load())
+	}
+	link, err = storage.CloudResolve(t.Context(), "quark", "f1", "Player/1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link.URL != "http://cdn.local/2.mkv" {
+		t.Fatalf("refreshed link = %s, want second URL", link.URL)
+	}
+}

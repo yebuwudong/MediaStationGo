@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -65,6 +66,11 @@ type ScannerService struct {
 	cloudImagePrefetchQueue chan cloudImagePrefetchTask
 	cloudImagePrefetchMu    sync.Mutex
 	cloudImagePrefetching   map[string]struct{}
+	cloudMediaProbeOnce     sync.Once
+	cloudMediaProbeQueue    chan cloudMediaProbeTask
+	cloudMediaProbeMu       sync.Mutex
+	cloudMediaProbing       map[string]struct{}
+	cloudMediaProbeBackoff  map[string]time.Time
 }
 
 // NewScannerService is the constructor.
@@ -84,6 +90,9 @@ func NewScannerService(
 		cloudSlots:              make(chan struct{}, 1),
 		cloudImagePrefetchQueue: make(chan cloudImagePrefetchTask, 256),
 		cloudImagePrefetching:   make(map[string]struct{}),
+		cloudMediaProbeQueue:    make(chan cloudMediaProbeTask, 1024),
+		cloudMediaProbing:       make(map[string]struct{}),
+		cloudMediaProbeBackoff:  make(map[string]time.Time),
 	}
 }
 
@@ -92,6 +101,14 @@ func NewScannerService(
 // while the scanner is needed earlier by watcher/download services.
 func (s *ScannerService) SetStorageConfig(storage *StorageConfigService) {
 	s.storage = storage
+	if storage != nil && s.probe != nil {
+		s.cloudMediaProbeOnce.Do(func() {
+			workers := normalizeFFprobeMaxConcurrent(s.cfg.App.FFprobeMaxConcurrent)
+			for i := 0; i < workers; i++ {
+				go s.cloudMediaProbeWorker()
+			}
+		})
+	}
 }
 
 // SetImageProxy lets cloud scans warm sidecar poster/backdrop files into the
@@ -248,6 +265,10 @@ type ScanResult struct {
 
 var ErrCloudScanAlreadyRunning = errors.New("cloud scan already running")
 
+const maxCloudMediaProbeQueuePerScan = 32
+
+const cloudMediaProbeFailureBackoff = 6 * time.Hour
+
 // CloudScanStatus is the operator-facing state for long-running cloud scans.
 type CloudScanStatus struct {
 	LibraryID      string    `json:"library_id"`
@@ -279,6 +300,86 @@ type cloudImagePrefetchTask struct {
 	typ       string
 	ref       string
 	stableKey string
+}
+
+type cloudMediaProbeTask struct {
+	typ  string
+	ref  string
+	path string
+}
+
+type existingCloudMedia struct {
+	SizeBytes   int64
+	DurationSec int
+	Width       int
+	Height      int
+	VideoCodec  string
+	AudioCodec  string
+	Container   string
+	PosterURL   string
+	BackdropURL string
+	STRMURL     string
+}
+
+func (s *ScannerService) cloudMediaProbeWorker() {
+	for task := range s.cloudMediaProbeQueue {
+		s.probeCloudMediaAsync(task)
+	}
+}
+
+func (s *ScannerService) queueCloudMediaProbe(typ, ref, path string) bool {
+	if s == nil || s.storage == nil || s.probe == nil {
+		return false
+	}
+	typ = strings.TrimSpace(typ)
+	ref = strings.TrimSpace(ref)
+	path = strings.TrimSpace(path)
+	if typ == "" || ref == "" || path == "" {
+		return false
+	}
+	s.cloudMediaProbeMu.Lock()
+	if until, ok := s.cloudMediaProbeBackoff[path]; ok {
+		if time.Now().Before(until) {
+			s.cloudMediaProbeMu.Unlock()
+			return false
+		}
+		delete(s.cloudMediaProbeBackoff, path)
+	}
+	if _, ok := s.cloudMediaProbing[path]; ok {
+		s.cloudMediaProbeMu.Unlock()
+		return false
+	}
+	s.cloudMediaProbing[path] = struct{}{}
+	s.cloudMediaProbeMu.Unlock()
+
+	task := cloudMediaProbeTask{typ: typ, ref: ref, path: path}
+	select {
+	case s.cloudMediaProbeQueue <- task:
+		return true
+	default:
+		s.cloudMediaProbeMu.Lock()
+		delete(s.cloudMediaProbing, path)
+		s.cloudMediaProbeMu.Unlock()
+		if s.log != nil {
+			s.log.Warn("cloud media probe queue full", zap.String("provider", typ), zap.String("path", path))
+		}
+		return false
+	}
+}
+
+func (s *ScannerService) queueCloudMediaProbeWithBudget(typ, ref, path string, budget *int) bool {
+	if budget != nil {
+		if *budget <= 0 {
+			return false
+		}
+	}
+	if !s.queueCloudMediaProbe(typ, ref, path) {
+		return false
+	}
+	if budget != nil {
+		*budget--
+	}
+	return true
 }
 
 func (s *ScannerService) beginCloudScan(ctx context.Context, lib *model.Library, mount CloudMountInfo) (context.Context, func(*ScanResult, error), error) {
@@ -549,7 +650,7 @@ func (s *ScannerService) StartAllCloudLibraryScans() ([]CloudScanStatus, error) 
 	if err != nil {
 		return nil, err
 	}
-	libs = FilterShadowedCloudLibraries(libs)
+	libs = FilterScannableCloudLibraries(context.Background(), s.repo, libs)
 	statuses := make([]CloudScanStatus, 0, len(libs))
 	for _, lib := range libs {
 		if !lib.Enabled {
@@ -697,7 +798,7 @@ func (s *ScannerService) scanCloudLibrary(ctx context.Context, lib *model.Librar
 	if s.storage == nil {
 		return res, fmt.Errorf("cloud storage service unavailable")
 	}
-	
+
 	// 验证存储配置是否存在且已启用
 	cfg, err := s.repo.StorageConfig.Get(ctx, mount.Provider)
 	if err != nil || cfg == nil {
@@ -842,11 +943,27 @@ func (s *ScannerService) scanCloudLibrary(ctx context.Context, lib *model.Librar
 	if err := walkCloud(rootDir, rootDisplayDir, nil); err != nil {
 		return res, err
 	}
-	existingPaths, err := s.existingCloudMediaPaths(ctx, lib.ID)
+	existingMedia, err := s.existingCloudMediaSnapshot(ctx, lib.ID)
 	if err != nil {
-		s.log.Warn("load existing cloud media paths failed", zap.String("library_id", lib.ID), zap.Error(err))
-		existingPaths = nil
+		s.log.Warn("load existing cloud media snapshot failed", zap.String("library_id", lib.ID), zap.Error(err))
+		existingMedia = nil
 	}
+	if existingMedia != nil {
+		priority := func(candidate cloudCandidate) int {
+			existing, ok := existingMedia[candidate.path]
+			if !ok {
+				return 2
+			}
+			if cloudTrackMetadataMissing(existing) || cloudMetadataNeedsRefresh(existing, candidate.localMeta) {
+				return 0
+			}
+			return 1
+		}
+		sort.SliceStable(candidates, func(i, j int) bool {
+			return priority(candidates[i]) < priority(candidates[j])
+		})
+	}
+	probeBudget := maxCloudMediaProbeQueuePerScan
 	for _, candidate := range candidates {
 		select {
 		case <-ctx.Done():
@@ -854,7 +971,7 @@ func (s *ScannerService) scanCloudLibrary(ctx context.Context, lib *model.Librar
 		default:
 		}
 		seen[candidate.path] = struct{}{}
-		s.ingestCloudFile(ctx, lib, typ, candidate.ref, candidate.path, candidate.name, candidate.size, candidate.localMeta, existingPaths, res)
+		s.ingestCloudFile(ctx, lib, typ, candidate.ref, candidate.path, candidate.name, candidate.size, candidate.localMeta, existingMedia, &probeBudget, res)
 		publishProgress("importing", res.Visited == 1 || res.Visited%100 == 0)
 	}
 	removed, err := s.pruneMissingCloudMedia(ctx, lib.ID, seen)
@@ -892,21 +1009,42 @@ func (s *ScannerService) startAutoScrape(ctx context.Context, libraryID string) 
 	}()
 }
 
-func (s *ScannerService) existingCloudMediaPaths(ctx context.Context, libraryID string) (map[string]struct{}, error) {
+func (s *ScannerService) existingCloudMediaSnapshot(ctx context.Context, libraryID string) (map[string]existingCloudMedia, error) {
 	var rows []struct {
-		Path string
+		Path        string
+		SizeBytes   int64
+		DurationSec int
+		Width       int
+		Height      int
+		VideoCodec  string
+		AudioCodec  string
+		Container   string
+		PosterURL   string
+		BackdropURL string
+		STRMURL     string
 	}
 	if err := s.repo.DB.WithContext(ctx).
 		Model(&model.Media{}).
-		Select("path").
+		Select("path, size_bytes, duration_sec, width, height, video_codec, audio_codec, container, poster_url, backdrop_url, strm_url").
 		Where("library_id = ? AND path LIKE ?", libraryID, "cloud://%").
 		Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	out := make(map[string]struct{}, len(rows))
+	out := make(map[string]existingCloudMedia, len(rows))
 	for _, row := range rows {
 		if row.Path != "" {
-			out[row.Path] = struct{}{}
+			out[row.Path] = existingCloudMedia{
+				SizeBytes:   row.SizeBytes,
+				DurationSec: row.DurationSec,
+				Width:       row.Width,
+				Height:      row.Height,
+				VideoCodec:  row.VideoCodec,
+				AudioCodec:  row.AudioCodec,
+				Container:   row.Container,
+				PosterURL:   row.PosterURL,
+				BackdropURL: row.BackdropURL,
+				STRMURL:     row.STRMURL,
+			}
 		}
 	}
 	return out, nil
@@ -918,10 +1056,34 @@ func (s *ScannerService) shadowedCloudLibrary(ctx context.Context, lib *model.Li
 		s.log.Warn("list libraries for cloud shadow check failed", zap.String("library_id", lib.ID), zap.Error(err))
 		return nil
 	}
+	visible := FilterScannableCloudLibraries(ctx, s.repo, libs)
+	for _, kept := range visible {
+		if kept.ID == lib.ID {
+			return nil
+		}
+	}
+	current, ok := ParseCloudLibraryMount(lib.Path)
+	if ok {
+		currentKey, _ := cloudLibraryDisplayKey(*lib)
+		for _, kept := range visible {
+			info, ok := ParseCloudLibraryMount(kept.Path)
+			if !ok || info.Provider != current.Provider {
+				continue
+			}
+			keptKey, _ := cloudLibraryDisplayKey(kept)
+			exact := currentKey != "" && currentKey == keptKey
+			return &CloudMountConflict{
+				Library:            kept,
+				Exact:              exact,
+				Nested:             !exact,
+				ExistingIsAncestor: cloudMountAncestor(info.DisplayDir, current.DisplayDir),
+			}
+		}
+	}
 	return CloudLibraryShadowed(libs, *lib)
 }
 
-func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library, typ, ref, path, name string, size int64, localMeta *LocalMetadata, existingPaths map[string]struct{}, res *ScanResult) {
+func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library, typ, ref, path, name string, size int64, localMeta *LocalMetadata, existingMedia map[string]existingCloudMedia, probeBudget *int, res *ScanResult) {
 	res.Visited++
 	ext := strings.ToLower(filepath.Ext(name))
 	title, year := CleanQuery(name)
@@ -940,10 +1102,20 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 			}
 		}
 	}
+	expectedSTRMURL := BuildPublicAPIURL(ctx, s.repo, s.cfg, "/api/cloud/play/"+typ, url.Values{"ref": []string{ref}})
 	isNewMedia := false
-	if existingPaths != nil {
-		_, exists := existingPaths[path]
+	needsTrackProbe := true
+	if existingMedia != nil {
+		existing, exists := existingMedia[path]
 		isNewMedia = !exists
+		needsTrackProbe = !exists || cloudTrackMetadataMissing(existing)
+		if exists && existing.SizeBytes == size && existing.STRMURL == expectedSTRMURL && !cloudMetadataNeedsRefresh(existing, localMeta) {
+			if needsTrackProbe && ext != ".strm" {
+				s.queueCloudMediaProbeWithBudget(typ, ref, path, probeBudget)
+			}
+			res.Skipped++
+			return
+		}
 	} else {
 		isNewMedia = !s.mediaPathExists(ctx, path)
 	}
@@ -954,7 +1126,7 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 		Path:         path,
 		SizeBytes:    size,
 		Container:    strings.TrimPrefix(ext, "."),
-		STRMURL:      BuildPublicAPIURL(ctx, s.repo, s.cfg, "/api/cloud/play/"+typ, url.Values{"ref": []string{ref}}),
+		STRMURL:      expectedSTRMURL,
 		ScrapeStatus: "pending",
 	}
 	if ext == ".strm" {
@@ -976,6 +1148,9 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 		s.log.Warn("upsert cloud media failed", zap.String("path", path), zap.Error(err))
 		return
 	}
+	if needsTrackProbe && ext != ".strm" {
+		s.queueCloudMediaProbeWithBudget(typ, ref, path, probeBudget)
+	}
 	if isNewMedia {
 		res.Added++
 	} else {
@@ -991,6 +1166,113 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 			"cloud":      true,
 		})
 	}
+}
+
+func (s *ScannerService) probeCloudMediaAsync(task cloudMediaProbeTask) {
+	defer func() {
+		s.cloudMediaProbeMu.Lock()
+		delete(s.cloudMediaProbing, task.path)
+		s.cloudMediaProbeMu.Unlock()
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	probe, err := s.probeCloudFileMetadata(ctx, task.typ, task.ref)
+	if err != nil {
+		if s.log != nil {
+			s.log.Debug("cloud media async probe failed", zap.String("provider", task.typ), zap.String("path", task.path), zap.Error(err))
+		}
+		s.cloudMediaProbeMu.Lock()
+		if s.cloudMediaProbeBackoff == nil {
+			s.cloudMediaProbeBackoff = make(map[string]time.Time)
+		}
+		s.cloudMediaProbeBackoff[task.path] = time.Now().Add(cloudMediaProbeFailureBackoff)
+		s.cloudMediaProbeMu.Unlock()
+		return
+	}
+	updates := probeResultUpdates(probe)
+	if len(updates) == 0 {
+		return
+	}
+	if err := s.repo.DB.WithContext(ctx).Model(&model.Media{}).Where("path = ?", task.path).Updates(updates).Error; err != nil {
+		if s.log != nil {
+			s.log.Debug("update cloud media track metadata failed", zap.String("path", task.path), zap.Error(err))
+		}
+		return
+	}
+	s.cloudMediaProbeMu.Lock()
+	delete(s.cloudMediaProbeBackoff, task.path)
+	s.cloudMediaProbeMu.Unlock()
+	if s.hub != nil {
+		s.hub.Publish("scan", map[string]any{
+			"path":          task.path,
+			"cloud":         true,
+			"track_probed":  true,
+			"duration_sec":  probe.DurationSec,
+			"video_codec":   probe.VideoCodec,
+			"audio_codec":   probe.AudioCodec,
+			"width":         probe.Width,
+			"height":        probe.Height,
+			"probe_message": "云盘媒体轨道元数据已后台补齐",
+		})
+	}
+}
+
+func (s *ScannerService) probeCloudFileMetadata(ctx context.Context, typ, ref string) (*ProbeResult, error) {
+	if s == nil || s.probe == nil || s.storage == nil {
+		return nil, errors.New("cloud probe unavailable")
+	}
+	link, err := s.storage.CloudResolve(ctx, typ, ref, "")
+	if err != nil {
+		return nil, err
+	}
+	return s.probe.ProbeHTTP(ctx, link.URL, link.Headers)
+}
+
+func probeResultUpdates(probe *ProbeResult) map[string]any {
+	updates := map[string]any{}
+	if probe == nil {
+		return updates
+	}
+	if probe.DurationSec > 0 {
+		updates["duration_sec"] = probe.DurationSec
+	}
+	if probe.Width > 0 {
+		updates["width"] = probe.Width
+	}
+	if probe.Height > 0 {
+		updates["height"] = probe.Height
+	}
+	if strings.TrimSpace(probe.VideoCodec) != "" {
+		updates["video_codec"] = probe.VideoCodec
+	}
+	if strings.TrimSpace(probe.AudioCodec) != "" {
+		updates["audio_codec"] = probe.AudioCodec
+	}
+	if probe.Container != "" {
+		updates["container"] = probe.Container
+	}
+	return updates
+}
+
+func cloudMetadataNeedsRefresh(existing existingCloudMedia, localMeta *LocalMetadata) bool {
+	if localMeta == nil {
+		return false
+	}
+	if strings.TrimSpace(localMeta.PosterURL) != "" && strings.TrimSpace(existing.PosterURL) == "" {
+		return true
+	}
+	if strings.TrimSpace(localMeta.BackdropURL) != "" && strings.TrimSpace(existing.BackdropURL) == "" {
+		return true
+	}
+	return false
+}
+
+func cloudTrackMetadataMissing(existing existingCloudMedia) bool {
+	return existing.DurationSec <= 0 ||
+		existing.Width <= 0 ||
+		existing.Height <= 0 ||
+		strings.TrimSpace(existing.VideoCodec) == "" ||
+		strings.TrimSpace(existing.AudioCodec) == ""
 }
 
 func cloudSeriesTitleFromMediaPath(mediaPath string) (string, int) {
@@ -1437,5 +1719,3 @@ func (s *ScannerService) maybeGenerateSTRMAfterScan(libraryID string) {
 		}
 	}()
 }
-
-

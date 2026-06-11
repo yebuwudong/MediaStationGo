@@ -47,6 +47,7 @@ type SchedulerService struct {
 	storageCfg *StorageConfigService
 	hub        *Hub
 	cacheDir   string
+	now        func() time.Time
 
 	mu     sync.Mutex
 	stopCh chan struct{}
@@ -63,6 +64,15 @@ type scheduledJob struct {
 }
 
 type schedulerManualRunKey struct{}
+
+const (
+	cloudAutoSyncEnabledKey        = "cloud.auto_sync_enabled"
+	cloudSyncIntervalSecondsKey    = "cloud.sync_interval_seconds"
+	cloudLastAutoSyncDateKey       = "cloud.last_auto_sync_date"
+	cloudAutoSyncWindowStartHour   = 19
+	cloudAutoSyncWindowEndHour     = 21
+	cloudAutoSyncCompletedDateForm = "2006-01-02"
+)
 
 // NewSchedulerService is the constructor.
 func NewSchedulerService(
@@ -84,6 +94,7 @@ func NewSchedulerService(
 		storageCfg: storageCfg,
 		hub:        hub,
 		cacheDir:   cacheDir,
+		now:        time.Now,
 		stopCh:     make(chan struct{}),
 	}
 }
@@ -214,7 +225,7 @@ func (s *SchedulerService) loopWithInitialDelay(ctx context.Context, j *schedule
 func (s *SchedulerService) runOnce(ctx context.Context, j *scheduledJob) error {
 	err := j.run(ctx)
 	s.mu.Lock()
-	j.lastRun = time.Now()
+	j.lastRun = s.currentTime()
 	if err != nil {
 		j.lastErr = err.Error()
 	} else {
@@ -336,23 +347,34 @@ func (s *SchedulerService) cloudUploadInterval(ctx context.Context) time.Duratio
 // /api/cloud/play 302/proxy.
 func (s *SchedulerService) jobSyncCloudLibraries(ctx context.Context) error {
 	manual, _ := ctx.Value(schedulerManualRunKey{}).(bool)
-	if s.scanner == nil || (!manual && !s.autoCloudSyncEnabled(ctx)) {
+	if s.scanner == nil || (!manual && !s.autoCloudSyncDue(ctx, s.currentTime())) {
 		return nil
 	}
 	libs, err := s.repo.Library.List(ctx)
 	if err != nil {
 		return err
 	}
+	libs = FilterScannableCloudLibraries(ctx, s.repo, libs)
+	var firstErr error
 	for _, l := range libs {
 		if !l.Enabled {
 			continue
 		}
-		if _, _, ok := parseCloudLibraryPath(l.Path); !ok {
+		if _, ok := ParseCloudLibraryMount(l.Path); !ok {
 			continue
 		}
 		if _, err := s.scanner.ScanLibraryWithoutAutoScrape(ctx, l.ID); err != nil {
 			s.log.Warn("cloud sync failed", zap.String("library", l.ID), zap.Error(err))
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
+	}
+	if firstErr != nil {
+		return firstErr
+	}
+	if !manual {
+		_ = s.markCloudAutoSyncCompleted(ctx, s.currentTime())
 	}
 	return nil
 }
@@ -361,11 +383,37 @@ func (s *SchedulerService) autoCloudSyncEnabled(ctx context.Context) bool {
 	if s.repo == nil || s.repo.Setting == nil {
 		return false
 	}
-	v, err := s.repo.Setting.Get(ctx, "cloud.auto_sync_enabled")
+	v, err := s.repo.Setting.Get(ctx, cloudAutoSyncEnabledKey)
 	if err != nil {
 		return false
 	}
 	return parseBoolSetting(v, false)
+}
+
+func (s *SchedulerService) autoCloudSyncDue(ctx context.Context, now time.Time) bool {
+	if !s.autoCloudSyncEnabled(ctx) || !cloudAutoSyncInWindow(now) {
+		return false
+	}
+	if s.repo == nil || s.repo.Setting == nil {
+		return true
+	}
+	last, err := s.repo.Setting.Get(ctx, cloudLastAutoSyncDateKey)
+	if err != nil {
+		return true
+	}
+	return strings.TrimSpace(last) != now.Format(cloudAutoSyncCompletedDateForm)
+}
+
+func cloudAutoSyncInWindow(now time.Time) bool {
+	hour := now.In(time.Local).Hour()
+	return hour >= cloudAutoSyncWindowStartHour && hour < cloudAutoSyncWindowEndHour
+}
+
+func (s *SchedulerService) markCloudAutoSyncCompleted(ctx context.Context, now time.Time) error {
+	if s.repo == nil || s.repo.Setting == nil {
+		return nil
+	}
+	return s.repo.Setting.Set(ctx, cloudLastAutoSyncDateKey, now.Format(cloudAutoSyncCompletedDateForm))
 }
 
 func (s *SchedulerService) cloudSyncInterval(ctx context.Context) time.Duration {
@@ -373,7 +421,7 @@ func (s *SchedulerService) cloudSyncInterval(ctx context.Context) time.Duration 
 	if s.repo == nil || s.repo.Setting == nil {
 		return fallback
 	}
-	v, err := s.repo.Setting.Get(ctx, "cloud.sync_interval_seconds")
+	v, err := s.repo.Setting.Get(ctx, cloudSyncIntervalSecondsKey)
 	if err != nil {
 		return fallback
 	}
@@ -385,6 +433,13 @@ func (s *SchedulerService) cloudSyncInterval(ctx context.Context) time.Duration 
 		seconds = 300
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+func (s *SchedulerService) currentTime() time.Time {
+	if s != nil && s.now != nil {
+		return s.now()
+	}
+	return time.Now()
 }
 
 // periodicScanEnabled reports whether the operator opted into periodic full

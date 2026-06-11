@@ -1,6 +1,8 @@
 package service
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -96,8 +98,8 @@ func TestScanCloudLibraryImportsRecursivePlayableMedia(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rescan same cloud: %v", err)
 	}
-	if res.Added != 0 || res.Updated != 2 {
-		t.Fatalf("same cloud rescan should update existing rows only, got %#v", res)
+	if res.Added != 0 || res.Updated != 0 || res.Skipped != 2 {
+		t.Fatalf("same cloud rescan should skip unchanged rows, got %#v", res)
 	}
 
 	empty = true
@@ -490,6 +492,181 @@ func TestScanCloudLibraryReadsRemoteNFOAndArtwork(t *testing.T) {
 	}
 	if media.ScrapeStatus != "matched" {
 		t.Fatalf("scrape status = %q", media.ScrapeStatus)
+	}
+}
+
+func TestScanOpenListCloudLibraryUsesAPIPaginationBeyondFirstPage(t *testing.T) {
+	const totalFiles = 125
+	requestedPages := map[int]bool{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/fs/list" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+		if r.Header.Get("Authorization") != "openlist-token" {
+			t.Fatalf("missing openlist token: %q", r.Header.Get("Authorization"))
+		}
+		var in struct {
+			Path    string `json:"path"`
+			Page    int    `json:"page"`
+			PerPage int    `json:"per_page"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if in.Path != "/Movies" {
+			t.Fatalf("path = %q, want /Movies", in.Path)
+		}
+		if in.PerPage <= 100 {
+			t.Fatalf("per_page = %d, want API pagination larger than legacy 100", in.PerPage)
+		}
+		requestedPages[in.Page] = true
+		effectivePageSize := in.PerPage
+		if effectivePageSize > 100 {
+			effectivePageSize = 100
+		}
+		start := (in.Page - 1) * effectivePageSize
+		content := []map[string]any{}
+		for idx := start; idx < totalFiles && idx < start+effectivePageSize; idx++ {
+			content = append(content, map[string]any{
+				"name":   fmt.Sprintf("Movie.%03d.mkv", idx+1),
+				"size":   int64(1024 + idx),
+				"is_dir": false,
+			})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"code":    200,
+			"message": "success",
+			"data": map[string]any{
+				"content": content,
+				"total":   totalFiles,
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	log := zap.NewNop()
+	storage := NewStorageConfigService(log, repos, NewCryptoService("", log))
+	if _, err := storage.Save(t.Context(), StorageInput{
+		Type: "openlist",
+		Config: map[string]any{
+			"server": upstream.URL,
+			"token":  "openlist-token",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lib := model.Library{Name: "OpenList · Movies", Path: BuildCloudLibraryPath("openlist", "/Movies", "/Movies"), Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	scanner := NewScannerService(&config.Config{}, log, repos, NewHub(log), nil, nil)
+	scanner.SetStorageConfig(storage)
+
+	res, err := scanner.ScanLibrary(t.Context(), lib.ID)
+	if err != nil {
+		t.Fatalf("scan openlist: %v", err)
+	}
+	if res.Added != totalFiles {
+		t.Fatalf("scan result = %#v, want added=%d", res, totalFiles)
+	}
+	if got := countMedia(t, repos); got != totalFiles {
+		t.Fatalf("media count = %d, want %d", got, totalFiles)
+	}
+	if !requestedPages[1] || !requestedPages[2] {
+		t.Fatalf("expected pagination beyond the first 100 entries, got pages %#v", requestedPages)
+	}
+}
+
+func TestScanCloudLibraryQueuesMissingExistingTrackMetadataBeforeNewFiles(t *testing.T) {
+	const newFiles = maxCloudMediaProbeQueuePerScan + 5
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/file/sort" || r.URL.Query().Get("pdir_fid") != "0" {
+			t.Fatalf("unexpected cloud list request %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		var b strings.Builder
+		b.WriteString(`{"status":200,"code":0,"data":{"list":[`)
+		for i := 0; i < newFiles; i++ {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			_, _ = fmt.Fprintf(&b, `{"fid":"new-%02d","file_name":"New.Movie.%02d.mkv","dir":false,"size":%d}`, i, i, 1000+i)
+		}
+		_, _ = fmt.Fprintf(&b, `,{"fid":"existing","file_name":"Existing.Show.S01E01.mkv","dir":false,"size":2048}]}}`)
+		_, _ = w.Write([]byte(b.String()))
+	}))
+	defer upstream.Close()
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	log := zap.NewNop()
+	storage := NewStorageConfigService(log, repos, NewCryptoService("", log))
+	if _, err := storage.Save(t.Context(), StorageInput{
+		Type: "quark",
+		Config: map[string]any{
+			"cookie": "kps=test",
+			"base":   upstream.URL,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lib := model.Library{Name: "夸克网盘", Path: "cloud://quark/0", Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	existingPath := "cloud://quark/Existing.Show.S01E01.mkv"
+	if err := repos.DB.Create(&model.Media{
+		LibraryID:  lib.ID,
+		Title:      "Existing Show",
+		Path:       existingPath,
+		SizeBytes:  2048,
+		Container:  "mkv",
+		STRMURL:    "/api/cloud/play/quark?ref=existing",
+		SeasonNum:  1,
+		EpisodeNum: 1,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	scanner := NewScannerService(&config.Config{}, log, repos, NewHub(log), NewFFprobeService(&config.Config{}, log), nil)
+	scanner.storage = storage
+
+	res, err := scanner.ScanLibrary(t.Context(), lib.ID)
+	if err != nil {
+		t.Fatalf("scan cloud: %v", err)
+	}
+	if res.Added != newFiles || res.Skipped != 1 {
+		t.Fatalf("scan result = %#v, want new files added and existing skipped", res)
+	}
+	foundExistingProbe := false
+	for {
+		select {
+		case task := <-scanner.cloudMediaProbeQueue:
+			if task.path == existingPath {
+				foundExistingProbe = true
+			}
+		default:
+			if !foundExistingProbe {
+				t.Fatal("existing media missing track metadata did not receive probe budget before new files")
+			}
+			return
+		}
 	}
 }
 

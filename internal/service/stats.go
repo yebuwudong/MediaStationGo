@@ -62,7 +62,7 @@ func (s *StatsService) Compute(ctx context.Context, dataDir string) (*Snapshot, 
 	if err != nil {
 		return nil, err
 	}
-	libs = FilterShadowedCloudLibraries(libs)
+	libs = FilterDisplayCloudLibraries(ctx, s.repo, libs)
 	activeLibraryIDs := make([]string, 0, len(libs))
 	for _, lib := range libs {
 		if !lib.Enabled {

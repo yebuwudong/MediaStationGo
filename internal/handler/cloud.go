@@ -74,7 +74,7 @@ func cloudMountHandler(svc *service.Container) gin.HandlerFunc {
 		path := service.BuildCloudLibraryPath(typ, in.Dir, in.DirPath)
 		name := strings.TrimSpace(in.Name)
 		if name == "" {
-			name = cloudMountLibraryName(typ, strings.TrimSpace(in.Dir))
+			name = cloudMountLibraryName(typ, strings.TrimSpace(in.Dir), strings.TrimSpace(in.DirPath))
 		}
 		mediaType := strings.TrimSpace(in.MediaType)
 		if mediaType == "" || strings.EqualFold(mediaType, "auto") {
@@ -120,7 +120,8 @@ func cloudMountHandler(svc *service.Container) gin.HandlerFunc {
 				updates["type"] = mediaType
 				lib.Type = mediaType
 			}
-			if name != "" && name != lib.Name && !strings.Contains(lib.Name, " · ") {
+			currentDisplayName, _ := service.CloudLibraryDisplayName(*lib)
+			if name != "" && name != lib.Name && (currentDisplayName == "" || currentDisplayName != name || strings.Contains(lib.Name, " · ")) {
 				updates["name"] = name
 				lib.Name = name
 			}
@@ -211,22 +212,31 @@ func cloudScanStatusHandler(svc *service.Container) gin.HandlerFunc {
 	}
 }
 
-func cloudMountLibraryName(typ, dir string) string {
-	base := typ
-	switch typ {
-	case cloud.TypeQuark:
-		base = "夸克网盘"
-	case cloud.Type115:
-		base = "115 网盘"
-	case cloud.TypeCloudDrive2:
-		base = "CloudDrive2"
-	case cloud.TypeOpenList:
-		base = "OpenList"
+func cloudMountLibraryName(typ, dir, displayDir string) string {
+	base := service.CloudMountProviderLabel(typ)
+	displayDir = strings.Trim(strings.TrimSpace(strings.ReplaceAll(displayDir, "\\", "/")), "/")
+	if displayDir != "" {
+		parts := strings.Split(displayDir, "/")
+		for i := len(parts) - 1; i >= 0; i-- {
+			if part := strings.TrimSpace(parts[i]); part != "" {
+				return part
+			}
+		}
 	}
 	if dir == "" || dir == "0" {
 		return base
 	}
-	return base + " · " + dir
+	dir = strings.Trim(strings.TrimSpace(strings.ReplaceAll(dir, "\\", "/")), "/")
+	if dir == "" {
+		return base
+	}
+	parts := strings.Split(dir, "/")
+	for i := len(parts) - 1; i >= 0; i-- {
+		if part := strings.TrimSpace(parts[i]); part != "" {
+			return part
+		}
+	}
+	return base
 }
 
 // cloud115QRStartHandler begins a 115 QR-code login and returns the session +
@@ -329,16 +339,28 @@ func serveCloudResolvedLink(svc *service.Container, c *gin.Context, typ, ref str
 	if rng := c.GetHeader("Range"); rng != "" {
 		req.Header.Set("Range", rng)
 	}
+	if accept := c.GetHeader("Accept"); accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+	if c.GetHeader("Accept-Encoding") == "" {
+		req.Header.Set("Accept-Encoding", "identity")
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
 	defer resp.Body.Close()
-	for _, h := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges"} {
+	for _, h := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified"} {
 		if v := resp.Header.Get(h); v != "" {
 			c.Header(h, v)
 		}
+	}
+	if c.Writer.Header().Get("Accept-Ranges") == "" {
+		c.Header("Accept-Ranges", "bytes")
+	}
+	if resp.StatusCode >= 400 {
+		c.Header("Cache-Control", "no-store")
 	}
 	c.Status(resp.StatusCode)
 	if c.Request.Method != http.MethodHead {

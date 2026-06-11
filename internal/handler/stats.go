@@ -32,7 +32,7 @@ func applyStatsVisibility(c *gin.Context, svc *service.Container, snap *service.
 	if err != nil {
 		return err
 	}
-	libs = service.FilterShadowedCloudLibraries(libs)
+	libs = service.FilterDisplayCloudLibraries(c.Request.Context(), svc.Repo, libs)
 	var visibleLibraries int64
 	activeLibraryIDs := make([]string, 0, len(libs))
 	for _, lib := range libs {

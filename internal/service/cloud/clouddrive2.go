@@ -1,8 +1,10 @@
 package cloud
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -27,6 +29,7 @@ type cloudDrive2Provider struct {
 	password string
 	token    string
 	ua       string
+	apiBase  *url.URL
 	client   *http.Client
 	proxy    bool
 }
@@ -42,6 +45,10 @@ func newOpenList(cfg map[string]any, client *http.Client) *cloudDrive2Provider {
 func newCloudDAVProvider(typ, name string, cfg map[string]any, client *http.Client, defaultDAVPath string) *cloudDrive2Provider {
 	rawURL := webDAVURLFromConfig(cfg, defaultDAVPath)
 	u, _ := url.Parse(strings.TrimRight(rawURL, "/"))
+	var apiBase *url.URL
+	if typ == TypeOpenList {
+		apiBase = openListAPIBaseFromConfig(cfg, rawURL, defaultDAVPath)
+	}
 	ua := str(cfg["ua"])
 	if ua == "" {
 		ua = defaultUA
@@ -58,6 +65,7 @@ func newCloudDAVProvider(typ, name string, cfg map[string]any, client *http.Clie
 		password: str(cfg["password"]),
 		token:    str(cfg["token"]),
 		ua:       ua,
+		apiBase:  apiBase,
 		client:   client,
 		proxy:    proxy,
 	}
@@ -73,6 +81,11 @@ func (p *cloudDrive2Provider) Ping(ctx context.Context) error {
 func (p *cloudDrive2Provider) List(ctx context.Context, dir string) ([]FileEntry, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
+	}
+	if p.typ == TypeOpenList && p.apiBase != nil && strings.TrimSpace(p.token) != "" {
+		if entries, err := p.listOpenListAPI(ctx, dir); err == nil {
+			return entries, nil
+		}
 	}
 	target := normalizeCloudDAVPath(dir)
 	req, err := http.NewRequestWithContext(ctx, "PROPFIND", p.urlFor(target), strings.NewReader(cloudDAVPropfindBody))
@@ -117,6 +130,75 @@ func (p *cloudDrive2Provider) List(ctx context.Context, dir string) ([]FileEntry
 			IsDir: item.PropStat.Prop.ResourceType.Collection != nil || strings.HasSuffix(item.Href, "/"),
 			Size:  parseDAVSize(item.PropStat.Prop.ContentLength),
 		})
+	}
+	return out, nil
+}
+
+func (p *cloudDrive2Provider) listOpenListAPI(ctx context.Context, dir string) ([]FileEntry, error) {
+	const pageSize = 500
+	target := normalizeCloudDAVPath(dir)
+	out := make([]FileEntry, 0, pageSize)
+	for pageNum := 1; ; pageNum++ {
+		payload := map[string]any{
+			"path":     target,
+			"password": "",
+			"page":     pageNum,
+			"per_page": pageSize,
+			"refresh":  false,
+		}
+		body, _ := json.Marshal(payload)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.openListAPIURL("/api/fs/list"), bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("User-Agent", p.ua)
+		if p.token != "" {
+			req.Header.Set("Authorization", p.token)
+		}
+		resp, err := p.client.Do(req)
+		if err != nil {
+			return nil, decorateDAVTransportError(p.name, p.openListAPIURL("/api/fs/list"), err)
+		}
+		var decoded openListListResponse
+		decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&decoded)
+		resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("%s: api list %s returned http %d", p.name, target, resp.StatusCode)
+		}
+		if decodeErr != nil {
+			return nil, fmt.Errorf("%s: decode api list: %w", p.name, decodeErr)
+		}
+		if decoded.Code != 0 && decoded.Code != 200 {
+			msg := strings.TrimSpace(decoded.Message)
+			if msg == "" {
+				msg = fmt.Sprintf("code %d", decoded.Code)
+			}
+			return nil, fmt.Errorf("%s: api list %s failed: %s", p.name, target, msg)
+		}
+		for _, item := range decoded.Data.Content {
+			name := strings.TrimSpace(item.Name)
+			if name == "" || name == "." || name == "/" {
+				continue
+			}
+			out = append(out, FileEntry{
+				ID:    joinOpenListAPIPath(target, name),
+				Name:  name,
+				IsDir: item.IsDir,
+				Size:  item.Size,
+			})
+		}
+		total := decoded.Data.Total
+		if total > 0 {
+			if len(out) >= total || len(decoded.Data.Content) == 0 {
+				break
+			}
+			continue
+		}
+		if len(decoded.Data.Content) == 0 || len(decoded.Data.Content) < pageSize {
+			break
+		}
 	}
 	return out, nil
 }
@@ -182,6 +264,51 @@ func defaultWebDAVURL(server, defaultDAVPath string) string {
 		davPath = "/" + davPath
 	}
 	return server + davPath
+}
+
+func openListAPIBaseFromConfig(cfg map[string]any, webDAVURL, defaultDAVPath string) *url.URL {
+	raw := str(cfg["server"])
+	if raw == "" {
+		raw = firstNonEmpty(str(cfg["api_url"]), webDAVURL)
+	}
+	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return nil
+	}
+	davPath := strings.Trim(strings.TrimSpace(defaultDAVPath), "/")
+	if davPath != "" {
+		pathParts := strings.Split(strings.TrimRight(u.Path, "/"), "/")
+		if len(pathParts) > 0 && strings.EqualFold(pathParts[len(pathParts)-1], davPath) {
+			u.Path = strings.Join(pathParts[:len(pathParts)-1], "/")
+			if u.Path == "" {
+				u.Path = "/"
+			}
+		}
+	}
+	u.RawPath = ""
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u
+}
+
+func (p *cloudDrive2Provider) openListAPIURL(apiPath string) string {
+	if p.apiBase == nil {
+		return ""
+	}
+	u := *p.apiBase
+	u.RawPath = ""
+	basePath := strings.TrimRight(u.Path, "/")
+	apiPath = "/" + strings.TrimLeft(apiPath, "/")
+	if basePath == "" || basePath == "/" {
+		u.Path = apiPath
+	} else {
+		u.Path = basePath + apiPath
+	}
+	return u.String()
 }
 
 func ensureDefaultDAVPath(rawURL, defaultDAVPath string) string {
@@ -322,6 +449,21 @@ type cloudDAVResourceType struct {
 	Collection *struct{} `xml:"collection"`
 }
 
+type openListListResponse struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    struct {
+		Content []openListListItem `json:"content"`
+		Total   int                `json:"total"`
+	} `json:"data"`
+}
+
+type openListListItem struct {
+	Name  string `json:"name"`
+	Size  int64  `json:"size"`
+	IsDir bool   `json:"is_dir"`
+}
+
 func normalizeCloudDAVPath(p string) string {
 	p = strings.ReplaceAll(strings.TrimSpace(p), "\\", "/")
 	if p == "" || p == "." {
@@ -339,6 +481,15 @@ func normalizeCloudDAVPath(p string) string {
 
 func sameCloudDAVPath(a, b string) bool {
 	return strings.TrimRight(normalizeCloudDAVPath(a), "/") == strings.TrimRight(normalizeCloudDAVPath(b), "/")
+}
+
+func joinOpenListAPIPath(dir, name string) string {
+	dir = strings.TrimRight(normalizeCloudDAVPath(dir), "/")
+	name = strings.Trim(strings.ReplaceAll(name, "\\", "/"), "/")
+	if dir == "" || dir == "/" {
+		return normalizeCloudDAVPath(name)
+	}
+	return normalizeCloudDAVPath(dir + "/" + name)
 }
 
 func parseDAVSize(raw string) int64 {

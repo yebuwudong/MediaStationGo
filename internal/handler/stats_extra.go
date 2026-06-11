@@ -134,7 +134,7 @@ func statsLibrariesHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		libs = service.FilterShadowedCloudLibraries(libs)
+		libs = service.FilterDisplayCloudLibraries(c.Request.Context(), svc.Repo, libs)
 		out := make([]gin.H, 0, len(libs))
 		visibility := mediaVisibilityForRequest(c, svc)
 		for _, l := range libs {

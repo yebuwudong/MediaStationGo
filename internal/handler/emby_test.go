@@ -179,6 +179,60 @@ func TestEmbyPublicSystemInfoLooksLikeModernEmbyServer(t *testing.T) {
 	}
 }
 
+func TestEmbySenPlayerDiscoveryRoutesReturnProtocolResponses(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	cfg := &config.Config{}
+	cfg.App.Port = 9011
+	repos := repository.New(db)
+	router := gin.New()
+	registerEmbyRoutes(router, "test-secret", &service.Container{
+		Repo: repos,
+		Emby: service.NewEmbyService(cfg, zap.NewNop(), repos),
+	})
+
+	tests := []struct {
+		path        string
+		contentType string
+		contains    string
+	}{
+		{path: "/emby", contentType: "application/json", contains: "Emby Server"},
+		{path: "/emby/", contentType: "application/json", contains: "Emby Server"},
+		{path: "/Startup/Configuration", contentType: "application/json", contains: "StartupWizardCompleted"},
+		{path: "/emby/Startup/Configuration", contentType: "application/json", contains: "StartupWizardCompleted"},
+		{path: "/System/Configuration/Public", contentType: "application/json", contains: "IsStartupWizardCompleted"},
+		{path: "/emby/System/Configuration/Public", contentType: "application/json", contains: "IsStartupWizardCompleted"},
+		{path: "/QuickConnect/Enabled", contentType: "application/json", contains: "false"},
+		{path: "/emby/QuickConnect/Enabled", contentType: "application/json", contains: "false"},
+		{path: "/Branding/Css", contentType: "text/css", contains: ""},
+		{path: "/emby/Branding/Css", contentType: "text/css", contains: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+			}
+			if contentType := w.Header().Get("Content-Type"); !strings.Contains(contentType, tt.contentType) {
+				t.Fatalf("Content-Type = %q, want %q", contentType, tt.contentType)
+			}
+			if tt.contains != "" && !strings.Contains(w.Body.String(), tt.contains) {
+				t.Fatalf("body = %q, want contains %q", w.Body.String(), tt.contains)
+			}
+			if strings.Contains(w.Body.String(), "<html") {
+				t.Fatalf("protocol discovery route served SPA HTML: %q", w.Body.String())
+			}
+		})
+	}
+}
+
 func TestEmbyUppercaseSessionCapabilitiesRouteNoContent(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -212,6 +266,25 @@ func TestEmbyUppercaseSessionCapabilitiesRouteNoContent(t *testing.T) {
 
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("unexpected status: %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestEmbySessionCapabilitiesRouteAllowsPreAuthProbe(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	registerEmbyRoutes(router, "test-secret", &service.Container{})
+
+	for _, path := range []string{"/Sessions/Capabilities", "/Sessions/Capabilities/Full", "/emby/Sessions/Capabilities", "/emby/Sessions/Capabilities/Full"} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusNoContent {
+				t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+			}
+		})
 	}
 }
 

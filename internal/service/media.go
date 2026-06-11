@@ -261,7 +261,12 @@ func (s *MediaService) ListMediaVisible(ctx context.Context, libraryID string, p
 	if page < 1 {
 		page = 1
 	}
-	return s.repo.Media.ListByLibraryFiltered(ctx, libraryID, (page-1)*pageSize, pageSize, repository.MediaQueryFilter{
+	visibility = ExpandMediaVisibilityForMergedCloudLibraries(ctx, s.repo, visibility)
+	libraryIDs, err := MergedLibraryIDsForLibrary(ctx, s.repo, libraryID)
+	if err != nil {
+		return nil, 0, err
+	}
+	return s.repo.Media.ListByLibrariesFiltered(ctx, libraryIDs, (page-1)*pageSize, pageSize, repository.MediaQueryFilter{
 		IncludeNSFW:       visibility.IncludeNSFW,
 		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
 		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
@@ -279,6 +284,7 @@ func (s *MediaService) SearchMediaVisible(ctx context.Context, query string, lim
 	} else if limit > 2000 {
 		limit = 2000
 	}
+	visibility = ExpandMediaVisibilityForMergedCloudLibraries(ctx, s.repo, visibility)
 	return s.repo.Media.SearchFiltered(ctx, query, limit, repository.MediaQueryFilter{
 		IncludeNSFW:       visibility.IncludeNSFW,
 		AllowedLibraryIDs: visibility.AllowedLibraryIDs,

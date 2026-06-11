@@ -78,7 +78,10 @@ func AutoMigrate(db *gorm.DB) error {
 	if err := enforceTelegramBindingOneToOne(db); err != nil {
 		return err
 	}
-	return ensurePerformanceIndexes(db)
+	if err := ensurePerformanceIndexes(db); err != nil {
+		return err
+	}
+	return ensureMediaSearchIndex(db)
 }
 
 func ensurePerformanceIndexes(db *gorm.DB) error {
@@ -86,6 +89,8 @@ func ensurePerformanceIndexes(db *gorm.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_media_library_created_active ON media(library_id, created_at DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_media_library_episode_active ON media(library_id, season_num, episode_num, created_at DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_media_series_active ON media(series_id, season_num, episode_num) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_media_title_active ON media(title COLLATE NOCASE) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_media_original_name_active ON media(original_name COLLATE NOCASE) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_favorites_user_media_active ON favorites(user_id, media_id) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_playback_histories_user_media_active ON playback_histories(user_id, media_id, watched_at DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_playback_histories_resume_active ON playback_histories(user_id, completed, watched_at DESC) WHERE deleted_at IS NULL`,
@@ -97,6 +102,36 @@ func ensurePerformanceIndexes(db *gorm.DB) error {
 		}
 	}
 	return nil
+}
+
+func ensureMediaSearchIndex(db *gorm.DB) error {
+	if mediaSearchIndexNeedsRebuild(db) {
+		_ = db.Exec(`DROP TABLE IF EXISTS media_search_fts`).Error
+	}
+	if err := db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS media_search_fts USING fts5(media_id UNINDEXED, title, original_name, path, genres, tokenize='trigram')`).Error; err != nil {
+		if fallbackErr := db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS media_search_fts USING fts5(media_id UNINDEXED, title, original_name, path, genres, tokenize='unicode61')`).Error; fallbackErr != nil {
+			// FTS is an acceleration path. Some embedded SQLite builds may omit
+			// FTS5; keep startup working and let repository queries fall back to
+			// LIKE-based Chinese fuzzy search.
+			return nil
+		}
+	}
+	return nil
+}
+
+func mediaSearchIndexNeedsRebuild(db *gorm.DB) bool {
+	var cols []struct {
+		Name string
+	}
+	if err := db.Raw(`PRAGMA table_info(media_search_fts)`).Scan(&cols).Error; err != nil || len(cols) == 0 {
+		return false
+	}
+	for _, col := range cols {
+		if col.Name == "genres" {
+			return false
+		}
+	}
+	return true
 }
 
 func enforceTelegramBindingOneToOne(db *gorm.DB) error {

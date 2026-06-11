@@ -44,7 +44,14 @@ func CORS(origins []string, debug bool) gin.HandlerFunc {
 	allowAll := len(origins) == 0 && debug
 	allowed := make(map[string]struct{}, len(origins))
 	for _, o := range origins {
-		allowed[strings.TrimSpace(o)] = struct{}{}
+		origin := strings.TrimSpace(o)
+		if origin == "*" {
+			allowAll = true
+			continue
+		}
+		if origin != "" {
+			allowed[origin] = struct{}{}
+		}
 	}
 	return func(c *gin.Context) {
 		origin := c.GetHeader("Origin")
@@ -259,5 +266,3 @@ func extractToken(c *gin.Context) string {
 	}
 	return ""
 }
-
-

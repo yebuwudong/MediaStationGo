@@ -568,7 +568,7 @@ function CloudBrowser({ type }: { type: StorageType }) {
     setMounting(true)
     try {
       const label = TYPE_LABEL[type] ?? type
-      const name = cur.id ? `${label} · ${cur.name}` : label
+      const name = cur.id ? cur.name : label
       const res = await cloudAPI.mount(type, cur.id, name, mountMediaType, currentMountPath())
       handleMountResult(res, cur.name)
       await loadMounts()
@@ -589,10 +589,9 @@ function CloudBrowser({ type }: { type: StorageType }) {
     let ok = 0
     let skipped = 0
     let failed = 0
-    const label = TYPE_LABEL[type] ?? type
     for (const dir of dirs) {
       try {
-        const result = await cloudAPI.mount(type, dir.id, `${label} · ${dir.name}`, 'auto', childMountPath(dir))
+        const result = await cloudAPI.mount(type, dir.id, dir.name, 'auto', childMountPath(dir))
         const state = handleMountResult(result, dir.name)
         if (state === 'skipped') skipped += 1
         else ok += 1
@@ -733,6 +732,7 @@ function CloudBrowser({ type }: { type: StorageType }) {
         </div>
         <p className="basis-full text-xs text-ink-50">
           挂载后不会复制网盘文件；后台会递归读取该目录里的子文件夹和媒体文件，扫描到的影片会自动加入对应媒体库。小目录通常几十秒，大目录取决于网盘接口速度。
+          如果已有同名同类型媒体库，会在首页和 Emby/SenPlayer 中自动归并显示。
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <select
@@ -753,7 +753,7 @@ function CloudBrowser({ type }: { type: StorageType }) {
             disabled={mounting || batchMounting || loading}
             onClick={mountCurrent}
           >
-            {mounting ? '挂载中…' : '挂载当前目录为媒体库并递归扫描'}
+            {mounting ? '挂载中…' : '挂载当前目录并归并到媒体库'}
           </button>
           <button
             type="button"
@@ -761,7 +761,7 @@ function CloudBrowser({ type }: { type: StorageType }) {
             disabled={mounting || batchMounting || loading || items.every((item) => !item.is_dir)}
             onClick={mountVisibleDirectories}
           >
-            {batchMounting ? '批量挂载中…' : '一键把当前目录下所有文件夹挂载为媒体库'}
+            {batchMounting ? '批量挂载中…' : '一键挂载当前目录下所有文件夹'}
           </button>
         </div>
       </div>

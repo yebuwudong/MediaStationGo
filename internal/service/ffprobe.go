@@ -101,6 +101,45 @@ func (f *FFprobeService) Probe(ctx context.Context, path string) (*ProbeResult, 
 	return f.probeWithFFmpeg(ctx, path)
 }
 
+// ProbeHTTP runs ffprobe against a remote HTTP(S) media URL. Headers are
+// passed to ffprobe/ffmpeg so WebDAV/OpenList/115 links that require cookies,
+// authorization, or a provider-specific User-Agent can still expose stream
+// metadata without downloading the whole file.
+func (f *FFprobeService) ProbeHTTP(ctx context.Context, rawURL string, headers map[string]string) (*ProbeResult, error) {
+	if f == nil {
+		return nil, errors.New("ffprobe service nil")
+	}
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return nil, errors.New("empty probe url")
+	}
+	token, err := f.acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer f.release(token)
+	headerText := ffmpegHeaderText(headers)
+	if bin, err := resolveLocalExecutable(f.cfg.App.FFprobePath, "ffprobe"); err == nil {
+		f.cfg.App.FFprobePath = bin
+		probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		args := []string{"-v", "error"}
+		if headerText != "" {
+			args = append(args, "-headers", headerText)
+		}
+		args = append(args, "-print_format", "json", "-show_format", "-show_streams", rawURL)
+		cmd := exec.CommandContext(probeCtx, bin, args...) // #nosec G204 -- bin is resolved by resolveLocalExecutable before execution.
+		out, err := cmd.Output()
+		if err == nil {
+			return parseProbeJSON(out)
+		}
+		if f.log != nil {
+			f.log.Debug("remote ffprobe failed, trying ffmpeg fallback", zap.Error(err))
+		}
+	}
+	return f.probeHTTPWithFFmpeg(ctx, rawURL, headerText)
+}
+
 func (f *FFprobeService) acquire(ctx context.Context) (chan struct{}, error) {
 	f.mu.RLock()
 	limiter := f.limiter
@@ -138,6 +177,44 @@ func (f *FFprobeService) probeWithFFmpeg(ctx context.Context, path string) (*Pro
 		return nil, fmt.Errorf("ffmpeg probe %s: no stream metadata parsed", path)
 	}
 	return res, nil
+}
+
+func (f *FFprobeService) probeHTTPWithFFmpeg(ctx context.Context, rawURL, headerText string) (*ProbeResult, error) {
+	bin, err := resolveLocalExecutable(f.cfg.App.FFmpegPath, "ffmpeg")
+	if err != nil {
+		return nil, fmt.Errorf("ffprobe/ffmpeg unavailable: %w", err)
+	}
+	f.cfg.App.FFmpegPath = bin
+	args := []string{"-hide_banner"}
+	if headerText != "" {
+		args = append(args, "-headers", headerText)
+	}
+	args = append(args, "-i", rawURL)
+	out, _ := commandOutput(ctx, 30*time.Second, bin, args...)
+	res := parseFFmpegProbeText(string(out))
+	if res.VideoCodec == "" && res.AudioCodec == "" && res.DurationSec == 0 {
+		return nil, fmt.Errorf("remote ffmpeg probe: no stream metadata parsed")
+	}
+	return res, nil
+}
+
+func ffmpegHeaderText(headers map[string]string) string {
+	if len(headers) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for k, v := range headers {
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		if k == "" || strings.ContainsAny(k, "\r\n") || strings.ContainsAny(v, "\r\n") {
+			continue
+		}
+		b.WriteString(k)
+		b.WriteString(": ")
+		b.WriteString(v)
+		b.WriteString("\r\n")
+	}
+	return b.String()
 }
 
 // rawProbe mirrors the relevant fields of `ffprobe -show_format -show_streams`.

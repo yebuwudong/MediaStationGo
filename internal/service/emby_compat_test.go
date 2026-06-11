@@ -11,6 +11,7 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
+	"github.com/ShukeBta/MediaStationGo/internal/service/cloud"
 )
 
 func TestEmbyItemsExposeSeriesSeasonEpisodeHierarchy(t *testing.T) {
@@ -370,6 +371,67 @@ func TestEmbyPlaybackInfoKeepsSTRMBehindStreamEndpoint(t *testing.T) {
 	}
 }
 
+func TestEmbyPlaybackInfoProbesMissingCloudTrackMetadata(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "OpenList", Path: `cloud://openlist/Movies`, Type: "movie", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	media := model.Media{
+		Base:      model.Base{ID: "cloud-probe-1"},
+		LibraryID: lib.ID,
+		Title:     "云盘电影",
+		Path:      `cloud://openlist/Movies/Movie.mkv`,
+		STRMURL:   `http://nas.local/api/cloud/play/openlist?ref=%2FMovies%2FMovie.mkv`,
+	}
+	if err := svc.repo.DB.Create(&media).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+	resolver := &fakeCloudPlaybackResolver{
+		link: &cloud.DirectLink{
+			URL:     "http://cdn.example.test/Movie.mkv",
+			Headers: map[string]string{"Authorization": "Bearer probe-token"},
+		},
+	}
+	prober := &fakeCloudPlaybackProber{
+		probe: &ProbeResult{
+			DurationSec: 3661,
+			Width:       3840,
+			Height:      2160,
+			VideoCodec:  "hevc",
+			AudioCodec:  "eac3",
+			Container:   "matroska,webm",
+		},
+	}
+	svc.SetCloudProbe(resolver, prober)
+
+	pb, err := svc.PlaybackInfo(t.Context(), "cloud-probe-1", "user-1")
+	if err != nil {
+		t.Fatalf("playback info: %v", err)
+	}
+	if resolver.typ != "openlist" || resolver.ref != "/Movies/Movie.mkv" {
+		t.Fatalf("resolver called with typ=%q ref=%q", resolver.typ, resolver.ref)
+	}
+	if prober.rawURL != "http://cdn.example.test/Movie.mkv" || prober.headers["Authorization"] != "Bearer probe-token" {
+		t.Fatalf("probe called with url=%q headers=%#v", prober.rawURL, prober.headers)
+	}
+	src := pb["MediaSources"].([]map[string]any)[0]
+	if src["RunTimeTicks"] != int64(3661)*10_000_000 {
+		t.Fatalf("runtime ticks not filled from probe: %#v", src)
+	}
+	streams := src["MediaStreams"].([]map[string]any)
+	if len(streams) != 2 || streams[0]["Codec"] != "hevc" || streams[1]["Codec"] != "eac3" {
+		t.Fatalf("media streams not filled from probe: %#v", streams)
+	}
+	var persisted model.Media
+	if err := svc.repo.DB.First(&persisted, "id = ?", "cloud-probe-1").Error; err != nil {
+		t.Fatalf("reload media: %v", err)
+	}
+	if persisted.DurationSec != 3661 || persisted.Width != 3840 || persisted.Height != 2160 || persisted.VideoCodec != "hevc" || persisted.AudioCodec != "eac3" {
+		t.Fatalf("probe metadata not persisted: %#v", persisted)
+	}
+}
+
 func newTestEmbyService(t *testing.T) *EmbyService {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -381,4 +443,30 @@ func newTestEmbyService(t *testing.T) *EmbyService {
 	}
 	repos := repository.New(db)
 	return NewEmbyService(&config.Config{}, zap.NewNop(), repos)
+}
+
+type fakeCloudPlaybackResolver struct {
+	link *cloud.DirectLink
+	typ  string
+	ref  string
+	ua   string
+}
+
+func (f *fakeCloudPlaybackResolver) CloudResolve(_ context.Context, typ, fileRef, clientUA string) (*cloud.DirectLink, error) {
+	f.typ = typ
+	f.ref = fileRef
+	f.ua = clientUA
+	return f.link, nil
+}
+
+type fakeCloudPlaybackProber struct {
+	probe   *ProbeResult
+	rawURL  string
+	headers map[string]string
+}
+
+func (f *fakeCloudPlaybackProber) ProbeHTTP(_ context.Context, rawURL string, headers map[string]string) (*ProbeResult, error) {
+	f.rawURL = rawURL
+	f.headers = headers
+	return f.probe, nil
 }

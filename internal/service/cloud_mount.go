@@ -1,10 +1,12 @@
 package service
 
 import (
+	"context"
 	"net/url"
 	"strings"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"github.com/ShukeBta/MediaStationGo/internal/repository"
 	"github.com/ShukeBta/MediaStationGo/internal/service/cloud"
 )
 
@@ -135,6 +137,364 @@ func FilterShadowedCloudLibraries(libs []model.Library) []model.Library {
 		}
 	}
 	return out
+}
+
+func FilterDisplayCloudLibraries(ctx context.Context, repo *repository.Container, libs []model.Library) []model.Library {
+	if len(libs) == 0 {
+		return libs
+	}
+	counts := cloudLibraryMediaCounts(ctx, repo, libs)
+	collapsed := make([]model.Library, 0, len(libs))
+	byKey := make(map[string]int, len(libs))
+	for _, lib := range libs {
+		key, ok := cloudLibraryDisplayKey(lib)
+		if !ok {
+			collapsed = append(collapsed, lib)
+			continue
+		}
+		if prevIndex, exists := byKey[key]; exists {
+			if betterDisplayCloudLibrary(lib, collapsed[prevIndex], counts) {
+				collapsed[prevIndex] = lib
+			}
+			continue
+		}
+		byKey[key] = len(collapsed)
+		collapsed = append(collapsed, lib)
+	}
+	collapsed = FilterShadowedCloudLibraries(collapsed)
+	return mergeDisplayCloudLibraries(collapsed)
+}
+
+func FilterScannableCloudLibraries(ctx context.Context, repo *repository.Container, libs []model.Library) []model.Library {
+	if len(libs) == 0 {
+		return libs
+	}
+	counts := cloudLibraryMediaCounts(ctx, repo, libs)
+	collapsed := make([]model.Library, 0, len(libs))
+	byKey := make(map[string]int, len(libs))
+	for _, lib := range libs {
+		key, ok := cloudLibraryDisplayKey(lib)
+		if !ok {
+			collapsed = append(collapsed, lib)
+			continue
+		}
+		if prevIndex, exists := byKey[key]; exists {
+			if betterDisplayCloudLibrary(lib, collapsed[prevIndex], counts) {
+				collapsed[prevIndex] = lib
+			}
+			continue
+		}
+		byKey[key] = len(collapsed)
+		collapsed = append(collapsed, lib)
+	}
+	return FilterShadowedCloudLibraries(collapsed)
+}
+
+func NormalizeCloudLibraryDisplayNames(libs []model.Library) []model.Library {
+	out := make([]model.Library, 0, len(libs))
+	for _, lib := range libs {
+		if displayName, ok := CloudLibraryDisplayName(lib); ok && displayName != "" {
+			lib.Name = displayName
+		}
+		out = append(out, lib)
+	}
+	return out
+}
+
+func cloudLibraryMediaCounts(ctx context.Context, repo *repository.Container, libs []model.Library) map[string]int64 {
+	counts := make(map[string]int64, len(libs))
+	if repo == nil || repo.DB == nil || len(libs) == 0 {
+		return counts
+	}
+	ids := make([]string, 0, len(libs))
+	for _, lib := range libs {
+		if _, ok := ParseCloudLibraryMount(lib.Path); ok {
+			ids = append(ids, lib.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return counts
+	}
+	var rows []struct {
+		LibraryID string
+		Count     int64
+	}
+	if err := repo.DB.WithContext(ctx).
+		Model(&model.Media{}).
+		Select("library_id, COUNT(*) AS count").
+		Where("library_id IN ? AND deleted_at IS NULL", ids).
+		Group("library_id").
+		Scan(&rows).Error; err != nil {
+		return counts
+	}
+	for _, row := range rows {
+		counts[row.LibraryID] = row.Count
+	}
+	return counts
+}
+
+func cloudLibraryDisplayKey(lib model.Library) (string, bool) {
+	info, ok := ParseCloudLibraryMount(lib.Path)
+	if !ok {
+		return "", false
+	}
+	dir := firstNonEmpty(info.DisplayDir, info.ScanDir)
+	return info.Provider + "\x00" + dir, true
+}
+
+func betterDisplayCloudLibrary(candidate, current model.Library, counts map[string]int64) bool {
+	candidateCount := counts[candidate.ID]
+	currentCount := counts[current.ID]
+	if (candidateCount > 0) != (currentCount > 0) {
+		return candidateCount > 0
+	}
+	if candidate.Enabled != current.Enabled {
+		return candidate.Enabled
+	}
+	candidateCanonical := cloudLibraryPathIsCanonical(candidate)
+	currentCanonical := cloudLibraryPathIsCanonical(current)
+	if candidateCanonical != currentCanonical {
+		return candidateCanonical
+	}
+	if !candidate.CreatedAt.Equal(current.CreatedAt) {
+		return candidate.CreatedAt.After(current.CreatedAt)
+	}
+	return candidate.ID > current.ID
+}
+
+func cloudLibraryPathIsCanonical(lib model.Library) bool {
+	info, ok := ParseCloudLibraryMount(lib.Path)
+	if !ok {
+		return false
+	}
+	return BuildCloudLibraryPath(info.Provider, info.ScanDir, info.DisplayDir) == strings.TrimSpace(lib.Path)
+}
+
+func mergeDisplayCloudLibraries(libs []model.Library) []model.Library {
+	if len(libs) == 0 {
+		return libs
+	}
+	localByKey := make(map[string]struct{}, len(libs))
+	for _, lib := range libs {
+		if _, ok := ParseCloudLibraryMount(lib.Path); ok || !lib.Enabled {
+			continue
+		}
+		if key, ok := CloudLibraryMergeKey(lib); ok {
+			localByKey[key] = struct{}{}
+		}
+	}
+	out := make([]model.Library, 0, len(libs))
+	for _, lib := range libs {
+		if displayName, ok := CloudLibraryDisplayName(lib); ok && displayName != "" {
+			lib.Name = displayName
+			if key, ok := CloudLibraryMergeKey(lib); ok {
+				if _, exists := localByKey[key]; exists {
+					continue
+				}
+			}
+		}
+		out = append(out, lib)
+	}
+	return out
+}
+
+func CloudLibraryDisplayName(lib model.Library) (string, bool) {
+	info, ok := ParseCloudLibraryMount(lib.Path)
+	if !ok {
+		return "", false
+	}
+	name := stripCloudProviderDisplayPrefix(strings.TrimSpace(lib.Name), info.Provider)
+	dir := firstNonEmpty(info.DisplayDir, info.ScanDir)
+	if name == "" || strings.EqualFold(name, CloudMountProviderLabel(info.Provider)) {
+		if base := cloudMountDirBase(dir); base != "" {
+			name = base
+		}
+	}
+	if name == "" {
+		name = CloudMountProviderLabel(info.Provider)
+	}
+	return name, true
+}
+
+func CloudLibraryMergeKey(lib model.Library) (string, bool) {
+	name := strings.TrimSpace(lib.Name)
+	if displayName, ok := CloudLibraryDisplayName(lib); ok {
+		name = displayName
+	}
+	name = normalizeLibraryMergeName(name)
+	if name == "" {
+		return "", false
+	}
+	return strings.ToLower(strings.TrimSpace(lib.Type)) + "\x00" + name, true
+}
+
+func MergedLibraryIDsForLibrary(ctx context.Context, repo *repository.Container, libraryID string) ([]string, error) {
+	libraryID = strings.TrimSpace(libraryID)
+	if libraryID == "" || repo == nil || repo.Library == nil {
+		return []string{libraryID}, nil
+	}
+	lib, err := repo.Library.FindByID(ctx, libraryID)
+	if err != nil {
+		return nil, err
+	}
+	if lib == nil {
+		return []string{libraryID}, nil
+	}
+	libs, err := repo.Library.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return MergedLibraryIDs(libs, *lib), nil
+}
+
+func MergedLibraryIDs(libs []model.Library, lib model.Library) []string {
+	ids := []string{}
+	seen := map[string]struct{}{}
+	add := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	add(lib.ID)
+	key, ok := CloudLibraryMergeKey(lib)
+	if !ok {
+		return ids
+	}
+	_, libIsCloud := ParseCloudLibraryMount(lib.Path)
+	for _, candidate := range libs {
+		if candidate.ID == lib.ID || !candidate.Enabled {
+			continue
+		}
+		candidateKey, ok := CloudLibraryMergeKey(candidate)
+		if !ok || candidateKey != key {
+			continue
+		}
+		_, candidateIsCloud := ParseCloudLibraryMount(candidate.Path)
+		if !libIsCloud && !candidateIsCloud {
+			continue
+		}
+		add(candidate.ID)
+	}
+	return ids
+}
+
+func ExpandMediaVisibilityForMergedCloudLibraries(ctx context.Context, repo *repository.Container, visibility MediaVisibility) MediaVisibility {
+	if repo == nil || repo.Library == nil {
+		return visibility
+	}
+	if len(visibility.AllowedLibraryIDs) > 0 {
+		visibility.AllowedLibraryIDs = expandMergedLibraryIDs(ctx, repo, visibility.AllowedLibraryIDs)
+	}
+	if len(visibility.HiddenLibraryIDs) > 0 {
+		visibility.HiddenLibraryIDs = expandMergedLibraryIDs(ctx, repo, visibility.HiddenLibraryIDs)
+	}
+	return visibility
+}
+
+func expandMergedLibraryIDs(ctx context.Context, repo *repository.Container, ids []string) []string {
+	if len(ids) == 0 {
+		return ids
+	}
+	libs, err := repo.Library.List(ctx)
+	if err != nil {
+		return ids
+	}
+	byID := make(map[string]model.Library, len(libs))
+	for _, lib := range libs {
+		byID[lib.ID] = lib
+	}
+	out := make([]string, 0, len(ids))
+	seen := map[string]struct{}{}
+	add := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	for _, id := range ids {
+		lib, ok := byID[id]
+		if !ok {
+			add(id)
+			continue
+		}
+		for _, mergedID := range MergedLibraryIDs(libs, lib) {
+			add(mergedID)
+		}
+	}
+	return out
+}
+
+func CloudMountProviderLabel(provider string) string {
+	switch strings.TrimSpace(provider) {
+	case cloud.TypeQuark:
+		return "夸克网盘"
+	case cloud.Type115:
+		return "115 网盘"
+	case cloud.TypeCloudDrive2:
+		return "CloudDrive2"
+	case cloud.TypeOpenList:
+		return "OpenList"
+	default:
+		if strings.TrimSpace(provider) == "" {
+			return "网盘"
+		}
+		return strings.TrimSpace(provider)
+	}
+}
+
+func stripCloudProviderDisplayPrefix(name, provider string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	for _, label := range []string{CloudMountProviderLabel(provider), strings.TrimSpace(provider)} {
+		label = strings.TrimSpace(label)
+		if label == "" || len(name) < len(label) || !strings.EqualFold(name[:len(label)], label) {
+			continue
+		}
+		rest := strings.TrimSpace(name[len(label):])
+		rest = strings.TrimLeft(rest, " \t\r\n·・-—–|｜:/\\")
+		if rest != "" {
+			return strings.TrimSpace(rest)
+		}
+		if strings.EqualFold(name, label) {
+			return ""
+		}
+	}
+	return name
+}
+
+func cloudMountDirBase(dir string) string {
+	dir = strings.Trim(strings.TrimSpace(strings.ReplaceAll(dir, "\\", "/")), "/")
+	if dir == "" {
+		return ""
+	}
+	parts := strings.Split(dir, "/")
+	for i := len(parts) - 1; i >= 0; i-- {
+		if part := strings.TrimSpace(parts[i]); part != "" {
+			return part
+		}
+	}
+	return ""
+}
+
+func normalizeLibraryMergeName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return ""
+	}
+	return strings.Join(strings.Fields(name), " ")
 }
 
 func ShadowedCloudLibraryIDSet(libs []model.Library) map[string]bool {

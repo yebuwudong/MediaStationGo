@@ -104,6 +104,30 @@ func embyPingHandler(_ *service.Container) gin.HandlerFunc {
 	}
 }
 
+func embyRootHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.JSON(http.StatusOK, embyPublicSystemInfoPayload(c, svc))
+	}
+}
+
+func embyPublicSystemInfoPayload(c *gin.Context, svc *service.Container) map[string]any {
+	if svc != nil && svc.Emby != nil {
+		return embyWithRequestAddress(c, svc.Emby.SystemInfoPublic())
+	}
+	return embyWithRequestAddress(c, map[string]any{
+		"Id":                     "mediastation-go-001",
+		"ServerId":               "mediastation-go-001",
+		"ServerName":             "MediaStationGo",
+		"Version":                "4.8.10.0",
+		"ServerVersion":          "4.8.10.0",
+		"ProductName":            "Emby Server",
+		"OperatingSystem":        "Windows",
+		"SupportsHttps":          false,
+		"SupportsAutoDiscovery":  true,
+		"StartupWizardCompleted": true,
+	})
+}
+
 // ─── Users / Auth ────────────────────────────────────────────────────────────
 
 type embyAuthByNameReq struct {
@@ -446,6 +470,7 @@ func embyVirtualFoldersHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		libs = service.FilterDisplayCloudLibraries(c.Request.Context(), svc.Repo, libs)
 		uid := embyUserID(c)
 		visibility := service.UserDefaultMediaVisibility(c.Request.Context(), svc.Repo, uid)
 		out := make([]gin.H, 0, len(libs))
@@ -986,6 +1011,40 @@ func embyServerConfigurationHandler(_ *service.Container) gin.HandlerFunc {
 	}
 }
 
+func embyPublicServerConfigurationHandler(_ *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"IsStartupWizardCompleted": true,
+			"EnableRemoteAccess":       true,
+			"EnableUPnP":               false,
+			"EnableHttps":              false,
+			"RequireHttps":             false,
+			"LocalNetworkSubnets":      []string{},
+			"LocalNetworkAddresses":    []string{},
+			"RemoteClientBitrateLimit": 0,
+		})
+	}
+}
+
+func embyStartupConfigurationHandler(_ *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"IsStartupWizardCompleted":  true,
+			"StartupWizardCompleted":    true,
+			"EnableRemoteAccess":        true,
+			"UICulture":                 "zh-CN",
+			"MetadataCountryCode":       "CN",
+			"PreferredMetadataLanguage": "zh-CN",
+		})
+	}
+}
+
+func embyQuickConnectEnabledHandler(_ *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.JSON(http.StatusOK, false)
+	}
+}
+
 func embyEmptyItemsHandler(_ *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"Items": []any{}, "TotalRecordCount": 0})
@@ -999,6 +1058,12 @@ func embyBrandingConfigHandler(_ *service.Container) gin.HandlerFunc {
 			"CustomCss":           "",
 			"SplashscreenEnabled": false,
 		})
+	}
+}
+
+func embyBrandingCSSHandler(_ *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Data(http.StatusOK, "text/css; charset=utf-8", []byte(""))
 	}
 }
 
@@ -1022,6 +1087,13 @@ func registerEmbyRoutes(r *gin.Engine, jwtSecret string, svc *service.Container)
 			c.Next()
 		})
 
+		if prefix == "/emby" {
+			grp.GET("", embyRootHandler(svc))
+			grp.HEAD("", embyRootHandler(svc))
+			grp.GET("/", embyRootHandler(svc))
+			grp.HEAD("/", embyRootHandler(svc))
+		}
+
 		// 公开端点
 		for _, path := range []string{"/System/Info/Public", "/system/info/public"} {
 			grp.GET(path, embySystemInfoPublicHandler(svc))
@@ -1034,10 +1106,28 @@ func registerEmbyRoutes(r *gin.Engine, jwtSecret string, svc *service.Container)
 		for _, path := range []string{"/System/Endpoint", "/system/endpoint"} {
 			grp.GET(path, embySystemEndpointHandler(svc))
 		}
+		for _, path := range []string{"/System/Configuration/Public", "/system/configuration/public"} {
+			grp.GET(path, embyPublicServerConfigurationHandler(svc))
+			grp.HEAD(path, embyPublicServerConfigurationHandler(svc))
+		}
+		for _, path := range []string{"/Startup/Configuration", "/startup/configuration"} {
+			grp.GET(path, embyStartupConfigurationHandler(svc))
+			grp.HEAD(path, embyStartupConfigurationHandler(svc))
+		}
+		for _, path := range []string{"/Startup/Complete", "/startup/complete"} {
+			grp.POST(path, embyNoContentHandler(svc))
+		}
+		for _, path := range []string{"/QuickConnect/Enabled", "/quickconnect/enabled"} {
+			grp.GET(path, embyQuickConnectEnabledHandler(svc))
+			grp.HEAD(path, embyQuickConnectEnabledHandler(svc))
+		}
 		for _, path := range []string{"/System/Ping", "/system/ping"} {
 			grp.GET(path, embyPingHandler(svc))
 			grp.HEAD(path, embyPingHandler(svc))
 			grp.POST(path, embyPingHandler(svc))
+		}
+		for _, path := range []string{"/Sessions/Capabilities", "/Sessions/Capabilities/Full", "/sessions/capabilities", "/sessions/capabilities/full"} {
+			grp.POST(path, embyNoContentHandler(svc))
 		}
 		// 30/min per IP: many Emby clients sit behind a single NAT/reverse-proxy
 		// IP, so a low limit would throttle legitimate logins into 429s.
@@ -1050,6 +1140,10 @@ func registerEmbyRoutes(r *gin.Engine, jwtSecret string, svc *service.Container)
 		}
 		for _, path := range []string{"/Branding/Configuration", "/branding/configuration"} {
 			grp.GET(path, embyBrandingConfigHandler(svc))
+		}
+		for _, path := range []string{"/Branding/Css", "/branding/css"} {
+			grp.GET(path, embyBrandingCSSHandler(svc))
+			grp.HEAD(path, embyBrandingCSSHandler(svc))
 		}
 		for _, path := range []string{"/Localization/Options", "/localization/options"} {
 			grp.GET(path, embyLocalizationOptionsHandler(svc))
@@ -1109,8 +1203,6 @@ func registerEmbyRoutes(r *gin.Engine, jwtSecret string, svc *service.Container)
 		auth.POST("/Sessions/Playing", embyPlayingProgressHandler(svc))
 		auth.POST("/Sessions/Playing/Progress", embyPlayingProgressHandler(svc))
 		auth.POST("/Sessions/Playing/Stopped", embyPlayingProgressHandler(svc))
-		auth.POST("/Sessions/Capabilities", embyNoContentHandler(svc))
-		auth.POST("/Sessions/Capabilities/Full", embyNoContentHandler(svc))
 
 		auth.POST("/Users/:userId/FavoriteItems/:itemId", embyFavoriteHandler(svc, true))
 		auth.DELETE("/Users/:userId/FavoriteItems/:itemId", embyFavoriteHandler(svc, false))
@@ -1175,8 +1267,6 @@ func registerLowercaseEmbyAuthRoutes(auth *gin.RouterGroup, svc *service.Contain
 	auth.POST("/sessions/playing", embyPlayingProgressHandler(svc))
 	auth.POST("/sessions/playing/progress", embyPlayingProgressHandler(svc))
 	auth.POST("/sessions/playing/stopped", embyPlayingProgressHandler(svc))
-	auth.POST("/sessions/capabilities", embyNoContentHandler(svc))
-	auth.POST("/sessions/capabilities/full", embyNoContentHandler(svc))
 
 	auth.POST("/users/:userId/favoriteitems/:itemId", embyFavoriteHandler(svc, true))
 	auth.DELETE("/users/:userId/favoriteitems/:itemId", embyFavoriteHandler(svc, false))

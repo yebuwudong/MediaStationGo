@@ -78,7 +78,6 @@ func main() {
 	if err := services.Auth.SeedAdmin(context.Background()); err != nil {
 		logger.Warn("seed admin failed", zap.Error(err))
 	}
-	services.Boot()
 
 	router := buildRouter(cfg, logger, services)
 
@@ -88,27 +87,29 @@ func main() {
 		ReadHeaderTimeout: 15 * time.Second,
 	}
 
+	ln, err := net.Listen("tcp", srv.Addr)
+	if err != nil {
+		logger.Fatal("listen failed", zap.String("addr", srv.Addr), zap.Error(err))
+	}
+	localIP := getLocalIP()
+	logger.Info("server is ready",
+		zap.String("local", fmt.Sprintf("http://%s:%d", localIP, cfg.App.Port)),
+		zap.String("listen", srv.Addr),
+	)
 	go func() {
-		localIP := getLocalIP()
-		publicIP := getPublicIP(3 * time.Second)
-		if publicIP != "" {
-			logger.Info("server is ready",
-				zap.String("local", fmt.Sprintf("http://%s:%d", localIP, cfg.App.Port)),
-				zap.String("public", fmt.Sprintf("http://%s:%d", publicIP, cfg.App.Port)),
-				zap.String("listen", srv.Addr),
-			)
-		} else {
-			logger.Info("server is ready",
-				zap.String("local", fmt.Sprintf("http://%s:%d", localIP, cfg.App.Port)),
-				zap.String("listen", srv.Addr),
-			)
-		}
-		// 自动启动 Telegram 长轮询（无需公网 Webhook）
-		services.TelegramBot.StartPolling(context.Background())
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Fatal("listen failed", zap.Error(err))
 		}
 	}()
+	go func() {
+		if publicIP := getPublicIP(3 * time.Second); publicIP != "" {
+			logger.Info("server public endpoint",
+				zap.String("public", fmt.Sprintf("http://%s:%d", publicIP, cfg.App.Port)),
+			)
+		}
+	}()
+	go services.Boot()
+	go services.TelegramBot.StartPolling(context.Background())
 
 	// Graceful shutdown.
 	stop := make(chan os.Signal, 1)
@@ -200,6 +201,13 @@ func setNoCacheHeaders(c *gin.Context) {
 
 func shouldBypassSPAFallback(path string) bool {
 	lower := strings.ToLower(path)
+	for _, exact := range []string{
+		"/emby",
+	} {
+		if lower == exact {
+			return true
+		}
+	}
 	for _, prefix := range []string{
 		"/api/",
 		"/emby/",
@@ -213,6 +221,10 @@ func shouldBypassSPAFallback(path string) bool {
 		"/displaypreferences/",
 		"/branding/",
 		"/localization/",
+		"/startup/",
+		"/quickconnect/",
+		"/socket",
+		"/embywebsocket",
 	} {
 		if strings.HasPrefix(lower, prefix) {
 			return true

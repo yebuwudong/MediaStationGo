@@ -17,6 +17,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -31,6 +32,7 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
+	"github.com/ShukeBta/MediaStationGo/internal/service/cloud"
 )
 
 // 用一个固定的 ServerId 字符串。Emby 客户端会缓存这个 id，第一次见到
@@ -54,9 +56,11 @@ const PlaybackDirectOnlySettingKey = "playback.direct_only"
 
 // EmbyService produces Emby-shaped JSON.
 type EmbyService struct {
-	cfg  *config.Config
-	log  *zap.Logger
-	repo *repository.Container
+	cfg     *config.Config
+	log     *zap.Logger
+	repo    *repository.Container
+	storage cloudPlaybackResolver
+	probe   cloudPlaybackProber
 
 	virtualMu      sync.RWMutex
 	virtualSeries  map[string]embySeriesCacheEntry
@@ -67,9 +71,25 @@ type EmbyService struct {
 	visibilityCache map[string]embyVisibilityCacheEntry
 }
 
+type cloudPlaybackResolver interface {
+	CloudResolve(ctx context.Context, typ, fileRef, clientUA string) (*cloud.DirectLink, error)
+}
+
+type cloudPlaybackProber interface {
+	ProbeHTTP(ctx context.Context, rawURL string, headers map[string]string) (*ProbeResult, error)
+}
+
 // NewEmbyService is the constructor.
 func NewEmbyService(cfg *config.Config, log *zap.Logger, repo *repository.Container) *EmbyService {
 	return &EmbyService{cfg: cfg, log: log, repo: repo}
+}
+
+func (e *EmbyService) SetCloudProbe(storage cloudPlaybackResolver, probe cloudPlaybackProber) {
+	if e == nil {
+		return
+	}
+	e.storage = storage
+	e.probe = probe
 }
 
 // ─── System ──────────────────────────────────────────────────────────────────
@@ -200,7 +220,7 @@ func (e *EmbyService) Views(ctx context.Context, userID string) (map[string]any,
 	if err != nil {
 		return nil, err
 	}
-	libs = FilterShadowedCloudLibraries(libs)
+	libs = FilterDisplayCloudLibraries(ctx, e.repo, libs)
 	visibility := e.mediaVisibility(ctx, userID)
 	items := make([]map[string]any, 0, len(libs))
 	for _, l := range libs {
@@ -386,7 +406,7 @@ func (e *EmbyService) mediaItems(ctx context.Context, p ItemsParams) (map[string
 	q := e.repo.DB.WithContext(ctx).Model(&model.Media{})
 	q = e.applyUserMediaVisibility(ctx, q, p.UserID)
 	if p.ParentID != "" {
-		q = q.Where("library_id = ? OR series_id = ?", p.ParentID, p.ParentID)
+		q = q.Where("library_id IN ? OR series_id = ?", e.mergedLibraryIDs(ctx, p.ParentID), p.ParentID)
 	}
 	if p.SearchTerm != "" {
 		q = q.Where("title LIKE ? OR original_name LIKE ?", "%"+p.SearchTerm+"%", "%"+p.SearchTerm+"%")
@@ -595,7 +615,7 @@ func (e *EmbyService) latestSeriesItemsForLibrary(ctx context.Context, userID, l
 		rowLimit = embySeriesGroupingLimit
 	}
 	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
-		Where("library_id = ? AND (season_num > 0 OR episode_num > 0)", libraryID)
+		Where("library_id IN ? AND (season_num > 0 OR episode_num > 0)", e.mergedLibraryIDs(ctx, libraryID))
 	q = e.applyUserMediaVisibility(ctx, q, userID)
 	var rows []model.Media
 	if err := q.Order("created_at desc").Limit(rowLimit).Find(&rows).Error; err != nil {
@@ -741,7 +761,7 @@ func (e *EmbyService) seriesItemsForLibrary(ctx context.Context, libraryID strin
 	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).Where("season_num > 0 OR episode_num > 0")
 	q = e.applyUserMediaVisibility(ctx, q, p.UserID)
 	if libraryID != "" {
-		q = q.Where("library_id = ?", libraryID)
+		q = q.Where("library_id IN ?", e.mergedLibraryIDs(ctx, libraryID))
 	}
 	if p.SearchTerm != "" {
 		q = q.Where("title LIKE ? OR original_name LIKE ?", "%"+p.SearchTerm+"%", "%"+p.SearchTerm+"%")
@@ -781,7 +801,7 @@ func (e *EmbyService) libraryIsEpisodic(ctx context.Context, libraryID string) (
 	}
 	var count int64
 	err := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
-		Where("library_id = ? AND (season_num > 0 OR episode_num > 0)", libraryID).
+		Where("library_id IN ? AND (season_num > 0 OR episode_num > 0)", e.mergedLibraryIDs(ctx, libraryID)).
 		Count(&count).Error
 	return count > 0, err
 }
@@ -1348,6 +1368,7 @@ func (e *EmbyService) mediaVisibility(ctx context.Context, userID string) MediaV
 	if !visibility.IncludeNSFW {
 		visibility.HiddenLibraryIDs = e.hiddenLibraryIDs(ctx, visibility)
 	}
+	visibility = ExpandMediaVisibilityForMergedCloudLibraries(ctx, e.repo, visibility)
 	visibility = cloneMediaVisibility(visibility)
 
 	e.visibilityMu.Lock()
@@ -1364,6 +1385,14 @@ func (e *EmbyService) mediaVisibility(ctx context.Context, userID string) MediaV
 	e.visibilityMu.Unlock()
 
 	return visibility
+}
+
+func (e *EmbyService) mergedLibraryIDs(ctx context.Context, libraryID string) []string {
+	ids, err := MergedLibraryIDsForLibrary(ctx, e.repo, libraryID)
+	if err != nil || len(ids) == 0 {
+		return []string{libraryID}
+	}
+	return ids
 }
 
 func cloneMediaVisibility(visibility MediaVisibility) MediaVisibility {
@@ -1440,10 +1469,97 @@ func (e *EmbyService) PlaybackInfo(ctx context.Context, mediaID, userID string) 
 	if err != nil || m == nil {
 		return nil, err
 	}
+	e.ensureCloudTrackMetadata(ctx, m)
 	return map[string]any{
 		"MediaSources":  []map[string]any{e.mediaSource(m, false, e.directPlayOnly(ctx))},
 		"PlaySessionId": fmt.Sprintf("%s-%d", m.ID, time.Now().Unix()),
 	}, nil
+}
+
+func (e *EmbyService) ensureCloudTrackMetadata(ctx context.Context, m *model.Media) {
+	if e == nil || m == nil || e.storage == nil || e.probe == nil || !mediaTrackMetadataMissing(m) {
+		return
+	}
+	typ, ref, ok := parseCloudMediaPlaybackURL(m.STRMURL)
+	if !ok {
+		return
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	link, err := e.storage.CloudResolve(probeCtx, typ, ref, "")
+	if err != nil {
+		if e.log != nil {
+			e.log.Debug("resolve cloud media for playback probe failed", zap.String("media_id", m.ID), zap.Error(err))
+		}
+		return
+	}
+	probe, err := e.probe.ProbeHTTP(probeCtx, link.URL, link.Headers)
+	if err != nil {
+		if e.log != nil {
+			e.log.Debug("playback cloud ffprobe failed", zap.String("media_id", m.ID), zap.Error(err))
+		}
+		return
+	}
+	updates := probeResultUpdates(probe)
+	if len(updates) == 0 {
+		return
+	}
+	if err := e.repo.DB.WithContext(ctx).Model(&model.Media{}).Where("id = ?", m.ID).Updates(updates).Error; err != nil && e.log != nil {
+		e.log.Debug("persist playback cloud probe failed", zap.String("media_id", m.ID), zap.Error(err))
+	}
+	applyProbeResultToMediaValue(m, probe)
+}
+
+func mediaTrackMetadataMissing(m *model.Media) bool {
+	return m.DurationSec <= 0 ||
+		m.Width <= 0 ||
+		m.Height <= 0 ||
+		strings.TrimSpace(m.VideoCodec) == "" ||
+		strings.TrimSpace(m.AudioCodec) == ""
+}
+
+func parseCloudMediaPlaybackURL(raw string) (string, string, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", "", false
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", "", false
+	}
+	path := strings.Trim(u.Path, "/")
+	const prefix = "api/cloud/play/"
+	idx := strings.Index(strings.ToLower(path), prefix)
+	if idx < 0 {
+		return "", "", false
+	}
+	typ := strings.TrimSpace(path[idx+len(prefix):])
+	ref := strings.TrimSpace(u.Query().Get("ref"))
+	return typ, ref, typ != "" && ref != ""
+}
+
+func applyProbeResultToMediaValue(m *model.Media, probe *ProbeResult) {
+	if m == nil || probe == nil {
+		return
+	}
+	if probe.DurationSec > 0 {
+		m.DurationSec = probe.DurationSec
+	}
+	if probe.Width > 0 {
+		m.Width = probe.Width
+	}
+	if probe.Height > 0 {
+		m.Height = probe.Height
+	}
+	if strings.TrimSpace(probe.VideoCodec) != "" {
+		m.VideoCodec = probe.VideoCodec
+	}
+	if strings.TrimSpace(probe.AudioCodec) != "" {
+		m.AudioCodec = probe.AudioCodec
+	}
+	if strings.TrimSpace(probe.Container) != "" {
+		m.Container = probe.Container
+	}
 }
 
 // directPlayOnly reports whether the admin enabled「客户端直连解码」mode.
@@ -1494,6 +1610,13 @@ func (e *EmbyService) mediaSource(m *model.Media, asEmbedded, directOnly bool) m
 		container = "strm"
 	}
 	isCloud := strings.TrimSpace(m.STRMURL) != ""
+	if isCloud {
+		// Cloud/WebDAV media is already a direct/proxy stream. Advertising HLS
+		// transcoding makes some Emby clients pick /master.m3u8, forcing this
+		// lightweight server to pull remote bytes through ffmpeg and often
+		// surfacing as "network/playback failed". Keep cloud media direct-only.
+		directOnly = true
+	}
 	src := map[string]any{
 		"Id":                    m.ID,
 		"Name":                  m.Title,
@@ -1671,5 +1794,3 @@ func intToStr(v int) string {
 	}
 	return strconv.Itoa(v)
 }
-
-

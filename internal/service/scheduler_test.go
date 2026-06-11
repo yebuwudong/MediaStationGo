@@ -144,7 +144,11 @@ func TestSchedulerCloudSyncImportsMountedCloudLibrary(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	lib := model.Library{Name: "夸克网盘", Path: "cloud://quark/0", Type: "movie", Enabled: true}
+	local := model.Library{Name: "电影", Path: "/media/电影", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &local); err != nil {
+		t.Fatal(err)
+	}
+	lib := model.Library{Name: "夸克网盘 · 电影", Path: "cloud://quark/0", Type: "movie", Enabled: true}
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
 		t.Fatal(err)
 	}
@@ -154,6 +158,7 @@ func TestSchedulerCloudSyncImportsMountedCloudLibrary(t *testing.T) {
 	scanner := NewScannerService(&config.Config{}, log, repos, NewHub(log), nil, nil)
 	scanner.SetStorageConfig(storage)
 	scheduler := NewSchedulerService(log, repos, scanner, nil, nil, storage, NewHub(log), "")
+	scheduler.now = func() time.Time { return fixedNightlySyncTime() }
 
 	if err := scheduler.jobSyncCloudLibraries(t.Context()); err != nil {
 		t.Fatalf("cloud sync: %v", err)
@@ -164,6 +169,134 @@ func TestSchedulerCloudSyncImportsMountedCloudLibrary(t *testing.T) {
 	}
 	if media.STRMURL != "/api/cloud/play/quark?ref=f1" {
 		t.Fatalf("strm url = %q", media.STRMURL)
+	}
+}
+
+func TestSchedulerCloudSyncRunsOnlyOnceInsideNightlyWindow(t *testing.T) {
+	var requests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.URL.Path != "/file/sort" || r.URL.Query().Get("pdir_fid") != "0" {
+			t.Fatalf("unexpected cloud list request %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`{"status":200,"code":0,"data":{"list":[
+			{"fid":"f1","file_name":"Nightly.Cloud.Movie.2026.mkv","dir":false,"size":1024}
+		]}}`))
+	}))
+	defer upstream.Close()
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	log := zap.NewNop()
+	storage := NewStorageConfigService(log, repos, NewCryptoService("", log))
+	if _, err := storage.Save(t.Context(), StorageInput{
+		Type: "quark",
+		Config: map[string]any{
+			"cookie": "kps=test",
+			"base":   upstream.URL,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lib := model.Library{Name: "夸克网盘", Path: "cloud://quark/0", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Setting.Set(t.Context(), cloudAutoSyncEnabledKey, "true"); err != nil {
+		t.Fatal(err)
+	}
+	scanner := NewScannerService(&config.Config{}, log, repos, NewHub(log), nil, nil)
+	scanner.SetStorageConfig(storage)
+	scheduler := NewSchedulerService(log, repos, scanner, nil, nil, storage, NewHub(log), "")
+
+	scheduler.now = func() time.Time {
+		return time.Date(2026, 6, 11, 18, 30, 0, 0, time.Local)
+	}
+	if err := scheduler.jobSyncCloudLibraries(t.Context()); err != nil {
+		t.Fatalf("cloud sync outside window: %v", err)
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("outside nightly window made %d requests, want 0", got)
+	}
+
+	scheduler.now = func() time.Time { return fixedNightlySyncTime() }
+	if err := scheduler.jobSyncCloudLibraries(t.Context()); err != nil {
+		t.Fatalf("cloud sync inside window: %v", err)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("inside nightly window requests = %d, want 1", got)
+	}
+	if got := countMedia(t, repos); got != 1 {
+		t.Fatalf("media count = %d, want 1", got)
+	}
+
+	scheduler.now = func() time.Time {
+		return time.Date(2026, 6, 11, 20, 15, 0, 0, time.Local)
+	}
+	if err := scheduler.jobSyncCloudLibraries(t.Context()); err != nil {
+		t.Fatalf("second cloud sync same day: %v", err)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("same-day auto sync should not rerun, requests = %d", got)
+	}
+}
+
+func TestSchedulerRunNowCloudSyncBypassesNightlyWindow(t *testing.T) {
+	var requests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte(`{"status":200,"code":0,"data":{"list":[
+			{"fid":"f1","file_name":"Manual.Cloud.Movie.2026.mkv","dir":false,"size":1024}
+		]}}`))
+	}))
+	defer upstream.Close()
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	log := zap.NewNop()
+	storage := NewStorageConfigService(log, repos, NewCryptoService("", log))
+	if _, err := storage.Save(t.Context(), StorageInput{
+		Type: "quark",
+		Config: map[string]any{
+			"cookie": "kps=test",
+			"base":   upstream.URL,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lib := model.Library{Name: "夸克网盘", Path: "cloud://quark/0", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	scanner := NewScannerService(&config.Config{}, log, repos, NewHub(log), nil, nil)
+	scanner.SetStorageConfig(storage)
+	scheduler := NewSchedulerService(log, repos, scanner, nil, nil, storage, NewHub(log), "")
+	scheduler.now = func() time.Time {
+		return time.Date(2026, 6, 11, 10, 0, 0, 0, time.Local)
+	}
+	scheduler.jobs = []*scheduledJob{{
+		name:     "cloud_sync",
+		interval: time.Minute,
+		run:      scheduler.jobSyncCloudLibraries,
+	}}
+
+	if err := scheduler.RunNow(t.Context(), "cloud_sync"); err != nil {
+		t.Fatalf("manual cloud sync: %v", err)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("manual cloud sync requests = %d, want 1", got)
 	}
 }
 
@@ -213,6 +346,10 @@ func TestSchedulerCloudSyncDisabledByDefault(t *testing.T) {
 	if got := countMedia(t, repos); got != 0 {
 		t.Fatalf("media count = %d, want 0 while cloud sync disabled by default", got)
 	}
+}
+
+func fixedNightlySyncTime() time.Time {
+	return time.Date(2026, 6, 11, 19, 30, 0, 0, time.Local)
 }
 
 func TestSchedulerLoopWaitsIntervalAfterSlowRun(t *testing.T) {

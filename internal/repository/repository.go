@@ -10,7 +10,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strings"
+	"sync"
 	"time"
+	"unicode"
 
 	"gorm.io/gorm"
 
@@ -257,7 +260,12 @@ func (r *LibraryRepository) Delete(ctx context.Context, id string) error {
 // ─── Media ───────────────────────────────────────────────────────────────────
 
 // MediaRepository persists model.Media records.
-type MediaRepository struct{ db *gorm.DB }
+type MediaRepository struct {
+	db *gorm.DB
+
+	searchIndexOnce      sync.Once
+	searchIndexAvailable bool
+}
 
 // MediaQueryFilter is applied to user-facing media queries so NSFW items and
 // profile-restricted libraries are filtered in SQL instead of only in React.
@@ -300,6 +308,7 @@ func (r *MediaRepository) Upsert(ctx context.Context, m *model.Media) error {
 			m.ScrapeStatus = "pending"
 		}
 		if createErr := r.db.WithContext(ctx).Create(m).Error; createErr == nil {
+			_ = r.refreshSearchIndex(ctx, m.ID)
 			return nil
 		} else if retryErr := r.db.WithContext(ctx).Unscoped().Where("path = ?", m.Path).First(&existing).Error; retryErr != nil {
 			return createErr
@@ -397,6 +406,7 @@ func (r *MediaRepository) Upsert(ctx context.Context, m *model.Media) error {
 		Where("id = ?", existing.ID).Updates(updates).Error; err != nil {
 		return err
 	}
+	_ = r.refreshSearchIndex(ctx, existing.ID)
 	// 回写 ID / 不可变字段，让 caller 拿到完整的现有行。
 	*m = existing
 	return nil
@@ -421,9 +431,21 @@ func (r *MediaRepository) ListByLibrary(ctx context.Context, libraryID string, o
 }
 
 func (r *MediaRepository) ListByLibraryFiltered(ctx context.Context, libraryID string, offset, limit int, filter MediaQueryFilter) ([]model.Media, int64, error) {
+	return r.ListByLibrariesFiltered(ctx, []string{libraryID}, offset, limit, filter)
+}
+
+func (r *MediaRepository) ListByLibrariesFiltered(ctx context.Context, libraryIDs []string, offset, limit int, filter MediaQueryFilter) ([]model.Media, int64, error) {
 	var items []model.Media
 	var total int64
-	q := r.db.WithContext(ctx).Model(&model.Media{}).Where("library_id = ?", libraryID)
+	if len(libraryIDs) == 0 {
+		return items, 0, nil
+	}
+	q := r.db.WithContext(ctx).Model(&model.Media{})
+	if len(libraryIDs) == 1 {
+		q = q.Where("library_id = ?", libraryIDs[0])
+	} else {
+		q = q.Where("library_id IN ?", libraryIDs)
+	}
 	q = applyMediaQueryFilter(q, filter)
 	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -439,25 +461,195 @@ func (r *MediaRepository) Search(ctx context.Context, query string, limit int) (
 }
 
 func (r *MediaRepository) SearchFiltered(ctx context.Context, query string, limit int, filter MediaQueryFilter) ([]model.Media, error) {
+	query = strings.TrimSpace(query)
+	if limit <= 0 {
+		limit = 50
+	}
+	if query != "" {
+		if items, ok := r.searchFilteredFTS(ctx, query, limit, filter); ok {
+			if len(items) > 0 {
+				return items, nil
+			}
+		}
+	}
+	return r.searchFilteredLIKE(ctx, query, limit, filter)
+}
+
+func (r *MediaRepository) searchFilteredFTS(ctx context.Context, query string, limit int, filter MediaQueryFilter) ([]model.Media, bool) {
+	if !r.searchIndexEnabled(ctx) {
+		return nil, false
+	}
+	ftsQuery := mediaFTSQuery(query)
+	if ftsQuery == "" {
+		return nil, false
+	}
+	var items []model.Media
+	q := r.db.WithContext(ctx).
+		Table("media").
+		Select("media.*").
+		Joins("JOIN media_search_fts ON media_search_fts.media_id = media.id").
+		Where("media.deleted_at IS NULL").
+		Where("media_search_fts MATCH ?", ftsQuery)
+	q = applyQualifiedMediaQueryFilter(q, filter)
+	err := q.Order("bm25(media_search_fts), media.created_at DESC").Limit(limit).Find(&items).Error
+	if err != nil {
+		return nil, false
+	}
+	return items, true
+}
+
+func (r *MediaRepository) searchFilteredLIKE(ctx context.Context, query string, limit int, filter MediaQueryFilter) ([]model.Media, error) {
 	var items []model.Media
 	q := r.db.WithContext(ctx).Model(&model.Media{}).Limit(limit)
 	q = applyMediaQueryFilter(q, filter)
-	if query != "" {
-		like := "%" + query + "%"
-		q = q.Where("title LIKE ? OR original_name LIKE ?", like, like)
+	terms := mediaSearchTerms(query)
+	for _, term := range terms {
+		like := "%" + escapeLike(term) + "%"
+		q = q.Where(
+			"(title LIKE ? ESCAPE '\\' OR original_name LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\' OR genres LIKE ? ESCAPE '\\')",
+			like, like, like, like,
+		)
 	}
-	err := q.Order("created_at desc").Find(&items).Error
+	if query != "" {
+		prefix := escapeLike(query) + "%"
+		exact := query
+		q = q.Order(gorm.Expr(
+			"CASE WHEN title = ? THEN 0 WHEN original_name = ? THEN 1 WHEN title LIKE ? ESCAPE '\\' THEN 2 WHEN original_name LIKE ? ESCAPE '\\' THEN 3 ELSE 4 END, created_at desc",
+			exact, exact, prefix, prefix,
+		))
+	} else {
+		q = q.Order("created_at desc")
+	}
+	err := q.Find(&items).Error
 	return items, err
+}
+
+func applyQualifiedMediaQueryFilter(q *gorm.DB, filter MediaQueryFilter) *gorm.DB {
+	if !filter.IncludeNSFW {
+		q = q.Where("media.nsfw = ?", false)
+	}
+	if len(filter.HiddenLibraryIDs) > 0 {
+		q = q.Where("media.library_id NOT IN ?", filter.HiddenLibraryIDs)
+	}
+	if len(filter.AllowedLibraryIDs) > 0 {
+		q = q.Where("media.library_id IN ?", filter.AllowedLibraryIDs)
+	}
+	return q
+}
+
+func mediaFTSQuery(query string) string {
+	terms := mediaSearchTerms(query)
+	if len(terms) == 0 {
+		return ""
+	}
+	quoted := make([]string, 0, len(terms))
+	for _, term := range terms {
+		term = strings.ReplaceAll(term, `"`, `""`)
+		if term != "" {
+			quoted = append(quoted, `"`+term+`"`)
+		}
+	}
+	return strings.Join(quoted, " AND ")
+}
+
+func mediaSearchTerms(query string) []string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil
+	}
+	fields := strings.FieldsFunc(query, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r)
+	})
+	out := make([]string, 0, len(fields))
+	seen := map[string]struct{}{}
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		lower := strings.ToLower(field)
+		if _, ok := seen[lower]; ok {
+			continue
+		}
+		seen[lower] = struct{}{}
+		out = append(out, field)
+	}
+	return out
+}
+
+func escapeLike(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `%`, `\%`)
+	value = strings.ReplaceAll(value, `_`, `\_`)
+	return value
+}
+
+func (r *MediaRepository) refreshSearchIndex(ctx context.Context, mediaID string) error {
+	if strings.TrimSpace(mediaID) == "" {
+		return nil
+	}
+	if !r.searchIndexEnabled(ctx) {
+		return nil
+	}
+	tx := r.db.WithContext(ctx)
+	_ = tx.Exec(`DELETE FROM media_search_fts WHERE media_id = ?`, mediaID).Error
+	return tx.Exec(`
+INSERT INTO media_search_fts(media_id, title, original_name, path, genres)
+SELECT id, COALESCE(title, ''), COALESCE(original_name, ''), COALESCE(path, ''), COALESCE(genres, '')
+FROM media
+WHERE id = ? AND deleted_at IS NULL
+`, mediaID).Error
+}
+
+func (r *MediaRepository) BackfillSearchIndex(ctx context.Context, batchLimit int) (int64, error) {
+	if batchLimit <= 0 {
+		batchLimit = 1000
+	}
+	if !r.searchIndexEnabled(ctx) {
+		return 0, nil
+	}
+	res := r.db.WithContext(ctx).Exec(`
+INSERT INTO media_search_fts(media_id, title, original_name, path, genres)
+SELECT m.id, COALESCE(m.title, ''), COALESCE(m.original_name, ''), COALESCE(m.path, ''), COALESCE(m.genres, '')
+FROM media AS m
+WHERE m.deleted_at IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM media_search_fts AS f WHERE f.media_id = m.id
+  )
+ORDER BY m.created_at DESC
+LIMIT ?
+`, batchLimit)
+	return res.RowsAffected, res.Error
+}
+
+func (r *MediaRepository) searchIndexEnabled(ctx context.Context) bool {
+	if r == nil || r.db == nil {
+		return false
+	}
+	r.searchIndexOnce.Do(func() {
+		var count int64
+		err := r.db.WithContext(ctx).
+			Raw(`SELECT COUNT(*) FROM sqlite_master WHERE name = 'media_search_fts'`).
+			Scan(&count).Error
+		r.searchIndexAvailable = err == nil && count > 0
+	})
+	return r.searchIndexAvailable
 }
 
 // DeleteByLibrary purges all media tied to a library.
 func (r *MediaRepository) DeleteByLibrary(ctx context.Context, libraryID string) error {
+	if r.searchIndexEnabled(ctx) {
+		_ = r.db.WithContext(ctx).Exec(`DELETE FROM media_search_fts WHERE media_id IN (SELECT id FROM media WHERE library_id = ?)`, libraryID).Error
+	}
 	return r.db.WithContext(ctx).Where("library_id = ?", libraryID).Delete(&model.Media{}).Error
 }
 
 // PurgeByLibrary permanently removes media tied to a library. Used for virtual
 // cloud mounts where "remove mount" must not populate the recycle bin.
 func (r *MediaRepository) PurgeByLibrary(ctx context.Context, libraryID string) error {
+	if r.searchIndexEnabled(ctx) {
+		_ = r.db.WithContext(ctx).Exec(`DELETE FROM media_search_fts WHERE media_id IN (SELECT id FROM media WHERE library_id = ?)`, libraryID).Error
+	}
 	return r.db.WithContext(ctx).Unscoped().Where("library_id = ?", libraryID).Delete(&model.Media{}).Error
 }
 

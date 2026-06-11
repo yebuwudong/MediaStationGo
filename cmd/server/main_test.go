@@ -72,14 +72,23 @@ func TestServeSPAServesAssetsImmutableAndBypassesAPIRoutes(t *testing.T) {
 		t.Fatalf("asset Cache-Control = %q, want immutable", got)
 	}
 
-	apiReq := httptest.NewRequest(http.MethodGet, "/api/missing", nil)
-	apiResp := httptest.NewRecorder()
-	router.ServeHTTP(apiResp, apiReq)
-	if apiResp.Code != http.StatusNotFound {
-		t.Fatalf("api fallback status = %d, want 404", apiResp.Code)
-	}
-	if strings.Contains(apiResp.Body.String(), "index") {
-		t.Fatalf("api route should not serve SPA index: %q", apiResp.Body.String())
+	for _, path := range []string{
+		"/api/missing",
+		"/emby",
+		"/emby/missing",
+		"/Startup/Configuration",
+		"/QuickConnect/Enabled",
+		"/embywebsocket",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		if resp.Code != http.StatusNotFound {
+			t.Fatalf("%s fallback status = %d, want 404", path, resp.Code)
+		}
+		if strings.Contains(resp.Body.String(), "index") {
+			t.Fatalf("%s should not serve SPA index: %q", path, resp.Body.String())
+		}
 	}
 }
 

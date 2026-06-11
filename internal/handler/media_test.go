@@ -62,6 +62,34 @@ func TestListLibrariesHidesAdultDirectoriesUnlessAdminRequestsAll(t *testing.T) 
 	}
 }
 
+func TestListLibrariesIncludeHiddenNormalizesCloudDisplayNames(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Library{}, &model.Media{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	cloud := model.Library{Name: "OpenList · 国产剧", Path: service.BuildCloudLibraryPath("openlist", "/国产剧", "/国产剧"), Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &cloud); err != nil {
+		t.Fatal(err)
+	}
+	svc := &service.Container{
+		Repo:  repos,
+		Media: service.NewMediaService(&config.Config{}, zap.NewNop(), repos),
+	}
+
+	all := requestLibraries(t, svc, "admin", "admin", "/api/libraries?include_hidden=1")
+	if len(all) != 1 {
+		t.Fatalf("include_hidden list = %#v, want one library", all)
+	}
+	if all[0].Name != "国产剧" {
+		t.Fatalf("cloud display name = %q, want stripped directory name", all[0].Name)
+	}
+}
+
 func requestLibraries(t *testing.T, svc *service.Container, userID, role, path string) []model.Library {
 	t.Helper()
 	w := httptest.NewRecorder()

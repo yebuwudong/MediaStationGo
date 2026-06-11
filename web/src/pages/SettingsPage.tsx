@@ -302,17 +302,24 @@ const GROUPS: SettingGroup[] = [
     items: [
       {
         key: 'cloud.auto_sync_enabled',
-        label: '自动同步网盘媒体库',
+        label: '夜间自动同步网盘媒体库',
         type: 'toggle',
-        hint: '默认关闭，避免 NAS 反复递归读取大型网盘目录。需要定时刷新时再开启；手动扫描仍可在外部存储页面执行。',
+        hint: '默认关闭。开启后仅在每天 19:00-21:00 自动补齐缺失媒体并扫描新增；手动扫描仍可随时执行。',
         defaultValue: 'false',
       },
       {
         key: 'cloud.sync_interval_seconds',
-        label: '网盘媒体库同步间隔秒数',
+        label: '夜间窗口检查间隔秒数',
         type: 'number',
-        hint: '最小 300 秒，建议 1800 秒或更高；手动可在任务调度中运行 cloud_sync。',
+        hint: '最小 300 秒，建议 1800 秒；同一天成功同步后不会重复全量扫，避免大型网盘反复递归。',
         defaultValue: '1800',
+      },
+      {
+        key: 'cloud.boot_scan_enabled',
+        label: '启动后立即扫描网盘',
+        type: 'toggle',
+        hint: '默认关闭。仅排障或小型网盘建议开启；大型库请使用手动扫描或夜间自动同步。',
+        defaultValue: 'false',
       },
       {
         key: 'cloud.upload_auto_enabled',

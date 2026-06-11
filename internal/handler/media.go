@@ -29,7 +29,7 @@ func listLibrariesHandler(svc *service.Container) gin.HandlerFunc {
 		role, _ := c.Get(middleware.CtxUserRole)
 		includeHidden := role == "admin" && (c.Query("include_hidden") == "1" || c.Query("all") == "1")
 		if !includeHidden {
-			libs = service.FilterShadowedCloudLibraries(libs)
+			libs = service.FilterDisplayCloudLibraries(c.Request.Context(), svc.Repo, libs)
 			visibility := mediaVisibilityForRequest(c, svc)
 			filtered := libs[:0]
 			for _, lib := range libs {
@@ -38,6 +38,8 @@ func listLibrariesHandler(svc *service.Container) gin.HandlerFunc {
 				}
 			}
 			libs = filtered
+		} else {
+			libs = service.NormalizeCloudLibraryDisplayNames(libs)
 		}
 		c.JSON(http.StatusOK, libs)
 	}

@@ -73,7 +73,8 @@ type Container struct {
 	Device          *DeviceService
 
 	stopCtx    context.Context
-	stopCancel context.CancelFunc}
+	stopCancel context.CancelFunc
+}
 
 // New 构建服务容器。
 func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Container {
@@ -116,6 +117,7 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 	storageCfg := NewStorageConfigService(log, repos, crypto)
 	strmSvc := NewSTRMService(log, repos, cfg)
 	scanner.SetStorageConfig(storageCfg)
+	emby.SetCloudProbe(storageCfg, probe)
 	downloadClients := NewDownloadClientService(log, repos)
 	assistant := NewAssistantService(log, repos, ai)
 	douban := NewDoubanProvider(cfg, log)
@@ -239,6 +241,7 @@ func (c *Container) Boot() {
 	if err := c.NormalizeCloudLibraryTypes(c.stopCtx); err != nil {
 		c.Log.Warn("normalize cloud library types failed", zap.Error(err))
 	}
+	go c.warmMediaSearchIndex(c.stopCtx)
 
 	// 加载所有已配置的下载客户端
 	if err := c.DownloadMgr.LoadAll(c.stopCtx); err != nil {
@@ -258,6 +261,39 @@ func (c *Container) Boot() {
 	// 每天触发一次评估；规则里的窗口可随机，不固定。
 	if c.Device != nil {
 		go c.runInactivitySweeper(c.stopCtx)
+	}
+}
+
+func (c *Container) warmMediaSearchIndex(ctx context.Context) {
+	if c == nil || c.Repo == nil || c.Repo.Media == nil {
+		return
+	}
+	const batchSize = 1000
+	const pause = 100 * time.Millisecond
+	total := int64(0)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		n, err := c.Repo.Media.BackfillSearchIndex(ctx, batchSize)
+		if err != nil {
+			c.Log.Debug("media search index warmup stopped", zap.Error(err))
+			return
+		}
+		if n == 0 {
+			if total > 0 {
+				c.Log.Info("media search index warmed", zap.Int64("indexed", total))
+			}
+			return
+		}
+		total += n
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(pause):
+		}
 	}
 }
 
@@ -340,9 +376,3 @@ func (c *Container) Close() {
 
 // unused guard
 var _ = time.Now
-
-
-
-
-
-
