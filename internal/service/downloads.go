@@ -44,10 +44,14 @@ type DownloadService struct {
 	scanner   *ScannerService
 	site      *SiteService
 
-	mu         sync.Mutex
-	stopCh     chan struct{}
-	pollOnce   sync.Once
-	prevStates map[string]bool // hash -> wasCompleted
+	mu              sync.Mutex
+	stopCh          chan struct{}
+	pollOnce        sync.Once
+	organizeOnce    sync.Once
+	prevStates      map[string]bool // hash -> wasCompleted
+	pollInitialized bool
+	organizeQueue   chan QBitTorrent
+	organizeQueued  map[string]struct{}
 }
 
 func (d *DownloadService) SetScanner(scanner *ScannerService) {
@@ -57,6 +61,10 @@ func (d *DownloadService) SetScanner(scanner *ScannerService) {
 var torrentEpisodeToken = regexp.MustCompile(`(?i)e\d{1,3}`)
 
 const settingDownloadClientsManaged = "download_clients.managed"
+
+const completedTorrentOrganizeQueueSize = 64
+
+var completedTorrentOrganizeCooldown = 3 * time.Second
 
 // ErrDownloadAlreadyExists tells callers that the requested resource is already
 // tracked locally or present in qBittorrent. Subscriptions treat this as a
@@ -132,14 +140,16 @@ func NewDownloadService(log *zap.Logger, repo *repository.Container, hub *Hub, o
 		siteSvc = site[0]
 	}
 	return &DownloadService{
-		log:        log,
-		repo:       repo,
-		hub:        hub,
-		qb:         NewQBitClient(log, QBitConfig{}),
-		organizer:  organizer,
-		site:       siteSvc,
-		prevStates: make(map[string]bool),
-		stopCh:     make(chan struct{}),
+		log:            log,
+		repo:           repo,
+		hub:            hub,
+		qb:             NewQBitClient(log, QBitConfig{}),
+		organizer:      organizer,
+		site:           siteSvc,
+		prevStates:     make(map[string]bool),
+		organizeQueue:  make(chan QBitTorrent, completedTorrentOrganizeQueueSize),
+		organizeQueued: make(map[string]struct{}),
+		stopCh:         make(chan struct{}),
 	}
 }
 
@@ -147,6 +157,7 @@ func NewDownloadService(log *zap.Logger, repo *repository.Container, hub *Hub, o
 func (d *DownloadService) Start(ctx context.Context) {
 	d.pollOnce.Do(func() {
 		_ = d.ReloadConfig(ctx)
+		d.startAutoOrganizeWorker(ctx)
 		go d.poll(ctx)
 	})
 }
@@ -709,7 +720,11 @@ func (d *DownloadService) Delete(ctx context.Context, hash string, withFiles boo
 		return err
 	}
 	d.markDownloadTaskDeleted(ctx, torrentName)
-	delete(d.prevStates, hash)
+	stateKey := strings.ToLower(hash)
+	d.mu.Lock()
+	delete(d.prevStates, stateKey)
+	delete(d.organizeQueued, stateKey)
+	d.mu.Unlock()
 	return nil
 }
 
@@ -770,19 +785,150 @@ func (d *DownloadService) poll(ctx context.Context) {
 		}
 		rows, _ := d.repo.Download.List(ctx)
 		taskByKey := tasksByIdentity(rows)
-		// Detect completed downloads and trigger organize
-		for _, t := range live {
-			hash := t.Hash
-			complete := t.Progress >= 1.0
-			d.syncDownloadTaskProgress(ctx, t, taskByKey)
-			if complete && !d.prevStates[hash] {
-				// Just completed: trigger organize
-				go d.onTorrentComplete(ctx, t)
-			}
-			d.prevStates[hash] = complete
-		}
+		d.processDownloadSnapshot(ctx, live, taskByKey)
 		d.hub.Publish("download", map[string]any{"torrents": live})
 	}
+}
+
+func (d *DownloadService) processDownloadSnapshot(ctx context.Context, live []QBitTorrent, taskByKey map[string]model.DownloadTask) {
+	d.mu.Lock()
+	if d.prevStates == nil {
+		d.prevStates = make(map[string]bool)
+	}
+	firstSnapshot := !d.pollInitialized
+	if firstSnapshot {
+		d.pollInitialized = true
+	}
+	d.mu.Unlock()
+
+	for _, torrent := range live {
+		stateKey := completedTorrentQueueKey(torrent)
+		complete := torrent.Progress >= 1.0
+		d.syncDownloadTaskProgress(ctx, torrent, taskByKey)
+		if stateKey == "" {
+			continue
+		}
+
+		shouldQueue := false
+		d.mu.Lock()
+		wasComplete, wasSeen := d.prevStates[stateKey]
+		switch {
+		case complete && (firstSnapshot || !wasSeen):
+			d.prevStates[stateKey] = true
+		case complete && !wasComplete:
+			shouldQueue = true
+		case complete:
+			d.prevStates[stateKey] = true
+		default:
+			d.prevStates[stateKey] = false
+		}
+		d.mu.Unlock()
+
+		if shouldQueue && d.enqueueCompletedTorrent(torrent) {
+			d.mu.Lock()
+			d.prevStates[stateKey] = true
+			d.mu.Unlock()
+		}
+	}
+}
+
+func (d *DownloadService) startAutoOrganizeWorker(ctx context.Context) {
+	d.mu.Lock()
+	if d.organizeQueue == nil {
+		d.organizeQueue = make(chan QBitTorrent, completedTorrentOrganizeQueueSize)
+	}
+	if d.organizeQueued == nil {
+		d.organizeQueued = make(map[string]struct{})
+	}
+	d.mu.Unlock()
+	d.organizeOnce.Do(func() {
+		go d.autoOrganizeWorker(ctx)
+	})
+}
+
+func (d *DownloadService) enqueueCompletedTorrent(torrent QBitTorrent) bool {
+	key := completedTorrentQueueKey(torrent)
+	if key == "" {
+		return false
+	}
+	d.mu.Lock()
+	if d.organizeQueue == nil {
+		d.organizeQueue = make(chan QBitTorrent, completedTorrentOrganizeQueueSize)
+	}
+	if d.organizeQueued == nil {
+		d.organizeQueued = make(map[string]struct{})
+	}
+	if _, ok := d.organizeQueued[key]; ok {
+		d.mu.Unlock()
+		return true
+	}
+	select {
+	case d.organizeQueue <- torrent:
+		d.organizeQueued[key] = struct{}{}
+		d.mu.Unlock()
+		return true
+	default:
+		d.mu.Unlock()
+		if d.log != nil {
+			d.log.Warn("auto organize queue full; will retry completed torrent later",
+				zap.String("hash", torrent.Hash),
+				zap.String("name", torrent.Name))
+		}
+		return false
+	}
+}
+
+func (d *DownloadService) autoOrganizeWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-d.stopCh:
+			return
+		case torrent := <-d.organizeQueue:
+			d.onTorrentComplete(ctx, torrent)
+			d.markCompletedTorrentOrganizeDone(torrent)
+			if completedTorrentOrganizeCooldown <= 0 {
+				continue
+			}
+			timer := time.NewTimer(completedTorrentOrganizeCooldown)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-d.stopCh:
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+		}
+	}
+}
+
+func (d *DownloadService) markCompletedTorrentOrganizeDone(torrent QBitTorrent) {
+	key := completedTorrentQueueKey(torrent)
+	if key == "" {
+		return
+	}
+	d.mu.Lock()
+	delete(d.organizeQueued, key)
+	d.mu.Unlock()
+}
+
+func completedTorrentQueueKey(torrent QBitTorrent) string {
+	hash := strings.ToLower(strings.TrimSpace(torrent.Hash))
+	if hash != "" {
+		return hash
+	}
+	parts := []string{torrent.Name, torrent.ContentPath, torrent.SavePath}
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	key := strings.Join(parts, "|")
+	if strings.Trim(key, "|") == "" {
+		return ""
+	}
+	return strings.ToLower(key)
 }
 
 func (d *DownloadService) syncDownloadTaskProgress(ctx context.Context, torrent QBitTorrent, taskByKey map[string]model.DownloadTask) {
@@ -916,5 +1062,3 @@ func (d *DownloadService) completedTorrentSource(torrent QBitTorrent) string {
 	}
 	return ""
 }
-
-

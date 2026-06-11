@@ -87,6 +87,48 @@ func TestDownloadCompleteAutoOrganizesContentPath(t *testing.T) {
 	}
 }
 
+func TestDownloadPollBaselinesAlreadyCompletedTorrents(t *testing.T) {
+	repos := newOrganizerTestRepo(t)
+	svc := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
+
+	svc.processDownloadSnapshot(t.Context(), []QBitTorrent{{
+		Hash:     "already-complete",
+		Name:     "Already Complete S01E01",
+		Progress: 1,
+	}}, nil)
+
+	if got := len(svc.organizeQueue); got != 0 {
+		t.Fatalf("first poll queued %d organize jobs, want 0", got)
+	}
+	if !svc.prevStates["already-complete"] {
+		t.Fatal("first poll should remember completed baseline state")
+	}
+
+	svc.processDownloadSnapshot(t.Context(), []QBitTorrent{{
+		Hash:     "late-complete",
+		Name:     "Late Complete S01E01",
+		Progress: 1,
+	}}, nil)
+	if got := len(svc.organizeQueue); got != 0 {
+		t.Fatalf("newly discovered completed torrent queued %d organize jobs, want 0", got)
+	}
+
+	svc.processDownloadSnapshot(t.Context(), []QBitTorrent{{
+		Hash:     "new-download",
+		Name:     "New Download S01E01",
+		Progress: 0.5,
+	}}, nil)
+	svc.processDownloadSnapshot(t.Context(), []QBitTorrent{{
+		Hash:     "new-download",
+		Name:     "New Download S01E01",
+		Progress: 1,
+	}}, nil)
+
+	if got := len(svc.organizeQueue); got != 1 {
+		t.Fatalf("completion transition queued %d organize jobs, want 1", got)
+	}
+}
+
 func TestPublicDownloadTitleUsesMagnetDisplayName(t *testing.T) {
 	got := publicDownloadTitle("magnet:?xt=urn:btih:abc&dn=%E6%B5%8B%E8%AF%95%E5%BD%B1%E7%89%87")
 	if got != "测试影片" {

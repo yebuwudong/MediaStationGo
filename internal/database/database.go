@@ -86,6 +86,8 @@ func AutoMigrate(db *gorm.DB) error {
 
 func ensurePerformanceIndexes(db *gorm.DB) error {
 	statements := []string{
+		`CREATE INDEX IF NOT EXISTS idx_media_created_active ON media(created_at DESC) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_media_episode_created_active ON media(created_at DESC) WHERE deleted_at IS NULL AND (season_num > 0 OR episode_num > 0)`,
 		`CREATE INDEX IF NOT EXISTS idx_media_library_created_active ON media(library_id, created_at DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_media_library_episode_active ON media(library_id, season_num, episode_num, created_at DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_media_series_active ON media(series_id, season_num, episode_num) WHERE deleted_at IS NULL`,

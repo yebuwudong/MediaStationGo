@@ -28,6 +28,12 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Database.DBPath == "" {
 		t.Fatalf("expected non-empty DBPath")
 	}
+	if cfg.Database.MaxOpenConns != defaultDatabaseMaxOpenConns {
+		t.Fatalf("expected default MaxOpenConns %d, got %d", defaultDatabaseMaxOpenConns, cfg.Database.MaxOpenConns)
+	}
+	if cfg.Database.MaxIdleConns != defaultDatabaseMaxIdleConns {
+		t.Fatalf("expected default MaxIdleConns %d, got %d", defaultDatabaseMaxIdleConns, cfg.Database.MaxIdleConns)
+	}
 	if cfg.Secrets.JWTSecret == "" {
 		t.Fatalf("expected auto-generated JWT secret")
 	}
@@ -60,5 +66,25 @@ func TestEnvOverride(t *testing.T) {
 	}
 	if cfg.App.Port != 9090 {
 		t.Fatalf("expected port 9090 from env, got %d", cfg.App.Port)
+	}
+}
+
+func TestLoadHealsHistoricalSingleConnectionDatabaseConfig(t *testing.T) {
+	dir := t.TempDir()
+	wd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	if err := os.WriteFile("config.yaml", []byte("database:\n  max_open_conns: 1\n  max_idle_conns: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Database.MaxOpenConns != defaultDatabaseMaxOpenConns {
+		t.Fatalf("expected historical MaxOpenConns=1 to heal to %d, got %d", defaultDatabaseMaxOpenConns, cfg.Database.MaxOpenConns)
 	}
 }

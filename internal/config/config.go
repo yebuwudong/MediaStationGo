@@ -21,6 +21,11 @@ import (
 // EnvPrefix 是所有环境变量驱动的覆盖使用的前缀。
 const EnvPrefix = "MEDIASTATION"
 
+const (
+	defaultDatabaseMaxOpenConns = 4
+	defaultDatabaseMaxIdleConns = 2
+)
+
 // Config 是根配置聚合。
 type Config struct {
 	App          AppConfig          `mapstructure:"app"`
@@ -226,8 +231,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("database.wal_mode", true)
 	v.SetDefault("database.busy_timeout", 5000)
 	v.SetDefault("database.cache_size", -20000)
-	v.SetDefault("database.max_open_conns", 1)
-	v.SetDefault("database.max_idle_conns", 1)
+	v.SetDefault("database.max_open_conns", defaultDatabaseMaxOpenConns)
+	v.SetDefault("database.max_idle_conns", defaultDatabaseMaxIdleConns)
 
 	v.SetDefault("secrets.jwt_secret", "")
 
@@ -303,6 +308,15 @@ func (c *Config) normalize() error {
 	if c.Database.DBPath == "" {
 		c.Database.DBPath = filepath.Join(c.App.DataDir, "mediastation.db")
 	}
+	if c.Database.MaxOpenConns <= 1 {
+		c.Database.MaxOpenConns = defaultDatabaseMaxOpenConns
+	}
+	if c.Database.MaxIdleConns <= 0 || c.Database.MaxIdleConns > c.Database.MaxOpenConns {
+		c.Database.MaxIdleConns = defaultDatabaseMaxIdleConns
+		if c.Database.MaxIdleConns > c.Database.MaxOpenConns {
+			c.Database.MaxIdleConns = c.Database.MaxOpenConns
+		}
+	}
 	if c.Cache.CacheDir == "" {
 		c.Cache.CacheDir = filepath.Join(c.App.DataDir, "cache")
 	}
@@ -335,7 +349,3 @@ func asConfigFileNotFound(err error, target *viper.ConfigFileNotFoundError) bool
 	}
 	return false
 }
-
-
-
-

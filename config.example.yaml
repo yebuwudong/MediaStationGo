@@ -29,8 +29,8 @@ database:
   wal_mode: true
   busy_timeout: 5000
   cache_size: -20000   # KB (negative)
-  max_open_conns: 1
-  max_idle_conns: 1
+  max_open_conns: 4    # small WAL pool; keeps login/playback responsive during scans
+  max_idle_conns: 2
 
 secrets:
   # When empty, a 32-byte random secret is generated on first start and
