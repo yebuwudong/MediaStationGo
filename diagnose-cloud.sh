@@ -21,7 +21,7 @@ echo ""
 
 # 4. 测试API健康状态
 echo "[4] 测试API健康状态..."
-if curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/health | grep -q 200; then
+if curl -s -o /dev/null -w "%{http_code}" http://localhost:18080/api/health | grep -q 200; then
     echo "API状态: 正常"
 else
     echo "API状态: 无法访问"
