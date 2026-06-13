@@ -54,6 +54,7 @@ type QBitTorrent struct {
 	NumLeech int     `json:"num_leechs"`
 	Size     int64   `json:"size"`
 	SavePath string  `json:"save_path"`
+	Category string  `json:"category"`
 	// ContentPath is qBittorrent's resolved payload path. For single-file
 	// torrents it points at the file; for multi-file torrents it points at the
 	// root folder. Prefer it for automatic organize so we do not scan the whole

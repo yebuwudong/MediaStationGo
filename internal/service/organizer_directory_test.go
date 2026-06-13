@@ -313,9 +313,10 @@ func TestOrganizeDirectoryDedup(t *testing.T) {
 	}
 }
 
-// TestOrganizeDirectoryReplaceHigherResolution verifies 洗版: a higher-resolution
-// source replaces the lower-resolution version already in the destination.
-func TestOrganizeDirectoryReplaceHigherResolution(t *testing.T) {
+// TestOrganizeDirectorySkipsHigherResolutionWhenReplacementDisabled verifies
+// that dedup wins by default: even a higher-resolution source must not replace
+// an existing library item unless the caller explicitly allows washing.
+func TestOrganizeDirectorySkipsHigherResolutionWhenReplacementDisabled(t *testing.T) {
 	root := t.TempDir()
 	src := filepath.Join(root, "downloads")
 	dest := filepath.Join(root, "media")
@@ -337,6 +338,50 @@ func TestOrganizeDirectoryReplaceHigherResolution(t *testing.T) {
 		SourcePath:   src,
 		DestPath:     dest,
 		TransferMode: TransferCopy,
+	})
+	if err != nil {
+		t.Fatalf("organize directory: %v", err)
+	}
+	if res.Skipped != 1 || res.Replaced != 0 || res.Organized != 0 {
+		t.Fatalf("expected skipped=1 replaced=0 organized=0 (wash disabled), got %+v", res)
+	}
+	got, err := os.ReadFile(existing)
+	if err != nil || string(got) != "inception-1080p" {
+		t.Fatalf("destination must keep existing version when wash disabled, got %q err=%v", string(got), err)
+	}
+	var count int64
+	if err := repos.DB.Model(&model.Media{}).Where("path = ?", existing).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected existing media DB row kept, found %d", count)
+	}
+}
+
+// TestOrganizeDirectoryReplaceHigherResolutionWhenAllowed verifies 洗版: a
+// higher-resolution source replaces the lower-resolution version already in the
+// destination only when the caller explicitly allows replacement.
+func TestOrganizeDirectoryReplaceHigherResolutionWhenAllowed(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "downloads")
+	dest := filepath.Join(root, "media")
+
+	writeOrgFile(t, filepath.Join(src, "Inception 2010 2160p BluRay.mkv"), "inception-uhd")
+	existing := filepath.Join(dest, "电影", "Inception (2010)", "Inception (2010).mkv")
+	writeOrgFile(t, existing, "inception-1080p")
+
+	repos := newOrganizerTestRepo(t)
+	row := model.Media{Title: "Inception", Path: existing, Year: 2010, Container: "mkv", Width: 1920, Height: 1080}
+	if err := repos.Media.Upsert(t.Context(), &row); err != nil {
+		t.Fatal(err)
+	}
+
+	org := NewOrganizerService(&config.Config{}, zap.NewNop(), repos)
+	res, err := org.OrganizeDirectory(t.Context(), OrganizeOptions{
+		SourcePath:           src,
+		DestPath:             dest,
+		TransferMode:         TransferCopy,
+		AllowReplaceExisting: true,
 	})
 	if err != nil {
 		t.Fatalf("organize directory: %v", err)
@@ -465,6 +510,45 @@ func TestOrganizeDirectoryUsesDownloadCategoryLayout(t *testing.T) {
 	}
 }
 
+func TestOrganizeDirectoryUsesExplicitCategoryLibraryRoot(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "downloads", "Motherhood.of.Taihang.S01E01.2026.1080p.mkv")
+	dest := filepath.Join(root, "media")
+	writeOrgFile(t, src, "episode")
+
+	repos := newOrganizerTestRepo(t)
+	libraryRoot := filepath.Join(dest, "电视剧", "国产剧")
+	wrongType := model.Library{Name: "国产剧", Path: libraryRoot, Type: "movie", Enabled: true}
+	rightType := model.Library{Name: "国产剧", Path: libraryRoot, Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &wrongType); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Library.Create(t.Context(), &rightType); err != nil {
+		t.Fatal(err)
+	}
+
+	org := NewOrganizerService(&config.Config{}, zap.NewNop(), repos)
+	res, err := org.OrganizeDirectory(t.Context(), OrganizeOptions{
+		SourcePath:    src,
+		DestPath:      dest,
+		MediaType:     "tv",
+		MediaCategory: "国产剧",
+		TransferMode:  TransferCopy,
+	})
+	if err != nil {
+		t.Fatalf("organize explicit category: %v", err)
+	}
+	if res.Organized != 1 || len(res.Items) != 1 {
+		t.Fatalf("result = %+v, want one organized item", res)
+	}
+	if !pathWithin(res.Items[0].Target, libraryRoot) {
+		t.Fatalf("target = %q, want under %q", res.Items[0].Target, libraryRoot)
+	}
+	if pathWithin(res.Items[0].Target, filepath.Join(dest, "电视剧")) && !pathWithin(res.Items[0].Target, libraryRoot) {
+		t.Fatalf("target landed outside category library: %q", res.Items[0].Target)
+	}
+}
+
 func TestOrganizeDirectorySmartClassifiesUncategorizedSources(t *testing.T) {
 	root := t.TempDir()
 	src := filepath.Join(root, "downloads")
@@ -588,5 +672,22 @@ func TestOrganizeDirectoryScanAfterRecursesNestedDownloadFolders(t *testing.T) {
 	}
 	if count != 2 {
 		t.Fatalf("media rows = %d, want 2", count)
+	}
+}
+
+func TestSelectOrganizeScanTargetsDedupesSamePathByPathType(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "media", "电视剧", "国产剧")
+	libraries := []model.Library{
+		{Name: "国产剧", Path: path, Type: "movie", Enabled: true},
+		{Name: "国产剧", Path: path, Type: "tv", Enabled: true},
+	}
+
+	targets := selectOrganizeScanTargets(libraries, filepath.Join(root, "media"), "")
+	if len(targets) != 1 {
+		t.Fatalf("targets = %#v, want one deduped target", targets)
+	}
+	if targets[0].Type != "tv" {
+		t.Fatalf("target type = %q, want tv", targets[0].Type)
 	}
 }

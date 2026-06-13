@@ -23,6 +23,7 @@ type Container struct {
 	Repo            *repository.Container
 	WSHub           *Hub
 	SSEHub          *SSEHub
+	Tasks           *TaskTrackerService
 	Auth            *AuthService
 	Media           *MediaService
 	Scan            *ScannerService
@@ -83,6 +84,7 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 
 	hub := NewHub(log)
 	go hub.Run()
+	tasks := NewTaskTrackerService(log, hub)
 
 	// 初始化 SSE Hub
 	sseHub := NewSSEHub(log)
@@ -123,6 +125,7 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 	assistant := NewAssistantService(log, repos, ai)
 	douban := NewDoubanProvider(cfg, log)
 	scheduler := NewSchedulerService(log, repos, scanner, transcoder, organizer, storageCfg, hub, cfg.Cache.CacheDir)
+	scheduler.SetTaskTracker(tasks)
 
 	// 初始化认证相关服务
 	tokenSvc := NewTokenService(cfg, log, repos)
@@ -145,6 +148,7 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 	siteSvc := NewSiteService(log, repos, flareSolverrURL)
 	downloads := NewDownloadService(log, repos, hub, organizer, siteSvc)
 	downloads.SetScanner(scanner)
+	downloads.SetTaskTracker(tasks)
 	subscription := NewSubscriptionService(cfg, log, repos, downloads, siteSvc, hub)
 
 	// 让图片代理把媒体库根目录视为可读的本地图片位置：海报/封面等
@@ -174,6 +178,7 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 		Repo:            repos,
 		WSHub:           hub,
 		SSEHub:          sseHub,
+		Tasks:           tasks,
 		Auth:            authSvc,
 		Media:           NewMediaService(cfg, log, repos),
 		Scan:            scanner,

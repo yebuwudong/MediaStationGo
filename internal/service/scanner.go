@@ -748,6 +748,9 @@ func (s *ScannerService) scanLibrary(ctx context.Context, libraryID string, auto
 		}
 		return res, err
 	}
+	if err := s.resolveLocalLibraryPath(ctx, lib); err != nil {
+		return &ScanResult{LibraryID: lib.ID}, err
+	}
 	res := &ScanResult{LibraryID: lib.ID}
 	seen := make(map[string]struct{})
 	seenInodes := make(map[string]string)
@@ -805,6 +808,9 @@ func (s *ScannerService) IngestPath(ctx context.Context, libraryID, path string)
 	if err != nil || lib == nil {
 		return false, err
 	}
+	if err := s.resolveLocalLibraryPath(ctx, lib); err != nil {
+		return false, err
+	}
 	fi, err := os.Stat(path)
 	if err != nil || fi.IsDir() {
 		return false, err
@@ -816,6 +822,37 @@ func (s *ScannerService) IngestPath(ctx context.Context, libraryID, path string)
 	res := &ScanResult{LibraryID: lib.ID}
 	s.ingestFile(ctx, lib, path, fi.Size(), make(map[string]string), res)
 	return res.Added+res.Updated > 0, nil
+}
+
+func (s *ScannerService) resolveLocalLibraryPath(ctx context.Context, lib *model.Library) error {
+	if lib == nil || strings.TrimSpace(lib.Path) == "" {
+		return nil
+	}
+	resolved, err := resolveAccessibleLibraryPath(lib.Path)
+	if err != nil {
+		return err
+	}
+	if sameLibraryPath(resolved, lib.Path) {
+		lib.Path = filepath.Clean(lib.Path)
+		return nil
+	}
+	if s.repo != nil && s.repo.DB != nil {
+		if updateErr := s.repo.DB.WithContext(ctx).Model(&model.Library{}).Where("id = ?", lib.ID).Update("path", resolved).Error; updateErr != nil && s.log != nil {
+			s.log.Warn("update mapped library path failed",
+				zap.String("library_id", lib.ID),
+				zap.String("from", lib.Path),
+				zap.String("to", resolved),
+				zap.Error(updateErr))
+		}
+	}
+	if s.log != nil {
+		s.log.Info("mapped library path for scan",
+			zap.String("library_id", lib.ID),
+			zap.String("from", lib.Path),
+			zap.String("to", resolved))
+	}
+	lib.Path = resolved
+	return nil
 }
 
 func (s *ScannerService) scanCloudLibrary(ctx context.Context, lib *model.Library, mount CloudMountInfo, autoScrape bool) (*ScanResult, error) {

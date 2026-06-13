@@ -97,6 +97,7 @@ func scanLibraryHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		if _, ok := service.ParseCloudLibraryMount(lib.Path); ok {
+			task := startScanHTTPTask(svc, "云盘扫描队列", lib.Name, lib.Path)
 			if svc.WSHub != nil {
 				svc.WSHub.Publish("scan", gin.H{
 					"library_id":       id,
@@ -108,6 +109,7 @@ func scanLibraryHandler(svc *service.Container) gin.HandlerFunc {
 				})
 			}
 			_, _, _ = svc.Scan.StartCloudLibraryScan(id, false)
+			finishHTTPTask(task, nil, "queued", "云盘扫描已加入后台队列", map[string]int64{"queued": 1})
 			c.JSON(http.StatusAccepted, gin.H{
 				"library_id":       id,
 				"visited":          0,
@@ -121,12 +123,44 @@ func scanLibraryHandler(svc *service.Container) gin.HandlerFunc {
 			})
 			return
 		}
+		task := startScanHTTPTask(svc, "手动扫描入库", lib.Name, lib.Path)
 		res, err := svc.Scan.ScanLibrary(c.Request.Context(), id)
 		if err != nil {
+			finishHTTPTask(task, err, "scan", "手动扫描入库失败", nil)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		finishHTTPTask(task, nil, "completed", "手动扫描入库结束", scanTaskMetrics(res))
 		c.JSON(http.StatusOK, res)
+	}
+}
+
+func startScanHTTPTask(svc *service.Container, name, libraryName, path string) *service.TaskHandle {
+	if svc == nil || svc.Tasks == nil {
+		return nil
+	}
+	if libraryName != "" {
+		name += "：" + libraryName
+	}
+	return svc.Tasks.Start(service.TaskKindScan, name, service.TaskUpdate{
+		Stage:      "scan",
+		SourcePath: path,
+		Message:    "正在扫描并入库",
+	})
+}
+
+func scanTaskMetrics(res *service.ScanResult) map[string]int64 {
+	if res == nil {
+		return nil
+	}
+	return map[string]int64{
+		"visited":        int64(res.Visited),
+		"added":          int64(res.Added),
+		"updated":        int64(res.Updated),
+		"skipped":        int64(res.Skipped),
+		"probed":         int64(res.Probed),
+		"local_metadata": int64(res.LocalMetadata),
+		"removed":        res.Removed,
 	}
 }
 

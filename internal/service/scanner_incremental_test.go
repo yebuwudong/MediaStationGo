@@ -95,6 +95,41 @@ func TestScanLibraryReadsLocalSTRMTarget(t *testing.T) {
 	}
 }
 
+func TestScanLibraryMapsPersistedHostLibraryPath(t *testing.T) {
+	sc, repos := newScannerTestEnv(t)
+	root := t.TempDir()
+	containerRoot := filepath.Join(root, "container", "media")
+	containerLibrary := filepath.Join(containerRoot, "电视剧", "国产剧")
+	if err := os.MkdirAll(containerLibrary, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(containerLibrary, "狂飙.S01E01.2023.mkv")
+	if err := os.WriteFile(file, []byte("episode"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MEDIASTATION_MEDIA_DIR", `Q:\media`)
+	t.Setenv("MEDIASTATION_MEDIA_CONTAINER_DIR", containerRoot)
+
+	lib := model.Library{Name: "国产剧", Path: `Q:\media\电视剧\国产剧`, Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	res, err := sc.ScanLibrary(t.Context(), lib.ID)
+	if err != nil {
+		t.Fatalf("scan mapped host path: %v", err)
+	}
+	if res.Added != 1 {
+		t.Fatalf("scan result = %#v, want added=1", res)
+	}
+	var stored model.Library
+	if err := repos.DB.First(&stored, "id = ?", lib.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Path != filepath.Clean(containerLibrary) {
+		t.Fatalf("stored path = %q, want %q", stored.Path, filepath.Clean(containerLibrary))
+	}
+}
+
 func TestRemovePathDeletesVanishedMedia(t *testing.T) {
 	sc, repos := newScannerTestEnv(t)
 	root := t.TempDir()

@@ -189,16 +189,22 @@ type PlaylistItem struct {
 // DownloadTask 是待处理（或已完成）的 torrent / HTTP 下载。
 type DownloadTask struct {
 	Base
-	UserID      string  `gorm:"index;size:36" json:"user_id"`
-	Source      string  `gorm:"size:32;not null" json:"source"` // qbittorrent / transmission / http
-	URL         string  `gorm:"size:2048;not null" json:"-"`
-	Title       string  `gorm:"size:512" json:"title,omitempty"`
-	PosterURL   string  `gorm:"size:2048" json:"poster_url,omitempty"`
-	BackdropURL string  `gorm:"size:2048" json:"backdrop_url,omitempty"`
-	Overview    string  `gorm:"type:text" json:"overview,omitempty"`
-	SavePath    string  `gorm:"size:1024" json:"save_path"`
-	Status      string  `gorm:"size:32;default:queued" json:"status"`
-	Progress    float32 `json:"progress"`
+	UserID        string  `gorm:"index;size:36" json:"user_id"`
+	Source        string  `gorm:"size:32;not null" json:"source"` // qbittorrent / transmission / http
+	URL           string  `gorm:"size:2048;not null" json:"-"`
+	Title         string  `gorm:"size:512" json:"title,omitempty"`
+	PosterURL     string  `gorm:"size:2048" json:"poster_url,omitempty"`
+	BackdropURL   string  `gorm:"size:2048" json:"backdrop_url,omitempty"`
+	Overview      string  `gorm:"type:text" json:"overview,omitempty"`
+	SavePath      string  `gorm:"size:1024" json:"save_path"`
+	MediaType     string  `gorm:"size:16" json:"media_type,omitempty"`
+	MediaCategory string  `gorm:"size:128" json:"media_category,omitempty"`
+	Status        string  `gorm:"size:32;default:queued" json:"status"`
+	Progress      float32 `json:"progress"`
+
+	// AllowExistingLibrary is true for subscription wash/upgrade tasks that are
+	// allowed to replace an existing library item after download completion.
+	AllowExistingLibrary bool `gorm:"default:false" json:"allow_existing_library,omitempty"`
 }
 
 // Subscription 是自动化规则，轮询 RSS 源并将匹配种子排队到配置的下载客户端。

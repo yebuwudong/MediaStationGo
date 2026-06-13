@@ -18,9 +18,14 @@ func tasksHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		transcodes := svc.Transcoder.Active()
 		_, torrents, _ := svc.Downloads.List(c.Request.Context())
+		background := service.TaskSnapshot{}
+		if svc.Tasks != nil {
+			background = svc.Tasks.Snapshot()
+		}
 		c.JSON(http.StatusOK, gin.H{
-			"transcodes": transcodes,
-			"torrents":   torrents,
+			"transcodes":       transcodes,
+			"torrents":         torrents,
+			"background_tasks": background,
 		})
 	}
 }

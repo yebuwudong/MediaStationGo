@@ -46,6 +46,7 @@ type DownloadService struct {
 	organizer *OrganizerService
 	scanner   *ScannerService
 	site      *SiteService
+	tasks     *TaskTrackerService
 
 	mu              sync.Mutex
 	stopCh          chan struct{}
@@ -59,6 +60,10 @@ type DownloadService struct {
 
 func (d *DownloadService) SetScanner(scanner *ScannerService) {
 	d.scanner = scanner
+}
+
+func (d *DownloadService) SetTaskTracker(tasks *TaskTrackerService) {
+	d.tasks = tasks
 }
 
 var torrentEpisodeToken = regexp.MustCompile(`(?i)e\d{1,3}`)
@@ -98,42 +103,46 @@ type DownloadTaskMeta struct {
 }
 
 type DownloadTaskView struct {
-	ID          string    `json:"id"`
-	Source      string    `json:"source"`
-	Title       string    `json:"title"`
-	PosterURL   string    `json:"poster_url,omitempty"`
-	BackdropURL string    `json:"backdrop_url,omitempty"`
-	Overview    string    `json:"overview,omitempty"`
-	SavePath    string    `json:"save_path"`
-	Status      string    `json:"status"`
-	Progress    float32   `json:"progress"`
-	State       string    `json:"state,omitempty"`
-	DLSpeed     int64     `json:"dlspeed,omitempty"`
-	UpSpeed     int64     `json:"upspeed,omitempty"`
-	Size        int64     `json:"size,omitempty"`
-	Downloaded  int64     `json:"downloaded,omitempty"`
-	NumSeeds    int       `json:"num_seeds,omitempty"`
-	NumLeechs   int       `json:"num_leechs,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID            string    `json:"id"`
+	Source        string    `json:"source"`
+	Title         string    `json:"title"`
+	PosterURL     string    `json:"poster_url,omitempty"`
+	BackdropURL   string    `json:"backdrop_url,omitempty"`
+	Overview      string    `json:"overview,omitempty"`
+	SavePath      string    `json:"save_path"`
+	MediaType     string    `json:"media_type,omitempty"`
+	MediaCategory string    `json:"media_category,omitempty"`
+	Status        string    `json:"status"`
+	Progress      float32   `json:"progress"`
+	State         string    `json:"state,omitempty"`
+	DLSpeed       int64     `json:"dlspeed,omitempty"`
+	UpSpeed       int64     `json:"upspeed,omitempty"`
+	Size          int64     `json:"size,omitempty"`
+	Downloaded    int64     `json:"downloaded,omitempty"`
+	NumSeeds      int       `json:"num_seeds,omitempty"`
+	NumLeechs     int       `json:"num_leechs,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type DownloadTorrentView struct {
-	Hash        string  `json:"hash"`
-	Name        string  `json:"name"`
-	Title       string  `json:"title"`
-	PosterURL   string  `json:"poster_url,omitempty"`
-	BackdropURL string  `json:"backdrop_url,omitempty"`
-	Overview    string  `json:"overview,omitempty"`
-	State       string  `json:"state"`
-	Progress    float32 `json:"progress"`
-	DLSpeed     int64   `json:"dlspeed"`
-	UpSpeed     int64   `json:"upspeed"`
-	NumSeeds    int     `json:"num_seeds"`
-	NumLeechs   int     `json:"num_leechs"`
-	Size        int64   `json:"size"`
-	Downloaded  int64   `json:"downloaded"`
-	SavePath    string  `json:"save_path"`
+	Hash          string  `json:"hash"`
+	Name          string  `json:"name"`
+	Title         string  `json:"title"`
+	PosterURL     string  `json:"poster_url,omitempty"`
+	BackdropURL   string  `json:"backdrop_url,omitempty"`
+	Overview      string  `json:"overview,omitempty"`
+	MediaType     string  `json:"media_type,omitempty"`
+	MediaCategory string  `json:"media_category,omitempty"`
+	State         string  `json:"state"`
+	Progress      float32 `json:"progress"`
+	DLSpeed       int64   `json:"dlspeed"`
+	UpSpeed       int64   `json:"upspeed"`
+	NumSeeds      int     `json:"num_seeds"`
+	NumLeechs     int     `json:"num_leechs"`
+	Size          int64   `json:"size"`
+	Downloaded    int64   `json:"downloaded"`
+	SavePath      string  `json:"save_path"`
 }
 
 // NewDownloadService is the constructor.
@@ -469,15 +478,18 @@ func (d *DownloadService) createTask(ctx context.Context, userID, urlStr, savePa
 		title = publicDownloadTitle(urlStr)
 	}
 	t := &model.DownloadTask{
-		UserID:      userID,
-		Source:      "qbittorrent",
-		URL:         urlStr,
-		Title:       title,
-		PosterURL:   meta.PosterURL,
-		BackdropURL: meta.BackdropURL,
-		Overview:    meta.Overview,
-		SavePath:    savePath,
-		Status:      "queued",
+		UserID:               userID,
+		Source:               "qbittorrent",
+		URL:                  urlStr,
+		Title:                title,
+		PosterURL:            meta.PosterURL,
+		BackdropURL:          meta.BackdropURL,
+		Overview:             meta.Overview,
+		SavePath:             savePath,
+		MediaType:            meta.MediaType,
+		MediaCategory:        meta.MediaCategory,
+		Status:               "queued",
+		AllowExistingLibrary: meta.AllowExistingLibrary,
 	}
 	if err := d.repo.Download.Create(ctx, t); err != nil {
 		return nil, err
@@ -608,24 +620,26 @@ func downloadTaskView(row model.DownloadTask, torrent QBitTorrent) DownloadTaskV
 	}
 	size := torrent.Size
 	return DownloadTaskView{
-		ID:          row.ID,
-		Source:      row.Source,
-		Title:       firstNonEmpty(row.Title, "下载任务"),
-		PosterURL:   row.PosterURL,
-		BackdropURL: row.BackdropURL,
-		Overview:    row.Overview,
-		SavePath:    row.SavePath,
-		Status:      row.Status,
-		Progress:    progress,
-		State:       state,
-		DLSpeed:     torrent.DLSpeed,
-		UpSpeed:     torrent.UpSpeed,
-		Size:        size,
-		Downloaded:  downloadedBytes(size, progress),
-		NumSeeds:    torrent.NumSeeds,
-		NumLeechs:   torrent.NumLeech,
-		CreatedAt:   row.CreatedAt,
-		UpdatedAt:   row.UpdatedAt,
+		ID:            row.ID,
+		Source:        row.Source,
+		Title:         firstNonEmpty(row.Title, "下载任务"),
+		PosterURL:     row.PosterURL,
+		BackdropURL:   row.BackdropURL,
+		Overview:      row.Overview,
+		SavePath:      row.SavePath,
+		MediaType:     row.MediaType,
+		MediaCategory: row.MediaCategory,
+		Status:        row.Status,
+		Progress:      progress,
+		State:         state,
+		DLSpeed:       torrent.DLSpeed,
+		UpSpeed:       torrent.UpSpeed,
+		Size:          size,
+		Downloaded:    downloadedBytes(size, progress),
+		NumSeeds:      torrent.NumSeeds,
+		NumLeechs:     torrent.NumLeech,
+		CreatedAt:     row.CreatedAt,
+		UpdatedAt:     row.UpdatedAt,
 	}
 }
 
@@ -635,21 +649,23 @@ func downloadTorrentView(torrent QBitTorrent, row model.DownloadTask) DownloadTo
 		title = row.Title
 	}
 	return DownloadTorrentView{
-		Hash:        torrent.Hash,
-		Name:        torrent.Name,
-		Title:       firstNonEmpty(title, "下载任务"),
-		PosterURL:   row.PosterURL,
-		BackdropURL: row.BackdropURL,
-		Overview:    row.Overview,
-		State:       torrent.State,
-		Progress:    torrent.Progress,
-		DLSpeed:     torrent.DLSpeed,
-		UpSpeed:     torrent.UpSpeed,
-		NumSeeds:    torrent.NumSeeds,
-		NumLeechs:   torrent.NumLeech,
-		Size:        torrent.Size,
-		Downloaded:  downloadedBytes(torrent.Size, torrent.Progress),
-		SavePath:    torrent.SavePath,
+		Hash:          torrent.Hash,
+		Name:          torrent.Name,
+		Title:         firstNonEmpty(title, "下载任务"),
+		PosterURL:     row.PosterURL,
+		BackdropURL:   row.BackdropURL,
+		Overview:      row.Overview,
+		MediaType:     row.MediaType,
+		MediaCategory: firstNonEmpty(row.MediaCategory, torrent.Category),
+		State:         torrent.State,
+		Progress:      torrent.Progress,
+		DLSpeed:       torrent.DLSpeed,
+		UpSpeed:       torrent.UpSpeed,
+		NumSeeds:      torrent.NumSeeds,
+		NumLeechs:     torrent.NumLeech,
+		Size:          torrent.Size,
+		Downloaded:    downloadedBytes(torrent.Size, torrent.Progress),
+		SavePath:      torrent.SavePath,
 	}
 }
 
@@ -1086,19 +1102,50 @@ func (d *DownloadService) onTorrentComplete(ctx context.Context, torrent QBitTor
 			zap.String("content_path", torrent.ContentPath))
 		return
 	}
+	taskRow, hasTask := d.completedTorrentTask(ctx, torrent)
+	allowReplace := hasTask && taskRow.AllowExistingLibrary
 	d.log.Info("download completed, triggering directory organize",
 		zap.String("hash", torrent.Hash),
 		zap.String("name", torrent.Name),
-		zap.String("source", source))
-	res, err := d.organizer.OrganizeDirectory(ctx, OrganizeOptions{SourcePath: source})
+		zap.String("source", source),
+		zap.Bool("allow_replace_existing", allowReplace))
+	taskHandle := d.startDownloadOrganizeTask(torrent, source, allowReplace)
+	res, err := d.organizer.OrganizeDirectory(ctx, OrganizeOptions{
+		SourcePath:           source,
+		MediaType:            downloadTaskMediaType(taskRow),
+		MediaCategory:        firstNonEmpty(downloadTaskMediaCategory(taskRow), torrent.Category),
+		AllowReplaceExisting: allowReplace,
+	})
 	if err != nil {
+		if taskHandle != nil {
+			taskHandle.Finish(err, TaskUpdate{
+				Stage:   "organize",
+				Message: "下载完成自动整理失败",
+			})
+		}
 		d.log.Error("auto organize completed torrent failed",
 			zap.String("hash", torrent.Hash),
 			zap.String("source", source),
 			zap.Error(err))
 		return
 	}
+	if taskHandle != nil && res != nil {
+		taskHandle.Update(TaskUpdate{
+			Stage:      "organize",
+			SourcePath: res.SourcePath,
+			DestPath:   res.DestPath,
+			Message:    "下载完成整理已完成，准备扫描入库",
+			Metrics:    OrganizeTaskMetrics(res),
+		})
+	}
 	if d.scanner != nil && res != nil && strings.TrimSpace(res.DestPath) != "" && OrganizeResultHasChanges(res) {
+		if taskHandle != nil {
+			taskHandle.Update(TaskUpdate{
+				Stage:   "scan_scrape",
+				Message: "正在扫描入库并按设置刮削",
+				Metrics: OrganizeTaskMetrics(res),
+			})
+		}
 		res.Scans, res.Scrapes = d.scanner.ScanAndScrapeLibrariesForPath(ctx, res.DestPath, "", OrganizeScrapeAfterEnabled(ctx, d.repo))
 	} else if d.log != nil && res != nil && !OrganizeResultHasChanges(res) {
 		d.log.Info("auto organize completed torrent skipped scan; no destination changes",
@@ -1107,6 +1154,13 @@ func (d *DownloadService) onTorrentComplete(ctx context.Context, torrent QBitTor
 			zap.Int("organized", res.Organized),
 			zap.Int("replaced", res.Replaced),
 			zap.Int("skipped", res.Skipped))
+	}
+	if taskHandle != nil {
+		taskHandle.Finish(nil, TaskUpdate{
+			Stage:   "completed",
+			Message: "下载完成自动整理入库结束",
+			Metrics: OrganizeTaskMetrics(res),
+		})
 	}
 	d.markCompletedTorrentCatchupRecorded(context.Background(), torrent)
 	d.log.Info("auto organize completed torrent finished",
@@ -1118,6 +1172,59 @@ func (d *DownloadService) onTorrentComplete(ctx context.Context, torrent QBitTor
 		zap.Int("skipped", res.Skipped),
 		zap.Int("scrapes", len(res.Scrapes)),
 		zap.Int("errors", len(res.Errors)))
+}
+
+func (d *DownloadService) startDownloadOrganizeTask(torrent QBitTorrent, source string, allowReplace bool) *TaskHandle {
+	if d == nil || d.tasks == nil {
+		return nil
+	}
+	message := "下载完成后自动整理/重命名/入库"
+	if allowReplace {
+		message = "下载完成后自动整理/重命名/入库（允许洗版替换）"
+	}
+	name := strings.TrimSpace(torrent.Name)
+	if name == "" {
+		name = "下载完成自动整理"
+	}
+	return d.tasks.Start(TaskKindOrganize, name, TaskUpdate{
+		Stage:      "organize",
+		SourcePath: source,
+		Message:    message,
+	})
+}
+
+func (d *DownloadService) completedTorrentTask(ctx context.Context, torrent QBitTorrent) (*model.DownloadTask, bool) {
+	if d == nil || d.repo == nil || d.repo.Download == nil {
+		return nil, false
+	}
+	rows, err := d.repo.Download.List(ctx)
+	if err != nil || len(rows) == 0 {
+		return nil, false
+	}
+	taskByKey := tasksByIdentity(rows)
+	if task, ok := findMatchingTaskByIdentity(torrent.Name, taskByKey); ok {
+		return &task, true
+	}
+	if strings.TrimSpace(torrent.ContentPath) != "" {
+		if task, ok := findMatchingTaskByIdentity(filepath.Base(torrent.ContentPath), taskByKey); ok {
+			return &task, true
+		}
+	}
+	return nil, false
+}
+
+func downloadTaskMediaType(task *model.DownloadTask) string {
+	if task == nil {
+		return ""
+	}
+	return strings.TrimSpace(task.MediaType)
+}
+
+func downloadTaskMediaCategory(task *model.DownloadTask) string {
+	if task == nil {
+		return ""
+	}
+	return strings.TrimSpace(task.MediaCategory)
 }
 
 // DownloadPathMappingsSettingKey 允许用户自定义「下载器路径 → 本程序路径」

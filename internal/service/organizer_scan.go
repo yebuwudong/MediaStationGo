@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -175,7 +176,40 @@ func selectOrganizeScanTargets(libraries []model.Library, destRoot, preferredLib
 		}
 	}
 	if len(matched) > 0 {
-		return matched
+		return dedupeOrganizeScanTargets(matched)
 	}
-	return enabled
+	return dedupeOrganizeScanTargets(enabled)
+}
+
+func dedupeOrganizeScanTargets(libraries []model.Library) []model.Library {
+	out := make([]model.Library, 0, len(libraries))
+	byPath := map[string]int{}
+	for _, lib := range libraries {
+		key := strings.ToLower(filepath.Clean(lib.Path))
+		if existingIndex, ok := byPath[key]; ok {
+			if organizeScanTargetScore(lib) > organizeScanTargetScore(out[existingIndex]) {
+				out[existingIndex] = lib
+			}
+			continue
+		}
+		byPath[key] = len(out)
+		out = append(out, lib)
+	}
+	return out
+}
+
+func organizeScanTargetScore(lib model.Library) int {
+	libraryType := normalizeOrganizeMediaType(lib.Type)
+	inferred := normalizeMediaType("", lib.Name, lib.Path)
+	score := 0
+	if libraryType != "" && libraryType == inferred {
+		score += 10
+	}
+	if librarySupportsSeasons(&lib) {
+		score += 2
+	}
+	if libraryType != "" && libraryType != "movie" {
+		score++
+	}
+	return score
 }

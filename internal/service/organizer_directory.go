@@ -127,7 +127,7 @@ func (o *OrganizerService) OrganizeDirectory(ctx context.Context, opts OrganizeO
 		if _, ok := videoExtensions[ext]; !ok {
 			return nil, fmt.Errorf("source is not a supported video file: %s", source)
 		}
-		if err := o.organizeSourceFile(ctx, source, filepath.Dir(source), dest, mode, opts.MediaType, opts.DryRun, res); err != nil {
+		if err := o.organizeSourceFile(ctx, source, filepath.Dir(source), dest, mode, opts.MediaType, opts.MediaCategory, opts.DryRun, opts.AllowReplaceExisting, res); err != nil {
 			res.Errors = append(res.Errors, fmt.Sprintf("%s: %s", filepath.Base(source), err.Error()))
 			res.Items = append(res.Items, OrganizePreviewItem{Source: source, Action: "error", Reason: err.Error()})
 		}
@@ -149,7 +149,7 @@ func (o *OrganizerService) OrganizeDirectory(ctx context.Context, opts OrganizeO
 		if _, ok := videoExtensions[ext]; !ok {
 			return nil
 		}
-		if err := o.organizeSourceFile(ctx, path, source, dest, mode, opts.MediaType, opts.DryRun, res); err != nil {
+		if err := o.organizeSourceFile(ctx, path, source, dest, mode, opts.MediaType, opts.MediaCategory, opts.DryRun, opts.AllowReplaceExisting, res); err != nil {
 			res.Errors = append(res.Errors, fmt.Sprintf("%s: %s", filepath.Base(path), err.Error()))
 			res.Items = append(res.Items, OrganizePreviewItem{Source: path, Action: "error", Reason: err.Error()})
 		}
@@ -176,7 +176,7 @@ type organizeDirectoryLayout struct {
 
 // organizeSourceFile organizes a single video file from the source directory
 // into destRoot, applying dedup + 洗版.
-func (o *OrganizerService) organizeSourceFile(ctx context.Context, src, sourceRoot, destRoot string, mode TransferMode, mediaTypeOverride string, dryRun bool, res *OrganizeResult) error {
+func (o *OrganizerService) organizeSourceFile(ctx context.Context, src, sourceRoot, destRoot string, mode TransferMode, mediaTypeOverride, mediaCategoryOverride string, dryRun bool, allowReplaceExisting bool, res *OrganizeResult) error {
 	ext := filepath.Ext(src)
 	title, year := CleanQuery(src)
 	if title == "" {
@@ -200,14 +200,16 @@ func (o *OrganizerService) organizeSourceFile(ctx context.Context, src, sourceRo
 	if layout.MediaType == "" {
 		layout.MediaType = o.inferMediaTypeForSourceFile(src, title, season, episode)
 	}
-	if layout.Category == "" {
+	if category := strings.TrimSpace(mediaCategoryOverride); category != "" {
+		layout.Category = sanitizeFilename(category)
+	} else if layout.Category == "" {
 		layout.Category = o.smartClassifySourceFile(ctx, src, sourceRoot, layout.MediaType, title, parsedTitle)
 	}
-	layoutRoot := destRoot
-	if layout.MediaType != "" {
+	layoutRoot, matchedLibrary := o.organizeLibraryRootForLayout(ctx, destRoot, layout.MediaType, layout.Category)
+	if !matchedLibrary && layout.MediaType != "" {
 		layoutRoot = o.organizeRoot(destRoot, layout.MediaType, layout.Category)
 	}
-	if layout.Category != "" {
+	if !matchedLibrary && layout.Category != "" {
 		layoutRoot = categoryRoot(layoutRoot, sanitizeFilename(layout.Category))
 	}
 
@@ -254,7 +256,7 @@ func (o *OrganizerService) organizeSourceFile(ctx context.Context, src, sourceRo
 		}
 		// 洗版：仅当来源与已存在版本的分辨率都可判定、且来源更高时才替换；
 		// 任一方分辨率未知时保守跳过，绝不删除无法判定的已存在文件。
-		if srcArea > 0 && bestArea > 0 && srcArea > bestArea {
+		if allowReplaceExisting && srcArea > 0 && bestArea > 0 && srcArea > bestArea {
 			res.Items = append(res.Items, OrganizePreviewItem{
 				Source: src, Target: dst, Action: "replace", Reason: "higher resolution",
 				MediaType: layout.MediaType, Category: layout.Category, Title: title,
@@ -449,6 +451,147 @@ func (o *OrganizerService) directoryCategoryTypes() map[string]organizeDirectory
 	addConfigured("adult_9kg", "9KG", "adult")
 	addConfigured("adult_jav", "番号", "adult")
 	return out
+}
+
+func (o *OrganizerService) organizeLibraryRootForLayout(ctx context.Context, destRoot, mediaType, category string) (string, bool) {
+	if o == nil || o.repo == nil || o.repo.Library == nil {
+		return "", false
+	}
+	libraries, err := o.repo.Library.List(ctx)
+	if err != nil {
+		if o.log != nil {
+			o.log.Debug("list libraries for organize target failed", zap.Error(err))
+		}
+		return "", false
+	}
+	destRoot = filepath.Clean(strings.TrimSpace(destRoot))
+	mediaType = normalizeOrganizeMediaType(mediaType)
+	aliases := o.organizeCategoryAliases(mediaType, category)
+
+	bestPath := ""
+	bestScore := -1
+	bestDepth := -1
+	for _, lib := range libraries {
+		if !lib.Enabled || strings.TrimSpace(lib.Path) == "" {
+			continue
+		}
+		if _, ok := ParseCloudLibraryMount(lib.Path); ok {
+			continue
+		}
+		if destRoot != "" && destRoot != "." && !pathWithin(lib.Path, destRoot) && !pathWithin(destRoot, lib.Path) {
+			continue
+		}
+		categoryMatch := len(aliases) > 0 && libraryMatchesOrganizeCategory(lib, aliases)
+		typeScore := organizeLibraryTypeScore(mediaType, lib.Type)
+		if len(aliases) > 0 {
+			if !categoryMatch {
+				continue
+			}
+		} else if typeScore <= 0 {
+			continue
+		}
+		score := typeScore
+		if categoryMatch {
+			score += 20
+		}
+		depth := pathDepth(lib.Path)
+		if score > bestScore || (score == bestScore && depth > bestDepth) {
+			bestScore = score
+			bestDepth = depth
+			bestPath = lib.Path
+		}
+	}
+	if bestPath == "" {
+		return "", false
+	}
+	return filepath.Clean(bestPath), true
+}
+
+func (o *OrganizerService) organizeCategoryAliases(mediaType, category string) map[string]struct{} {
+	aliases := map[string]struct{}{}
+	add := func(values ...string) {
+		for _, value := range values {
+			key := normalizeOrganizeCategoryKey(value)
+			if key != "" {
+				aliases[key] = struct{}{}
+			}
+		}
+	}
+	categories := o.categoryMap()
+	add(category)
+	switch normalizeOrganizeCategoryKey(category) {
+	case normalizeOrganizeCategoryKey(categoryName(categories, "jp_anime", "日番")), "日番", "日漫", "日本动漫", "日本動畫", "日本动画":
+		add("日番", "日漫", "日本动漫", "日本动画")
+	case normalizeOrganizeCategoryKey(categoryName(categories, "cn_anime", "国漫")), "国漫", "国产动漫", "國漫":
+		add("国漫", "国产动漫")
+	case normalizeOrganizeCategoryKey(categoryName(categories, "domestic_tv", "国产剧")), "国产剧", "国剧", "大陆剧", "国产电视剧":
+		add("国产剧", "国剧", "大陆剧", "国产电视剧")
+	case normalizeOrganizeCategoryKey(categoryName(categories, "euus_tv", "欧美剧")), "欧美剧", "欧美电视剧":
+		add("欧美剧", "欧美电视剧")
+	case normalizeOrganizeCategoryKey(categoryName(categories, "jk_tv", "日韩剧")), "日韩剧", "日剧", "韩剧":
+		add("日韩剧", "日剧", "韩剧")
+	case normalizeOrganizeCategoryKey(categoryName(categories, "variety", "综艺")), "综艺", "真人秀":
+		add("综艺", "真人秀")
+	case normalizeOrganizeCategoryKey(categoryName(categories, "documentary", "纪录片")), "纪录片", "纪录":
+		add("纪录片", "纪录")
+	case normalizeOrganizeCategoryKey(categoryName(categories, "children", "儿童")), "儿童", "少儿":
+		add("儿童", "少儿")
+	case normalizeOrganizeCategoryKey(categoryName(categories, "chinese_movie", "华语电影")), "华语电影", "国产电影", "大陆电影":
+		add("华语电影", "国产电影", "大陆电影")
+	case normalizeOrganizeCategoryKey(categoryName(categories, "foreign_movie", "外语电影")), "外语电影":
+		add("外语电影")
+	case normalizeOrganizeCategoryKey(categoryName(categories, "animation_movie", "动画电影")), "动画电影", "动漫电影":
+		add("动画电影", "动漫电影")
+	case normalizeOrganizeCategoryKey(categoryName(categories, "adult", "成人")), "成人":
+		add("成人")
+	case normalizeOrganizeCategoryKey(categoryName(categories, "adult_9kg", "9KG")), "9kg":
+		add("9KG")
+	case normalizeOrganizeCategoryKey(categoryName(categories, "adult_jav", "番号")), "番号", "jav":
+		add("番号", "JAV")
+	}
+	return aliases
+}
+
+func libraryMatchesOrganizeCategory(lib model.Library, aliases map[string]struct{}) bool {
+	for _, value := range []string{lib.Name, filepath.Base(filepath.Clean(lib.Path))} {
+		if _, ok := aliases[normalizeOrganizeCategoryKey(value)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func organizeLibraryTypeScore(mediaType, libraryType string) int {
+	libraryType = normalizeOrganizeMediaType(libraryType)
+	if mediaType == "" || libraryType == "" {
+		return 1
+	}
+	if mediaType == libraryType {
+		return 8
+	}
+	if mediaType == "anime" && libraryType == "tv" {
+		return 5
+	}
+	if mediaType == "variety" && libraryType == "tv" {
+		return 5
+	}
+	return 0
+}
+
+func normalizeOrganizeCategoryKey(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, " ", "")
+	value = strings.ReplaceAll(value, "_", "")
+	value = strings.ReplaceAll(value, "-", "")
+	return value
+}
+
+func pathDepth(path string) int {
+	path = filepath.Clean(path)
+	if path == "." || path == string(os.PathSeparator) {
+		return 0
+	}
+	return len(strings.Split(path, string(os.PathSeparator)))
 }
 
 // existingVersionPaths returns existing destination files that represent the

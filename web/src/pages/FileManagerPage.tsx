@@ -67,7 +67,7 @@ type AutoOrganizeConfig = {
 const AUTO_ORGANIZE_DEFAULTS: AutoOrganizeConfig = {
   enabled: 'false',
   afterDownload: 'false',
-  scrapeAfter: 'false',
+  scrapeAfter: 'true',
   sourceDir: '',
   targetDir: '',
   transferMode: 'hardlink',
@@ -127,7 +127,7 @@ export function FileManagerPage() {
   const [organizeTransferMode, setOrganizeTransferMode] = useState('hardlink')
   const [organizeMediaType, setOrganizeMediaType] = useState('auto')
   const [scanAfter, setScanAfter] = useState(true)
-  const [scrapeAfter, setScrapeAfter] = useState(false)
+  const [scrapeAfter, setScrapeAfter] = useState(true)
   const [organizeBusy, setOrganizeBusy] = useState('')
   const [previewItems, setPreviewItems] = useState<Array<{
     source: string

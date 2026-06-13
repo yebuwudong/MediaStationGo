@@ -69,9 +69,7 @@ func (s *MediaService) CreateLibrary(ctx context.Context, name, path, kind strin
 	if err != nil {
 		return nil, err
 	}
-	if kind == "" {
-		kind = "movie"
-	}
+	kind = inferLibraryKind(name, abs, kind)
 	lib := &model.Library{Name: name, Path: abs, Type: kind, Enabled: true}
 	if err := s.repo.Library.Create(ctx, lib); err != nil {
 		return nil, err
@@ -79,18 +77,40 @@ func (s *MediaService) CreateLibrary(ctx context.Context, name, path, kind strin
 	return lib, nil
 }
 
+func inferLibraryKind(name, path, requested string) string {
+	requested = normalizeOrganizeMediaType(requested)
+	text := strings.ToLower(name + " " + filepath.ToSlash(path))
+	switch {
+	case containsAnyText(text, "成人", "番号", "jav", "9kg", "adult", "nsfw"):
+		return "adult"
+	case containsAnyText(text, "综艺", "真人秀", "variety"):
+		return "variety"
+	case containsAnyText(text, "国漫", "日漫", "日番", "动漫", "动画", "anime", "bangumi") && !containsAnyText(text, "动画电影"):
+		return "anime"
+	case containsAnyText(text, "电视剧", "国产剧", "欧美剧", "日韩剧", "日剧", "韩剧", "剧集", "tv", "series"):
+		return "tv"
+	case containsAnyText(text, "电影", "movie", "film"):
+		return "movie"
+	}
+	if requested != "" {
+		return requested
+	}
+	return "movie"
+}
+
 func resolveAccessibleLibraryPath(path string) (string, error) {
-	abs, err := filepath.Abs(strings.TrimSpace(path))
-	if err != nil {
-		return "", fmt.Errorf("invalid path: %w", err)
+	input := strings.TrimSpace(path)
+	if input == "" {
+		return "", errors.New("path required")
 	}
-	if isAccessibleDir(abs) {
-		return abs, nil
-	}
-	for _, candidate := range dockerVolumePathCandidates(abs) {
+	for _, candidate := range mappedPathCandidates(input) {
 		if isAccessibleDir(candidate) {
 			return filepath.Clean(candidate), nil
 		}
+	}
+	abs, err := filepath.Abs(input)
+	if err != nil {
+		return "", fmt.Errorf("invalid path: %w", err)
 	}
 	return "", fmt.Errorf("path is not an accessible directory: %s", abs)
 }
@@ -147,11 +167,14 @@ func mappedPathCandidates(input string) []string {
 	}
 	clean := filepath.Clean(input)
 	add(clean)
-	if slashClean := cleanPathForVolumeMapping(input); slashClean != "" {
-		add(slashClean)
+	for _, candidate := range dockerVolumePathCandidates(input) {
+		add(candidate)
 	}
 	for _, candidate := range dockerVolumePathCandidates(clean) {
 		add(candidate)
+	}
+	if slashClean := cleanPathForVolumeMapping(input); slashClean != "" {
+		add(slashClean)
 	}
 	if abs, err := filepath.Abs(input); err == nil {
 		add(abs)
@@ -228,12 +251,25 @@ func cleanPathForVolumeMapping(path string) string {
 		return ""
 	}
 	path = strings.ReplaceAll(path, "\\", "/")
+	path = trimEmbeddedWindowsDrive(path)
 	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(path)))
 }
 
 func pathAfterWindowsDrivePrefix(path string) string {
 	if len(path) >= 3 && path[1] == ':' && path[2] == '/' && isASCIIAlpha(path[0]) {
 		return path[2:]
+	}
+	return path
+}
+
+func trimEmbeddedWindowsDrive(path string) string {
+	for i := 0; i+2 < len(path); i++ {
+		if !isASCIIAlpha(path[i]) || path[i+1] != ':' || path[i+2] != '/' {
+			continue
+		}
+		if i == 0 || path[i-1] == '/' {
+			return path[i:]
+		}
 	}
 	return path
 }
