@@ -7,7 +7,7 @@
 <h3 align="center">A lightweight, polished, NAS-friendly private media center</h3>
 
 <p align="center">
-  <strong>Docker-first setup · Media library · Metadata · Playback · Downloads · Emby-compatible clients · Cloud playback</strong>
+  <strong>Docker-first setup · Multi-user management · Media library · Metadata · Downloads · Emby-protocol clients · Cloud playback</strong>
 </p>
 
 <p align="center">
@@ -34,8 +34,9 @@ MediaStationGo is a self-hosted media center for personal libraries, home NAS, a
 It helps you:
 
 - Manage movies, TV shows, anime, variety shows, music, and adult libraries.
+- Create multiple user accounts for family members, friends, or different devices.
 - Scan files and enrich posters, summaries, years, seasons, and episodes.
-- Play in the web UI or external apps such as Infuse, VidHub, SenPlayer, and Emby clients.
+- Play in the web UI, or log in with a MediaStationGo account from Emby-protocol apps such as Infuse, VidHub, SenPlayer, and Emby clients.
 - Connect qBittorrent for search, subscriptions, downloads, and post-download organization.
 - Connect OpenList, CloudDrive2, WebDAV, and other storage backends with STRMURL or 302 redirect playback.
 - Run on NAS, mini PCs, VPS, Linux, Windows Docker Desktop, or any Docker-friendly host.
@@ -44,12 +45,24 @@ It helps you:
 
 ---
 
+## Key Highlights
+
+- **One server, many clients**: deploy MediaStationGo once; you do not need to run a separate Emby server.
+- **Emby-protocol compatibility**: add the server in third-party players as an Emby/Jellyfin-compatible server, then log in with your MediaStationGo username and password.
+- **Multi-user management**: supports admins, regular users, account enable/disable, expiry dates, device management, Bot registration, and redeem codes.
+- **Local + cloud media in one place**: manage local disks, download folders, OpenList, CloudDrive2, WebDAV, and other storage backends from one panel.
+- **Download-to-library workflow**: connect qBittorrent for search, subscriptions, download completion organization, and metadata matching.
+- **NAS-friendly**: simple Docker Compose deployment, important data stored under `data/`, suitable for low-power NAS and mini PCs.
+
+---
+
 ## Who is it for?
 
 - **Beginners** who want to edit one `docker-compose.yml` and start the service.
 - **NAS users** who want a low-resource media center for local disks and cloud storage.
 - **PT/download users** who want downloads, organization, metadata, and playback in one panel.
-- **External-player users** who want an Emby-style API for third-party apps.
+- **External-player users** who want to log in to Emby-protocol third-party apps with one MediaStationGo account.
+- **Family-sharing users** who want separate user accounts without deploying a separate media server for each person.
 - **Developers** who want to study or extend a Go + React self-hosted media app.
 
 ---
@@ -224,7 +237,8 @@ services:
 4. **Use external players**
    - Add the server as an Emby/Jellyfin-compatible server.
    - Server URL: `http://SERVER_IP:18080`.
-   - Log in with your MediaStationGo account.
+   - Use the username and password created in MediaStationGo. No separate Emby server is required.
+   - Admins can create regular users in the web UI or Bot so each person can log in with their own account.
 
 5. **Use cloud playback**
    - Configure OpenList, CloudDrive2, WebDAV, or another provider in storage settings.
@@ -324,7 +338,8 @@ Beginners should not. Editing `docker-compose.yml` directly is easier to underst
 | Libraries | Movies, TV shows, anime, variety, music, adult content |
 | Metadata | NFO, local artwork, TMDb, TheTVDB, Bangumi, Douban, Fanart, JavBus/JavDB |
 | Playback | Web playback, HTTP Range, HLS transcoding, direct links, STRMURL, 302 redirect |
-| External clients | Emby-style APIs for many third-party apps |
+| External clients | Emby-protocol compatible APIs; MediaStationGo accounts can log in to third-party players |
+| User management | Multi-user accounts, admin/regular users, expiry dates, device management, Bot registration and redeem codes |
 | Downloads | qBittorrent, site search, subscriptions, post-download organization |
 | File manager | Browse, organize, copy, move, hardlink, symlink |
 | Operations | Task queue, recycle bin, duplicate files, notifications, logs |
