@@ -124,25 +124,27 @@ http://服务器IP:18080
 
 | 来源 | 镜像地址 | 适合场景 |
 | --- | --- | --- |
-| Docker Hub | `shukbet/mediastationgo:latest` | 最常用，直接 `docker compose pull` |
-| GitHub 仓库镜像 GHCR | `ghcr.io/shukebta/mediastation-go:latest` | Docker Hub 拉取慢或不可用时备用 |
+| GitHub 仓库镜像 GHCR | `ghcr.io/shukebta/mediastation-go:latest` | 默认推荐，跟随仓库发布 |
+| Docker Hub | `shukbet/mediastationgo:latest` | 备用镜像，GHCR 拉取慢或不可用时使用 |
 
-如果想固定版本，推荐使用 Docker Hub 已发布版本标签，例如：
+如果想固定版本，请先到仓库 Packages 页面确认 GHCR 是否有对应标签。写法如下：
 
 ```yaml
-image: shukbet/mediastationgo:MediaStationGo-v0.0.72
+image: ghcr.io/shukebta/mediastation-go:<版本标签>
+# GHCR 没有对应标签时，可以用 Docker Hub 备用：
+# image: shukbet/mediastationgo:MediaStationGo-v0.0.72
 ```
 
-GHCR 固定版本请以仓库 Packages 页面已发布的标签为准；如果只想简单部署，直接使用 `latest` 即可。
+如果只想简单部署，直接使用 GHCR 的 `latest` 即可。
 
 手动拉取示例：
 
 ```bash
-# Docker Hub
-docker pull shukbet/mediastationgo:latest
-
 # GitHub 仓库镜像
 docker pull ghcr.io/shukebta/mediastation-go:latest
+
+# Docker Hub 备用
+docker pull shukbet/mediastationgo:latest
 ```
 
 你只需要重点看 `volumes` 这一段：
@@ -201,10 +203,10 @@ environment:
 services:
   mediastation-go:
     # 镜像二选一：
-    # Docker Hub：
-    image: shukbet/mediastationgo:latest
     # GitHub 仓库镜像 GHCR：
-    # image: ghcr.io/shukebta/mediastation-go:latest
+    image: ghcr.io/shukebta/mediastation-go:latest
+    # Docker Hub 备用：
+    # image: shukbet/mediastationgo:latest
 
     container_name: mediastation-go
     restart: unless-stopped
