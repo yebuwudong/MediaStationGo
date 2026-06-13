@@ -1,6 +1,9 @@
 package handler
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestCloudMountLibraryNameDefaultsToDirectoryBaseName(t *testing.T) {
 	tests := []struct {
@@ -22,5 +25,26 @@ func TestCloudMountLibraryNameDefaultsToDirectoryBaseName(t *testing.T) {
 				t.Fatalf("cloudMountLibraryName() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCloudPlaybackDiagnosticsDoNotExposeRawRefOrURL(t *testing.T) {
+	rawRef := "/剧集/国产剧/很长的敏感文件名.S01E01.mkv"
+	refHash, refExt := cloudPlaybackRefFingerprint(rawRef)
+	if refHash == "" || strings.Contains(rawRef, refHash) {
+		t.Fatalf("ref hash should be a short fingerprint, got %q", refHash)
+	}
+	if refExt != ".mkv" {
+		t.Fatalf("ref ext = %q, want .mkv", refExt)
+	}
+	if host := cloudPlaybackLinkHost("https://cdn.example.test/movie.mkv?token=secret"); host != "cdn.example.test" {
+		t.Fatalf("host = %q, want cdn.example.test", host)
+	}
+	names := cloudPlaybackHeaderNames(map[string]string{
+		"Authorization": "Bearer secret",
+		"Cookie":        "sid=secret",
+	})
+	if got := strings.Join(names, ","); got != "Authorization,Cookie" {
+		t.Fatalf("header names = %q", got)
 	}
 }

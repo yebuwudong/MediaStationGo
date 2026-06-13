@@ -3,11 +3,18 @@
 package handler
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"net/http"
+	"net/url"
+	"path"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
@@ -303,8 +310,12 @@ func serveCloudResolvedLink(svc *service.Container, c *gin.Context, typ, ref str
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "cloud storage service unavailable"})
 		return
 	}
+	resolveStart := time.Now()
 	link, err := svc.StorageCfg.CloudResolve(c.Request.Context(), typ, ref, c.Request.UserAgent())
+	resolveDur := time.Since(resolveStart)
 	if err != nil {
+		logCloudPlayback(svc, "cloud playback resolve failed",
+			append(cloudPlaybackLogFields(typ, ref, nil, resolveDur), zap.Error(err))...)
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
@@ -319,6 +330,13 @@ func serveCloudResolvedLink(svc *service.Container, c *gin.Context, typ, ref str
 	}
 	if !link.Proxy {
 		// Pure offload: send the client straight to the cloud CDN.
+		logCloudPlayback(svc, "cloud playback redirect",
+			append(cloudPlaybackLogFields(typ, ref, link, resolveDur),
+				zap.String("mode", "redirect"),
+				zap.Int("status", http.StatusFound),
+				zap.String("method", c.Request.Method),
+				zap.String("range", c.GetHeader("Range")),
+			)...)
 		c.Redirect(http.StatusFound, link.URL)
 		return
 	}
@@ -345,8 +363,18 @@ func serveCloudResolvedLink(svc *service.Container, c *gin.Context, typ, ref str
 	if c.GetHeader("Accept-Encoding") == "" {
 		req.Header.Set("Accept-Encoding", "identity")
 	}
+	upstreamStart := time.Now()
 	resp, err := http.DefaultClient.Do(req)
+	upstreamHeaderDur := time.Since(upstreamStart)
 	if err != nil {
+		logCloudPlayback(svc, "cloud playback proxy upstream failed",
+			append(cloudPlaybackLogFields(typ, ref, link, resolveDur),
+				zap.String("mode", "proxy"),
+				zap.String("method", method),
+				zap.String("range", c.GetHeader("Range")),
+				zap.Int64("upstream_header_ms", durationMilliseconds(upstreamHeaderDur)),
+				zap.Error(err),
+			)...)
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
@@ -363,9 +391,29 @@ func serveCloudResolvedLink(svc *service.Container, c *gin.Context, typ, ref str
 		c.Header("Cache-Control", "no-store")
 	}
 	c.Status(resp.StatusCode)
+	var copied int64
+	var copyErr error
+	streamStart := time.Now()
 	if c.Request.Method != http.MethodHead {
-		_, _ = io.Copy(c.Writer, resp.Body)
+		copied, copyErr = io.Copy(c.Writer, resp.Body)
 	}
+	fields := append(cloudPlaybackLogFields(typ, ref, link, resolveDur),
+		zap.String("mode", "proxy"),
+		zap.String("method", method),
+		zap.String("range", c.GetHeader("Range")),
+		zap.Int("status", resp.StatusCode),
+		zap.String("content_range", resp.Header.Get("Content-Range")),
+		zap.String("content_length", resp.Header.Get("Content-Length")),
+		zap.Int64("upstream_header_ms", durationMilliseconds(upstreamHeaderDur)),
+		zap.Int64("stream_ms", durationMilliseconds(time.Since(streamStart))),
+		zap.Int64("total_ms", durationMilliseconds(time.Since(resolveStart))),
+		zap.Int64("bytes", copied),
+	)
+	if copyErr != nil {
+		logCloudPlayback(svc, "cloud playback proxy copy failed", append(fields, zap.Error(copyErr))...)
+		return
+	}
+	logCloudPlayback(svc, "cloud playback proxy finished", fields...)
 }
 
 func isCloudImageRef(ref string) bool {
@@ -376,4 +424,65 @@ func isCloudImageRef(ref string) bool {
 		}
 	}
 	return false
+}
+
+func logCloudPlayback(svc *service.Container, msg string, fields ...zap.Field) {
+	if svc == nil || svc.Log == nil {
+		return
+	}
+	svc.Log.Info(msg, fields...)
+}
+
+func cloudPlaybackLogFields(typ, ref string, link *cloud.DirectLink, resolveDur time.Duration) []zap.Field {
+	refHash, refExt := cloudPlaybackRefFingerprint(ref)
+	fields := []zap.Field{
+		zap.String("provider", strings.TrimSpace(typ)),
+		zap.String("ref_hash", refHash),
+		zap.String("ref_ext", refExt),
+		zap.Int64("resolve_ms", durationMilliseconds(resolveDur)),
+	}
+	if link != nil {
+		fields = append(fields,
+			zap.String("target_host", cloudPlaybackLinkHost(link.URL)),
+			zap.Bool("headers_required", len(link.Headers) > 0),
+			zap.Strings("header_names", cloudPlaybackHeaderNames(link.Headers)),
+		)
+	}
+	return fields
+}
+
+func cloudPlaybackRefFingerprint(ref string) (string, string) {
+	ref = strings.TrimSpace(ref)
+	sum := sha256.Sum256([]byte(ref))
+	ext := strings.ToLower(path.Ext(strings.Trim(strings.ReplaceAll(ref, "\\", "/"), "/")))
+	return hex.EncodeToString(sum[:])[:12], ext
+}
+
+func cloudPlaybackLinkHost(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Host
+}
+
+func cloudPlaybackHeaderNames(headers map[string]string) []string {
+	if len(headers) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(headers))
+	for key := range headers {
+		if key = strings.TrimSpace(key); key != "" {
+			out = append(out, key)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func durationMilliseconds(d time.Duration) int64 {
+	if d <= 0 {
+		return 0
+	}
+	return d.Milliseconds()
 }
