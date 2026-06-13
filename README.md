@@ -376,7 +376,7 @@ cd web && npm run build
 
 ## 社区与友链
 
-- Telegram 群组：<https://t.me/MediaStationGo>
+- Telegram MediaStationGo交流群：<https://t.me/MediaStationGo>
 - NodeSeek：[https://www.nodeseek.com/](https://www.nodeseek.com/)
 - LINUX DO：[https://linux.do/](https://linux.do/)
 
