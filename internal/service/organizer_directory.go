@@ -264,7 +264,9 @@ func (o *OrganizerService) organizeSourceFile(ctx context.Context, src, sourceRo
 	if layout.MediaType == "" {
 		layout.MediaType = o.inferMediaTypeForSourceFile(src, title, season, episode)
 	}
+	var metadataMatch *Match
 	if match := o.lookupOrganizeMetadata(ctx, src, sourceRoot, layout.MediaType, title, year, season, episode, metadataCache); match != nil {
+		metadataMatch = match
 		if matchedTitle := sanitizeFilename(strings.TrimSpace(match.Title)); matchedTitle != "" {
 			title = matchedTitle
 			parsedTitle = strings.TrimSpace(match.Title)
@@ -321,9 +323,10 @@ func (o *OrganizerService) organizeSourceFile(ctx context.Context, src, sourceRo
 
 	// 去重候选：合并「目的地媒体库已扫描入库的同一媒体（按标题/年份/季集匹配，
 	// 不受目录大小写或布局影响）」与「目标文件夹内已存在的同名视频文件」。
+	externalExisting := o.existingByExternalIdentity(ctx, destRoot, metadataMatch, season, episode)
 	identityExisting := o.existingByIdentity(ctx, destRoot, parsedTitle, year, season, episode)
 	folderExisting := o.existingByFolder(destDir, episodeTag)
-	existing := mergeExistingVersionPaths(identityExisting, folderExisting)
+	existing := mergeExistingVersionPaths(externalExisting, identityExisting, folderExisting)
 	if len(existing) > 0 {
 		srcArea := o.resolutionArea(ctx, src)
 		bestArea := 0
@@ -357,7 +360,7 @@ func (o *OrganizerService) organizeSourceFile(ctx context.Context, src, sourceRo
 		}
 		// 去重：目的地已存在同一媒体且不低于来源分辨率，跳过不再整理过去。
 		reason := organizeSkipTargetExists
-		if len(identityExisting) > 0 || o.allExistingPathsInDB(ctx, existing) {
+		if len(externalExisting) > 0 || len(identityExisting) > 0 || o.allExistingPathsInDB(ctx, existing) {
 			reason = organizeSkipDuplicateLibrary
 		}
 		o.log.Debug("organize skip duplicate",
@@ -501,7 +504,9 @@ func (o *OrganizerService) lookupOrganizeMetadata(ctx context.Context, src, sour
 					zap.String("title", match.Title),
 					zap.Int("year", match.Year),
 					zap.Int("tmdb_id", match.TMDbID),
-					zap.Int("bangumi_id", match.BangumiID))
+					zap.Int("bangumi_id", match.BangumiID),
+					zap.String("douban_id", match.DoubanID),
+					zap.String("thetvdb_id", match.TheTVDBID))
 			}
 			return match
 		}
@@ -522,6 +527,8 @@ func organizeMatchFromLocalMetadata(local *LocalMetadata) *Match {
 		Year:         local.Year,
 		Rating:       local.Rating,
 		TMDbID:       local.TMDbID,
+		DoubanID:     local.DoubanID,
+		TheTVDBID:    local.TheTVDBID,
 		NSFW:         local.NSFW,
 	}
 	if local.Genres != "" {
@@ -975,6 +982,50 @@ func (o *OrganizerService) existingByIdentity(ctx context.Context, destRoot, tit
 	for _, r := range rows {
 		if r.Path != "" && pathWithin(r.Path, destRoot) {
 			out = append(out, r.Path)
+		}
+	}
+	return out
+}
+
+func (o *OrganizerService) existingByExternalIdentity(ctx context.Context, destRoot string, match *Match, season, episode int) []string {
+	if o.repo == nil || o.repo.DB == nil || match == nil {
+		return nil
+	}
+	var conds []string
+	var args []any
+	if match.TMDbID > 0 {
+		conds = append(conds, "tm_db_id = ?")
+		args = append(args, match.TMDbID)
+	}
+	if match.BangumiID > 0 {
+		conds = append(conds, "bangumi_id = ?")
+		args = append(args, match.BangumiID)
+	}
+	if strings.TrimSpace(match.DoubanID) != "" {
+		conds = append(conds, "douban_id = ?")
+		args = append(args, strings.TrimSpace(match.DoubanID))
+	}
+	if strings.TrimSpace(match.TheTVDBID) != "" {
+		conds = append(conds, "thetvdb_id = ?")
+		args = append(args, strings.TrimSpace(match.TheTVDBID))
+	}
+	if len(conds) == 0 {
+		return nil
+	}
+	q := o.repo.DB.WithContext(ctx).Model(&model.Media{}).
+		Where("deleted_at IS NULL").
+		Where("("+strings.Join(conds, " OR ")+")", args...)
+	if season > 0 || episode > 0 {
+		q = q.Where("season_num = ? AND episode_num = ?", season, episode)
+	}
+	var rows []model.Media
+	if err := q.Find(&rows).Error; err != nil {
+		return nil
+	}
+	var out []string
+	for _, row := range rows {
+		if row.Path != "" && pathWithin(row.Path, destRoot) {
+			out = append(out, row.Path)
 		}
 	}
 	return out

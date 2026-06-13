@@ -34,6 +34,7 @@ type ScraperService struct {
 	tmdb    *TMDbProvider
 	bangumi *BangumiProvider
 	thetvdb *TheTVDBProvider
+	douban  *DoubanProvider
 	fanart  *FanartProvider
 	adult   *AdultProvider
 	hub     *Hub
@@ -59,6 +60,10 @@ func NewScraperService(
 		cfg: cfg, log: log, repo: repo,
 		tmdb: tmdb, bangumi: bangumi, thetvdb: thetvdb, fanart: fanart, adult: adultProvider, hub: hub,
 	}
+}
+
+func (s *ScraperService) SetDouban(douban *DoubanProvider) {
+	s.douban = douban
 }
 
 // yearPattern extracts a 4-digit year (1900-2099).
@@ -309,6 +314,12 @@ func (s *ScraperService) applyProviderMatch(ctx context.Context, m *model.Media,
 	if match.BangumiID > 0 {
 		updates["bangumi_id"] = match.BangumiID
 	}
+	if match.DoubanID != "" {
+		updates["douban_id"] = match.DoubanID
+	}
+	if match.TheTVDBID != "" {
+		updates["thetvdb_id"] = match.TheTVDBID
+	}
 	if match.NSFW {
 		updates["nsfw"] = true
 	}
@@ -368,6 +379,8 @@ func (s *ScraperService) applyProviderMatch(ctx context.Context, m *model.Media,
 		"title":      match.Title,
 		"tmdb_id":    match.TMDbID,
 		"bangumi_id": match.BangumiID,
+		"douban_id":  match.DoubanID,
+		"thetvdb_id": match.TheTVDBID,
 		"source":     map[bool]string{true: "adult"}[match.NSFW],
 	})
 	return nil
@@ -408,6 +421,12 @@ func (s *ScraperService) applyLocalMetadataMatch(ctx context.Context, m *model.M
 	if next.BangumiID > 0 {
 		updates["bangumi_id"] = next.BangumiID
 	}
+	if next.DoubanID != "" {
+		updates["douban_id"] = next.DoubanID
+	}
+	if next.TheTVDBID != "" {
+		updates["thetvdb_id"] = next.TheTVDBID
+	}
 	if next.SeasonNum > 0 {
 		updates["season_num"] = next.SeasonNum
 	}
@@ -431,10 +450,11 @@ func (s *ScraperService) applyLocalMetadataMatch(ctx context.Context, m *model.M
 		return err
 	}
 	s.hub.Publish("scrape", map[string]any{
-		"media_id": m.ID,
-		"title":    next.Title,
-		"tmdb_id":  next.TMDbID,
-		"source":   "local_nfo",
+		"media_id":  m.ID,
+		"title":     next.Title,
+		"tmdb_id":   next.TMDbID,
+		"douban_id": next.DoubanID,
+		"source":    "local_nfo",
 	})
 	return nil
 }
@@ -558,7 +578,7 @@ func librarySupportsSeasons(lib *model.Library) bool {
 // 库类型决定首选 provider：
 //
 //	anime  -> Bangumi  -> TMDb /search/tv  -> TMDb /search/movie
-//	tv     -> TheTVDB  -> TMDb /search/tv  -> TMDb /search/movie
+//	tv     -> TMDb /search/tv -> TMDb /search/movie -> TheTVDB
 //	movie  -> TMDb /search/movie
 //	(空)    -> TMDb /search/movie
 //
@@ -578,14 +598,6 @@ func (s *ScraperService) lookup(ctx context.Context, lib *model.Library, query s
 				s.log.Debug("bangumi search failed", zap.String("query", query), zap.Error(err))
 			}
 		}
-	case "tv", "variety", "show", "shows":
-		if s.thetvdb != nil && s.thetvdb.Enabled() {
-			if m, err := s.thetvdb.SearchSeries(ctx, query); err == nil && m != nil {
-				return m
-			} else if err != nil {
-				s.log.Debug("thetvdb search failed", zap.String("query", query), zap.Error(err))
-			}
-		}
 	}
 	if s.tmdb != nil && s.tmdb.Enabled() {
 		// anime / tv 先用 TMDb /search/tv（剧名通常是 TV 类目）。
@@ -600,6 +612,20 @@ func (s *ScraperService) lookup(ctx context.Context, lib *model.Library, query s
 			return m
 		} else if err != nil {
 			s.log.Debug("tmdb movie search failed", zap.String("query", query), zap.Error(err))
+		}
+	}
+	if (kind == "anime" || kind == "tv" || kind == "variety" || kind == "show" || kind == "shows") && s.thetvdb != nil && s.thetvdb.Enabled() {
+		if m, err := s.thetvdb.SearchSeries(ctx, query); err == nil && m != nil {
+			return m
+		} else if err != nil {
+			s.log.Debug("thetvdb search failed", zap.String("query", query), zap.Error(err))
+		}
+	}
+	if s.douban != nil && s.douban.Enabled() {
+		if m, err := s.douban.SearchMatch(ctx, query); err == nil && m != nil {
+			return m
+		} else if err != nil {
+			s.log.Debug("douban search failed", zap.String("query", query), zap.Error(err))
 		}
 	}
 	return nil
@@ -722,6 +748,9 @@ func (s *ScraperService) AnyEnabled() bool {
 		return true
 	}
 	if s.adult != nil && s.adult.Enabled() {
+		return true
+	}
+	if s.douban != nil && s.douban.Enabled() {
 		return true
 	}
 	return false

@@ -126,6 +126,8 @@ func (t *TMDbProvider) resolveBaseURL(ctx context.Context) string {
 type Match struct {
 	TMDbID       int      `json:"tmdb_id"`
 	BangumiID    int      `json:"bangumi_id"`
+	DoubanID     string   `json:"douban_id,omitempty"`
+	TheTVDBID    string   `json:"thetvdb_id,omitempty"`
 	Title        string   `json:"title"`
 	OriginalName string   `json:"original_name,omitempty"`
 	Overview     string   `json:"overview"`

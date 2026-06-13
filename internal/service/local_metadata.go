@@ -25,6 +25,8 @@ type LocalMetadata struct {
 	PosterURL    string
 	BackdropURL  string
 	TMDbID       int
+	DoubanID     string
+	TheTVDBID    string
 	SeasonNum    int
 	EpisodeNum   int
 	Genres       string
@@ -257,6 +259,8 @@ func metadataFromDoc(doc *nfoDocument, baseDir string, seriesLike bool) *LocalMe
 		PosterURL:    firstRemoteURL(baseDir, nfoPosterValues(doc)...),
 		BackdropURL:  firstRemoteURL(baseDir, nfoBackdropValues(doc)...),
 		TMDbID:       doc.TMDbID,
+		DoubanID:     externalIDFromUniqueIDs(doc.UniqueIDs, "douban"),
+		TheTVDBID:    externalIDFromUniqueIDs(doc.UniqueIDs, "thetvdb", "tvdb"),
 		SeasonNum:    doc.Season,
 		EpisodeNum:   doc.Episode,
 		Genres:       joinNFOValues(adultAwareGenres(doc)),
@@ -391,6 +395,12 @@ func mergeEpisodeMetadata(dst, episode *LocalMetadata, doc *nfoDocument) {
 	if episode.TMDbID > 0 {
 		dst.TMDbID = episode.TMDbID
 	}
+	if episode.DoubanID != "" {
+		dst.DoubanID = episode.DoubanID
+	}
+	if episode.TheTVDBID != "" {
+		dst.TheTVDBID = episode.TheTVDBID
+	}
 	if episode.SeasonNum > 0 {
 		dst.SeasonNum = episode.SeasonNum
 	}
@@ -409,13 +419,24 @@ func mergeEpisodeMetadata(dst, episode *LocalMetadata, doc *nfoDocument) {
 }
 
 func tmdbIDFromUniqueIDs(ids []nfoUniqueID) int {
+	value := externalIDFromUniqueIDs(ids, "tmdb")
+	if value == "" {
+		return 0
+	}
+	v, _ := strconv.Atoi(value)
+	return v
+}
+
+func externalIDFromUniqueIDs(ids []nfoUniqueID, types ...string) string {
 	for _, id := range ids {
-		if strings.EqualFold(strings.TrimSpace(id.Type), "tmdb") {
-			v, _ := strconv.Atoi(strings.TrimSpace(id.Value))
-			return v
+		idType := strings.TrimSpace(id.Type)
+		for _, typ := range types {
+			if strings.EqualFold(idType, typ) {
+				return strings.TrimSpace(id.Value)
+			}
 		}
 	}
-	return 0
+	return ""
 }
 
 func firstRemoteURL(baseDir string, values ...string) string {

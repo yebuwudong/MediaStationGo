@@ -128,6 +128,7 @@ func (t *TheTVDBProvider) SearchSeries(ctx context.Context, query string) (*Matc
 	}
 	r := p.Data[0]
 	m := &Match{
+		TheTVDBID: r.ID,
 		Title:     r.Name,
 		Overview:  r.Overview,
 		PosterURL: r.Image,

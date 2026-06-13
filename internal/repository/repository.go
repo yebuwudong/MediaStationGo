@@ -385,6 +385,12 @@ func (r *MediaRepository) upsert(ctx context.Context, m *model.Media) error {
 		if m.BangumiID > 0 {
 			setIfChanged(updates, "bangumi_id", existing.BangumiID, m.BangumiID)
 		}
+		if m.DoubanID != "" {
+			setIfChanged(updates, "douban_id", existing.DoubanID, m.DoubanID)
+		}
+		if m.TheTVDBID != "" {
+			setIfChanged(updates, "thetvdb_id", existing.TheTVDBID, m.TheTVDBID)
+		}
 		if m.Languages != "" {
 			setIfChanged(updates, "languages", existing.Languages, m.Languages)
 		}

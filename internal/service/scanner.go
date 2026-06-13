@@ -1734,6 +1734,12 @@ func applyLocalMetadata(m *model.Media, local *LocalMetadata) {
 	if local.TMDbID > 0 {
 		m.TMDbID = local.TMDbID
 	}
+	if local.DoubanID != "" {
+		m.DoubanID = local.DoubanID
+	}
+	if local.TheTVDBID != "" {
+		m.TheTVDBID = local.TheTVDBID
+	}
 	if local.SeasonNum > 0 {
 		m.SeasonNum = local.SeasonNum
 	}
@@ -1768,6 +1774,8 @@ func localHasDescriptiveMetadata(local *LocalMetadata) bool {
 		local.Overview != "" ||
 		local.Rating > 0 ||
 		local.TMDbID > 0 ||
+		local.DoubanID != "" ||
+		local.TheTVDBID != "" ||
 		local.Genres != "" ||
 		local.Countries != "" ||
 		local.Languages != ""

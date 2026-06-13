@@ -115,6 +115,23 @@ func (d *DoubanProvider) Search(ctx context.Context, query string) (*DoubanMatch
 	}, nil
 }
 
+func (d *DoubanProvider) SearchMatch(ctx context.Context, query string) (*Match, error) {
+	got, err := d.Search(ctx, query)
+	if err != nil || got == nil {
+		return nil, err
+	}
+	match := &Match{
+		DoubanID:  got.DoubanID,
+		Title:     got.Title,
+		PosterURL: got.Img,
+		Rating:    got.Rating,
+	}
+	if len(got.Year) >= 4 {
+		_, _ = fmt.Sscanf(got.Year[:4], "%d", &match.Year)
+	}
+	return match, nil
+}
+
 func (d *DoubanProvider) setHeaders(req *http.Request) {
 	req.Header.Set("User-Agent", userAgents[secureRandomIntn(len(userAgents))])
 	req.Header.Set("Referer", "https://movie.douban.com/")

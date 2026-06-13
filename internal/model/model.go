@@ -91,6 +91,8 @@ type Media struct {
 	ScrapeStatus string  `gorm:"size:16;default:pending" json:"scrape_status"`
 	TMDbID       int     `json:"tmdb_id"`
 	BangumiID    int     `json:"bangumi_id"`
+	DoubanID     string  `gorm:"column:douban_id;size:32" json:"douban_id,omitempty"`
+	TheTVDBID    string  `gorm:"column:thetvdb_id;size:64" json:"thetvdb_id,omitempty"`
 	Languages    string  `gorm:"size:64"  json:"languages,omitempty"` // 逗号分隔的 ISO 639-1 代码，如 "zh,en"
 	Countries    string  `gorm:"size:128" json:"countries,omitempty"` // 逗号分隔的 ISO 3166-1，如 "CN,US"
 	Genres       string  `gorm:"size:255" json:"genres,omitempty"`    // 逗号分隔的类型名，如 "Action,Animation"
@@ -150,6 +152,8 @@ type Series struct {
 	Year        int     `json:"year"`
 	TMDbID      int     `json:"tmdb_id"`
 	BangumiID   int     `json:"bangumi_id"`
+	DoubanID    string  `gorm:"column:douban_id;size:32" json:"douban_id,omitempty"`
+	TheTVDBID   string  `gorm:"column:thetvdb_id;size:64" json:"thetvdb_id,omitempty"`
 }
 
 // PlaybackHistory 记录当前播放位置以支持续播。

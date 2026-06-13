@@ -1,10 +1,13 @@
 // Package service — duplicate-file finder.
 //
-// DuplicateService computes a sparse-sample SHA-256 (head + middle + tail,
-// 1 MiB each, plus the file size to break collisions) for every media
-// file and groups identical hashes into "duplicate sets". The first row
-// (preferring scraped + larger files) is kept as the primary; the rest
-// get is_duplicate = true and duplicate_of pointing at the primary.
+// DuplicateService finds duplicate media by two signals:
+//
+//   - external identity: same TMDb / Bangumi / Douban / TheTVDB id and, for
+//     episodes, same season+episode;
+//   - sparse file hash: same head + middle + tail SHA-256 and same size.
+//
+// The first row (preferring scraped + larger files) is kept as the primary;
+// the rest get is_duplicate = true and duplicate_of pointing at the primary.
 //
 // Why sparse: a full hash on a 50 GB Blu-ray remux takes minutes; the
 // 3-window 3 MiB sample is enough to differentiate real-world copies
@@ -121,34 +124,19 @@ func (d *DuplicateService) Detect(ctx context.Context, libraryID string) (*Repor
 		groups[r.FileHash] = append(groups[r.FileHash], r)
 	}
 
+	markedIDs := map[string]struct{}{}
 	for hash, group := range groups {
 		if len(group) < 2 {
 			continue
 		}
-		primary := pickPrimary(group)
-		dupes := make([]model.Media, 0, len(group)-1)
-		for _, m := range group {
-			if m.ID == primary.ID {
-				continue
-			}
-			dupes = append(dupes, m)
-			if err := d.repo.DB.WithContext(ctx).
-				Model(&model.Media{}).
-				Where("id = ?", m.ID).
-				Updates(map[string]any{
-					"is_duplicate": true,
-					"duplicate_of": primary.ID,
-				}).Error; err != nil {
-				d.log.Warn("dup mark failed", zap.Error(err))
-				continue
-			}
-			rep.ItemsMarked++
+		d.markDuplicateGroup(ctx, rep, hash, group, markedIDs)
+	}
+
+	for key, group := range groupByExternalIdentity(rows) {
+		if len(group) < 2 {
+			continue
 		}
-		rep.Groups = append(rep.Groups, Group{
-			Hash:       hash,
-			Primary:    primary,
-			Duplicates: dupes,
-		})
+		d.markDuplicateGroup(ctx, rep, key, group, markedIDs)
 	}
 	rep.GroupsFound = len(rep.Groups)
 	if d.hub != nil {
@@ -159,6 +147,72 @@ func (d *DuplicateService) Detect(ctx context.Context, libraryID string) (*Repor
 		})
 	}
 	return rep, nil
+}
+
+func (d *DuplicateService) markDuplicateGroup(ctx context.Context, rep *Report, key string, group []model.Media, markedIDs map[string]struct{}) {
+	primary := pickPrimary(group)
+	dupes := make([]model.Media, 0, len(group)-1)
+	for _, m := range group {
+		if m.ID == primary.ID || m.DuplicateOf == primary.ID {
+			continue
+		}
+		if _, ok := markedIDs[m.ID]; ok {
+			continue
+		}
+		dupes = append(dupes, m)
+		if err := d.repo.DB.WithContext(ctx).
+			Model(&model.Media{}).
+			Where("id = ?", m.ID).
+			Updates(map[string]any{
+				"is_duplicate": true,
+				"duplicate_of": primary.ID,
+			}).Error; err != nil {
+			d.log.Warn("dup mark failed", zap.Error(err))
+			continue
+		}
+		markedIDs[m.ID] = struct{}{}
+		rep.ItemsMarked++
+	}
+	if len(dupes) == 0 {
+		return
+	}
+	rep.Groups = append(rep.Groups, Group{
+		Hash:       key,
+		Primary:    primary,
+		Duplicates: dupes,
+	})
+}
+
+func groupByExternalIdentity(rows []model.Media) map[string][]model.Media {
+	groups := map[string][]model.Media{}
+	for _, row := range rows {
+		key := mediaExternalIdentityKey(row)
+		if key == "" {
+			continue
+		}
+		groups[key] = append(groups[key], row)
+	}
+	return groups
+}
+
+func mediaExternalIdentityKey(row model.Media) string {
+	var key string
+	switch {
+	case row.TMDbID > 0:
+		key = fmt.Sprintf("tmdb:%d", row.TMDbID)
+	case row.BangumiID > 0:
+		key = fmt.Sprintf("bangumi:%d", row.BangumiID)
+	case row.DoubanID != "":
+		key = "douban:" + row.DoubanID
+	case row.TheTVDBID != "":
+		key = "thetvdb:" + row.TheTVDBID
+	default:
+		return ""
+	}
+	if row.SeasonNum > 0 || row.EpisodeNum > 0 {
+		key += fmt.Sprintf(":s%d:e%d", row.SeasonNum, row.EpisodeNum)
+	}
+	return key
 }
 
 // Current returns duplicate groups already marked in the database. It keeps
