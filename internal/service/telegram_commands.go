@@ -74,6 +74,58 @@ func (s *TelegramBotService) telegramCommandDefinitions(ctx context.Context, cha
 		{Aliases: []string{"/search"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdSearch(ctx, args) }},
 		{Aliases: []string{"/downloads"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdDownloads(ctx) }},
 		{Aliases: []string{"/stats"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdStats(ctx) }},
+		{Aliases: []string{"/renew"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdUserRenew(ctx, args), nil }},
+		{Aliases: []string{"/ucr"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdSakuraCreateUser(ctx, args), nil }},
+		{Aliases: []string{"/uinfo"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdSakuraUserInfo(ctx, args), nil }},
+		{Aliases: []string{"/rmemby", "/urm", "/only_rm_emby"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdSakuraDeleteUser(ctx, args), nil }},
+		{Aliases: []string{"/only_rm_record"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdSakuraOnlyRemoveRecord(ctx, args), nil }},
+		{Aliases: []string{"/userip"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdSakuraUserIP(ctx, args), nil }},
+		{Aliases: []string{"/udeviceid"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) {
+			return s.cmdSakuraAuditDevices(ctx, "udeviceid", args), nil
+		}},
+		{Aliases: []string{"/auditip"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) {
+			return s.cmdSakuraAuditDevices(ctx, "auditip", args), nil
+		}},
+		{Aliases: []string{"/auditdevice"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) {
+			return s.cmdSakuraAuditDevices(ctx, "auditdevice", args), nil
+		}},
+		{Aliases: []string{"/auditclient"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) {
+			return s.cmdSakuraAuditDevices(ctx, "auditclient", args), nil
+		}},
+		{Aliases: []string{"/renewall"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdSakuraRenewAll(ctx, args), nil }},
+		{Aliases: []string{"/callall"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdSakuraCallAll(ctx, channel, args), nil }},
+		{Aliases: []string{"/syncunbound"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdSakuraSyncUnbound(ctx, args), nil }},
+		{Aliases: []string{"/syncgroupm", "/kick_not_emby"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) {
+			return s.cmdSakuraUnsupported("群成员全量同步", "<code>/syncunbound</code> 检查未绑定 Bot 的站内账号"), nil
+		}},
+		{Aliases: []string{"/scan_embyname"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdSakuraScanNames(ctx), nil }},
+		{Aliases: []string{"/check_ex"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdSakuraCheckExpired(ctx, args), nil }},
+		{Aliases: []string{"/deleted", "/low_activity"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdCleanup(ctx, []string{"run"}), nil }},
+		{Aliases: []string{"/uranks"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdSakuraRanks(ctx, 0, true), nil }},
+		{Aliases: []string{"/days_ranks"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) {
+			return s.cmdSakuraRanks(ctx, 24*time.Hour, false), nil
+		}},
+		{Aliases: []string{"/week_ranks"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) {
+			return s.cmdSakuraRanks(ctx, 7*24*time.Hour, false), nil
+		}},
+		{Aliases: []string{"/embyadmin"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdSakuraAdminRole(ctx, args), nil }},
+		{Aliases: []string{"/unbanall"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdSakuraBanAll(ctx, true, args), nil }},
+		{Aliases: []string{"/banall"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdSakuraBanAll(ctx, false, args), nil }},
+		{Aliases: []string{"/embylibs_unblockall", "/extraembylibs_unblockall"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) {
+			return s.cmdSakuraMediaAccessAll(ctx, true), nil
+		}},
+		{Aliases: []string{"/embylibs_blockall", "/extraembylibs_blockall"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) {
+			return s.cmdSakuraMediaAccessAll(ctx, false), nil
+		}},
+		{Aliases: []string{"/proadmin"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) {
+			return s.cmdSakuraBotAdmin(ctx, channel, args, true), nil
+		}},
+		{Aliases: []string{"/revadmin"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) {
+			return s.cmdSakuraBotAdmin(ctx, channel, args, false), nil
+		}},
+		{Aliases: []string{"/backup_db", "/restore_from_db", "/restart", "/update_bot", "/paolu", "/bindall_id", "/sync_favorites", "/coins", "/score", "/coinsall", "/coinsclear", "/red", "/srank", "/prouser", "/revuser", "/white_channel", "/rev_white_channel", "/unban_channel"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) {
+			return s.cmdSakuraUnsupported("Sakura 专属命令", "这些命令涉及外部 Bot 自身运维/积分红包/皮套人管理，已在 MediaStationGo 中由权限、通知渠道、设备策略替代。"), nil
+		}},
 	}
 }
 
@@ -135,6 +187,15 @@ var telegramSupportedCommandSet = map[string]struct{}{
 	"/capacity": {}, "/users": {}, "/gencode": {}, "/renew_user": {}, "/delete_user": {}, "/unbind": {}, "/unbind_duplicates": {}, "/unbind_inactive": {},
 	"/devicepolicy": {}, "/policy": {}, "/antishare": {}, "/cleanup": {}, "/cleanup_mode": {}, "/cleanup_rule": {},
 	"/ban": {}, "/unban": {}, "/status": {}, "/search": {}, "/downloads": {}, "/stats": {},
+	"/renew": {}, "/ucr": {}, "/uinfo": {}, "/rmemby": {}, "/urm": {}, "/only_rm_emby": {}, "/only_rm_record": {},
+	"/userip": {}, "/udeviceid": {}, "/auditip": {}, "/auditdevice": {}, "/auditclient": {},
+	"/renewall": {}, "/callall": {}, "/syncunbound": {}, "/syncgroupm": {}, "/kick_not_emby": {}, "/scan_embyname": {},
+	"/check_ex": {}, "/deleted": {}, "/low_activity": {}, "/uranks": {}, "/days_ranks": {}, "/week_ranks": {},
+	"/embyadmin": {}, "/unbanall": {}, "/banall": {}, "/embylibs_unblockall": {}, "/embylibs_blockall": {},
+	"/extraembylibs_unblockall": {}, "/extraembylibs_blockall": {}, "/proadmin": {}, "/revadmin": {},
+	"/backup_db": {}, "/restore_from_db": {}, "/restart": {}, "/update_bot": {}, "/paolu": {}, "/bindall_id": {}, "/sync_favorites": {},
+	"/coins": {}, "/score": {}, "/coinsall": {}, "/coinsclear": {}, "/red": {}, "/srank": {}, "/prouser": {}, "/revuser": {},
+	"/white_channel": {}, "/rev_white_channel": {}, "/unban_channel": {},
 }
 
 type telegramBotCommand struct {
