@@ -5,6 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+
+	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
 
@@ -170,5 +173,106 @@ func TestSakuraSyncExpiryAndBotAdminCommands(t *testing.T) {
 	cfg := bot.telegramChannelConfig(updated)
 	if !strings.Contains(cfg["admin_user_ids"], "9602") {
 		t.Fatalf("expected admin ids to include 9602, got %#v", cfg)
+	}
+}
+
+func TestSakuraProtectedUsersAndBackupCommands(t *testing.T) {
+	ctx := t.Context()
+	repos, bot := newBotTestService(t)
+	cfg := &config.Config{}
+	cfg.App.DataDir = t.TempDir()
+	bot.SetBackupService(NewBackupService(cfg, zap.NewNop(), repos.DB))
+
+	channel := &model.NotifyChannel{Name: "Telegram", Type: "telegram", Enabled: true, Config: `{"admin_user_ids":"9701"}`}
+	msg := &TelegramMessage{From: TelegramUser{ID: 9701, Username: "admin"}, Chat: TelegramChat{ID: 9701, Type: "private"}}
+	users := []*model.User{
+		{Username: "root", PasswordHash: "x", Role: "admin", IsActive: true},
+		{Username: "safe", PasswordHash: "x", Role: "user", IsActive: true},
+		{Username: "normal", PasswordHash: "x", Role: "user", IsActive: true},
+	}
+	for _, user := range users {
+		if err := repos.User.Create(ctx, user); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reply, err := bot.executeCommand(ctx, channel, msg, "/prouser safe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reply.Text, "已加入保护名单") {
+		t.Fatalf("expected protect success, got %q", reply.Text)
+	}
+	if reason := bot.protectReason(ctx, users[1].ID); !strings.Contains(reason, "保护名单") {
+		t.Fatalf("protected user should have protect reason, got %q", reason)
+	}
+	reply, err = bot.executeCommand(ctx, channel, msg, "/banall confirm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reply.Text, "已禁用普通用户") {
+		t.Fatalf("expected banall success, got %q", reply.Text)
+	}
+	protected, _ := repos.User.FindByUsername(ctx, "safe")
+	normal, _ := repos.User.FindByUsername(ctx, "normal")
+	if !protected.IsActive {
+		t.Fatal("protected user should not be disabled by banall")
+	}
+	if normal.IsActive {
+		t.Fatal("normal user should be disabled by banall")
+	}
+	reply, err = bot.executeCommand(ctx, channel, msg, "/revuser safe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reply.Text, "已移出保护名单") {
+		t.Fatalf("expected unprotect success, got %q", reply.Text)
+	}
+
+	reply, err = bot.executeCommand(ctx, channel, msg, "/backup_db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reply.Text, "数据库备份完成") {
+		t.Fatalf("backup_db should create backup, got %q", reply.Text)
+	}
+	reply, err = bot.executeCommand(ctx, channel, msg, "/restore_from_db list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reply.Text, "mediastation_") {
+		t.Fatalf("restore list should show backup, got %q", reply.Text)
+	}
+}
+
+func TestSakuraAliasesAndSyncGroupGuards(t *testing.T) {
+	ctx := t.Context()
+	repos, bot := newBotTestService(t)
+	if err := repos.User.Create(ctx, &model.User{Username: "root", PasswordHash: "x", Role: "admin", IsActive: true}); err != nil {
+		t.Fatal(err)
+	}
+	channel := &model.NotifyChannel{Name: "Telegram", Type: "telegram", Enabled: true, Config: `{"admin_user_ids":"9801"}`}
+	msg := &TelegramMessage{From: TelegramUser{ID: 9801, Username: "admin"}, Chat: TelegramChat{ID: 9801, Type: "private"}}
+
+	reply, err := bot.executeCommand(ctx, channel, msg, "/kk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reply.Text, "用户管理") {
+		t.Fatalf("/kk should map to user management, got %q", reply.Text)
+	}
+	reply, err = bot.executeCommand(ctx, channel, msg, "/syncgroupm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reply.Text, "未配置可校验成员") {
+		t.Fatalf("syncgroupm should explain missing group config, got %q", reply.Text)
+	}
+	reply, err = bot.executeCommand(ctx, channel, msg, "/kick_not_emby")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reply.Text, "无法枚举全部群成员") {
+		t.Fatalf("kick_not_emby should explain Telegram limitation, got %q", reply.Text)
 	}
 }

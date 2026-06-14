@@ -138,6 +138,7 @@ func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Cont
 	deviceSvc := NewDeviceService(log, repos)
 	telegramBot := NewTelegramBotService(log, repos, crypto, authSvc)
 	telegramBot.SetDeviceService(deviceSvc)
+	telegramBot.SetBackupService(backup)
 	// Allow the device-enforcement service to DM users (warnings / deletions)
 	// through their Telegram binding before any destructive action.
 	deviceSvc.SetNotifier(telegramBot.NotifyUserByID)
@@ -271,7 +272,7 @@ func (c *Container) Boot() {
 	// 自动扫描云盘媒体库，使内容对所有用户立即可见
 	c.BootCloudLibraries(c.stopCtx)
 
-	// 账号删号/保号规则巡检：默认关闭，由管理员通过 Telegram Bot 命令开启。
+	// Sakura 保号规则巡检：默认关闭，由管理员通过 Telegram Bot 命令开启。
 	// 每天触发一次评估；规则里的窗口可随机，不固定。
 	if c.Device != nil {
 		go c.runInactivitySweeper(c.stopCtx)

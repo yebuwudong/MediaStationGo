@@ -197,11 +197,14 @@ func updateUserStatusHandler(svc *service.Container) gin.HandlerFunc {
 
 func annotateProtectedUsers(ctx context.Context, svc *service.Container, users []model.User) error {
 	firstAdmin, err := svc.Repo.User.FirstAdmin(ctx)
-	if err != nil || firstAdmin == nil {
+	if err != nil {
 		return err
 	}
 	for i := range users {
-		if users[i].ID == firstAdmin.ID {
+		if service.UserIsProtectedAccount(ctx, svc.Repo, &users[i]) {
+			users[i].IsProtected = true
+		}
+		if firstAdmin != nil && users[i].ID == firstAdmin.ID {
 			users[i].IsDefaultAdmin = true
 			users[i].IsProtected = true
 			users[i].Role = "admin"

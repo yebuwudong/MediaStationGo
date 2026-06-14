@@ -77,6 +77,7 @@ type TelegramBotService struct {
 	crypto *CryptoService
 	auth   *AuthService
 	device *DeviceService
+	backup *BackupService
 
 	pollingMu     sync.Mutex
 	pollingCancel map[string]context.CancelFunc // bot_token -> cancel
@@ -95,6 +96,9 @@ type pendingInput struct {
 // SetDeviceService wires the device-management service used by the device
 // menu (list / kick) and enforcement notifications.
 func (s *TelegramBotService) SetDeviceService(d *DeviceService) { s.device = d }
+
+// SetBackupService wires database backup/restore commands.
+func (s *TelegramBotService) SetBackupService(b *BackupService) { s.backup = b }
 
 // NotifyUserByID sends a Telegram message to the local user identified by
 // userID, resolved through their Telegram binding. Used by enforcement to warn
@@ -519,9 +523,9 @@ func (s *TelegramBotService) cmdHelp(ctx context.Context, msg *TelegramMessage) 
 		"<b>/unbind 用户1 用户2</b> — 批量解绑 Telegram 绑定（管理员）\n" +
 		"<b>/unbind_duplicates</b> / <b>/unbind_inactive 天数</b> — 清理重复/无效绑定或久未登录绑定（管理员）\n" +
 		"<b>/antishare on play=3 login=3 warn=2</b> — 防共享策略（管理员）\n" +
-		"<b>/cleanup on|off|run</b> — 删号规则开关/巡检（管理员）\n" +
+		"<b>/cleanup on|off|run</b> — 保号规则开关/巡检（管理员）\n" +
 		"<b>/cleanup_mode any|all|count 2</b> — 保号模式（管理员）\n" +
-		"<b>/cleanup_rule list|add|del|enable|disable</b> — 保号规则（管理员）\n" +
+		"<b>/cleanup_rule list|add|edit|del|enable|disable</b> — Sakura 保号规则（管理员）\n" +
 		"<b>/ban 用户名</b> / <b>/unban 用户名</b> — 禁用/解禁用户（管理员）\n" +
 		"<b>/hideadult on|off</b> — 隐藏/显示当前绑定账号的成人目录\n" +
 		"<b>/status</b> — 系统运行状态\n" +

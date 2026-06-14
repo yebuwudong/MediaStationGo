@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -212,7 +213,10 @@ func (s *TelegramBotService) cmdSakuraBanAll(ctx context.Context, active bool, a
 	}
 	var count int
 	for _, user := range users {
-		if user.Role == "admin" {
+		if !active && UserIsProtectedAccount(ctx, s.repo, &user) {
+			continue
+		}
+		if active && user.Role == "admin" {
 			continue
 		}
 		updates := map[string]any{"is_active": active}
@@ -266,6 +270,9 @@ func (s *TelegramBotService) cmdSakuraSyncUnbound(ctx context.Context, args []st
 	if len(args) >= 2 && strings.EqualFold(args[0], "delete") && strings.EqualFold(args[1], "confirm") {
 		deleted := 0
 		for _, user := range users {
+			if UserIsProtectedAccount(ctx, s.repo, &user) {
+				continue
+			}
 			_ = s.repo.UserDevice.DeleteByUser(ctx, user.ID)
 			if err := s.repo.User.Delete(ctx, user.ID); err == nil {
 				deleted++
@@ -295,7 +302,7 @@ func (s *TelegramBotService) cmdSakuraCheckExpired(ctx context.Context, args []s
 	if len(args) >= 2 && strings.EqualFold(args[0], "disable") && strings.EqualFold(args[1], "confirm") {
 		disabled := 0
 		for _, user := range users {
-			if user.Role == "admin" {
+			if UserIsProtectedAccount(ctx, s.repo, &user) {
 				continue
 			}
 			if err := s.repo.User.UpdateFields(ctx, user.ID, map[string]any{"is_active": false}); err == nil {
@@ -480,6 +487,169 @@ func (s *TelegramBotService) cmdSakuraBotAdmin(ctx context.Context, channel *mod
 		return telegramCommandReply{Text: "已添加 Bot 管理员：<code>" + tgID + "</code>"}
 	}
 	return telegramCommandReply{Text: "已移除 Bot 管理员：<code>" + tgID + "</code>"}
+}
+
+func (s *TelegramBotService) cmdSakuraProtectedUser(ctx context.Context, args []string, protect bool) telegramCommandReply {
+	if len(args) == 0 || strings.EqualFold(args[0], "list") {
+		return s.cmdSakuraProtectedUserList(ctx)
+	}
+	user := s.findSakuraUser(ctx, args[0])
+	if user == nil {
+		return telegramCommandReply{Text: "未找到用户。"}
+	}
+	ids := ProtectedUserIDSet(ctx, s.repo)
+	if protect {
+		ids[user.ID] = struct{}{}
+		if err := SaveProtectedUserIDSet(ctx, s.repo, ids); err != nil {
+			return telegramCommandReply{Text: "保存保护名单失败：" + err.Error()}
+		}
+		return telegramCommandReply{Text: fmt.Sprintf("已加入保护名单：<b>%s</b>。\n该用户不会被 Bot 自动清理、批量禁用或删除。", user.Username)}
+	}
+	delete(ids, user.ID)
+	if err := SaveProtectedUserIDSet(ctx, s.repo, ids); err != nil {
+		return telegramCommandReply{Text: "保存保护名单失败：" + err.Error()}
+	}
+	return telegramCommandReply{Text: fmt.Sprintf("已移出保护名单：<b>%s</b>。", user.Username)}
+}
+
+func (s *TelegramBotService) cmdSakuraProtectedUserList(ctx context.Context) telegramCommandReply {
+	ids := ProtectedUserIDSet(ctx, s.repo)
+	if len(ids) == 0 {
+		return telegramCommandReply{Text: "保护名单为空。管理员和默认管理员始终自动保护。"}
+	}
+	names := make([]string, 0, len(ids))
+	for id := range ids {
+		if user, _ := s.repo.User.FindByID(ctx, id); user != nil {
+			names = append(names, user.Username)
+		} else {
+			names = append(names, id+"(用户不存在)")
+		}
+	}
+	sort.Strings(names)
+	return telegramCommandReply{Text: fmt.Sprintf("保护名单：<b>%d</b> 个。\n%s", len(names), telegramInlineCodeList(names))}
+}
+
+func (s *TelegramBotService) cmdSakuraBackupDB(ctx context.Context) telegramCommandReply {
+	if s.backup == nil {
+		return telegramCommandReply{Text: "备份服务暂不可用。"}
+	}
+	info, err := s.backup.Create(ctx)
+	if err != nil {
+		return telegramCommandReply{Text: "数据库备份失败：" + err.Error()}
+	}
+	return telegramCommandReply{Text: fmt.Sprintf("数据库备份完成：<code>%s</code>\n大小：<b>%d</b> bytes", info.Filename, info.Size)}
+}
+
+func (s *TelegramBotService) cmdSakuraRestoreDB(ctx context.Context, args []string) telegramCommandReply {
+	if s.backup == nil {
+		return telegramCommandReply{Text: "备份服务暂不可用。"}
+	}
+	if len(args) == 0 || strings.EqualFold(args[0], "list") {
+		items, err := s.backup.List()
+		if err != nil {
+			return telegramCommandReply{Text: "读取备份列表失败：" + err.Error()}
+		}
+		if len(items) == 0 {
+			return telegramCommandReply{Text: "暂无数据库备份。可先使用 <code>/backup_db</code> 创建。"}
+		}
+		lines := make([]string, 0, minInt(len(items), 10))
+		for i, item := range items {
+			if i >= 10 {
+				break
+			}
+			lines = append(lines, fmt.Sprintf("%s（%d bytes）", item.Filename, item.Size))
+		}
+		return telegramCommandReply{Text: "可恢复备份：\n" + telegramInlineCodeList(lines) + "\n\n恢复需要确认：<code>/restore_from_db 文件名 confirm</code>"}
+	}
+	if len(args) < 2 || !strings.EqualFold(args[len(args)-1], "confirm") {
+		return telegramCommandReply{Text: "恢复数据库会覆盖当前数据，需要确认：<code>/restore_from_db 文件名 confirm</code>"}
+	}
+	filename := strings.TrimSpace(args[0])
+	if err := s.backup.Restore(ctx, filename); err != nil {
+		return telegramCommandReply{Text: "恢复失败：" + err.Error()}
+	}
+	return telegramCommandReply{Text: "数据库已从备份恢复，请重启 MediaStationGo 后生效。"}
+}
+
+func (s *TelegramBotService) cmdSakuraSyncGroup(ctx context.Context, channel *model.NotifyChannel, args []string) telegramCommandReply {
+	chatIDs := s.telegramMembershipChatIDs(channel)
+	if len(chatIDs) == 0 {
+		return telegramCommandReply{Text: "未配置可校验成员的群组/频道 ID。请在 Telegram 通知渠道设置 group_chat_id 或 channel_chat_id。"}
+	}
+	if strings.TrimSpace(s.telegramChannelConfig(channel)["bot_token"]) == "" {
+		return telegramCommandReply{Text: "当前 Telegram 渠道未配置 bot_token，无法校验群成员。"}
+	}
+	var bindings []model.TelegramBinding
+	if err := s.repo.DB.WithContext(ctx).Find(&bindings).Error; err != nil {
+		return telegramCommandReply{Text: "读取绑定失败：" + err.Error()}
+	}
+	type staleBinding struct {
+		User    model.User
+		Binding model.TelegramBinding
+	}
+	var stale []staleBinding
+	for _, binding := range bindings {
+		if binding.TelegramUserID == 0 || binding.UserID == "" {
+			continue
+		}
+		user, _ := s.repo.User.FindByID(ctx, binding.UserID)
+		if user == nil || UserIsProtectedAccount(ctx, s.repo, user) {
+			continue
+		}
+		member := false
+		for _, chatID := range chatIDs {
+			if s.telegramUserIsChatMember(ctx, channel, chatID, int(binding.TelegramUserID)) {
+				member = true
+				break
+			}
+		}
+		if !member {
+			stale = append(stale, staleBinding{User: *user, Binding: binding})
+		}
+	}
+	if len(stale) == 0 {
+		return telegramCommandReply{Text: "所有已绑定账号都仍在配置的群组/频道中。"}
+	}
+	if len(args) >= 2 && strings.EqualFold(args[0], "delete") && strings.EqualFold(args[1], "confirm") {
+		deleted := 0
+		for _, item := range stale {
+			_ = s.repo.UserDevice.DeleteByUser(ctx, item.User.ID)
+			if err := s.repo.User.Delete(ctx, item.User.ID); err == nil {
+				deleted++
+			}
+		}
+		return telegramCommandReply{Text: fmt.Sprintf("已删除不在群组/频道中的普通账号：<b>%d</b> 个。", deleted)}
+	}
+	names := make([]string, 0, minInt(len(stale), 20))
+	for i, item := range stale {
+		if i >= 20 {
+			break
+		}
+		names = append(names, fmt.Sprintf("%s(tg:%d)", item.User.Username, item.Binding.TelegramUserID))
+	}
+	return telegramCommandReply{Text: fmt.Sprintf("不在配置群组/频道中的绑定账号：<b>%d</b> 个。\n%s\n\n删除需确认：<code>/syncgroupm delete confirm</code>", len(stale), telegramInlineCodeList(names))}
+}
+
+func (s *TelegramBotService) telegramMembershipChatIDs(channel *model.NotifyChannel) []string {
+	cfg := s.telegramChannelConfig(channel)
+	seen := map[string]struct{}{}
+	var out []string
+	for _, key := range []string{"group_chat_id", "channel_chat_id"} {
+		value := strings.TrimSpace(cfg[key])
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; !ok {
+			seen[value] = struct{}{}
+			out = append(out, value)
+		}
+	}
+	if len(out) == 0 {
+		if value := strings.TrimSpace(cfg["chat_id"]); strings.HasPrefix(value, "-") {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func (s *TelegramBotService) cmdSakuraUnsupported(name, replacement string) telegramCommandReply {

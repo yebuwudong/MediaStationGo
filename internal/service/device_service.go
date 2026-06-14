@@ -20,7 +20,7 @@ import (
 //	① 防共享: too many concurrent playbacks / logged-in clients disables the
 //	   account immediately; fingerprint mismatch is warning-based and disables
 //	   the account after the configured warning threshold.
-//	② 自定义删号/保号规则: admins define one or more keep rules; a sweep deletes
+//	② Sakura 保号规则: admins define one or more keep rules; a sweep deletes
 //	   accounts that do not satisfy the configured any/all/count rule set.
 //
 // Safeguards: admin / protected accounts are never auto disabled or deleted;
@@ -56,16 +56,7 @@ func fingerprint(client, deviceName string) string {
 // isProtected reports whether a user must never be auto disabled/deleted.
 // Admins are always protected; the earliest admin (default admin) too.
 func (s *DeviceService) isProtected(ctx context.Context, u *model.User) bool {
-	if u == nil {
-		return true
-	}
-	if u.Role == "admin" {
-		return true
-	}
-	if first, err := s.repo.User.FirstAdmin(ctx); err == nil && first != nil && first.ID == u.ID {
-		return true
-	}
-	return false
+	return UserIsProtectedAccount(ctx, s.repo, u)
 }
 
 // RecordLogin records (or refreshes) a device session at authentication time

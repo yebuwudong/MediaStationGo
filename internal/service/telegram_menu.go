@@ -788,10 +788,7 @@ func (s *TelegramBotService) replyUserActions(ctx context.Context, userID string
 	if err != nil || u == nil {
 		return telegramCommandReply{Text: "用户不存在。"}
 	}
-	protected := u.Role == "admin"
-	if first, _ := s.repo.User.FirstAdmin(ctx); first != nil && first.ID == u.ID {
-		protected = true
-	}
+	protected := UserIsProtectedAccount(ctx, s.repo, u)
 	text := fmt.Sprintf("<b>%s</b>\n角色：%s\n状态：%s\n到期：%s\n防共享警告：%d 次",
 		u.Username, u.Role, map[bool]string{true: "正常", false: "已禁用"}[u.IsActive], formatExpiry(u.ExpiredAt), u.ShareWarnings)
 	if protected {
@@ -1107,7 +1104,7 @@ func formatShortList(items []string, limit int) string {
 }
 
 // protectReason returns a non-empty message when a user must not be
-// disabled/deleted (admins and the default admin are protected).
+// disabled/deleted (admins, default admin and protected-list users).
 func (s *TelegramBotService) protectReason(ctx context.Context, userID string) string {
 	u, err := s.repo.User.FindByID(ctx, userID)
 	if err != nil || u == nil {
@@ -1119,20 +1116,23 @@ func (s *TelegramBotService) protectReason(ctx context.Context, userID string) s
 	if first, _ := s.repo.User.FirstAdmin(ctx); first != nil && first.ID == u.ID {
 		return "默认管理员账号受保护，不可禁用/删除。"
 	}
+	if _, ok := ProtectedUserIDSet(ctx, s.repo)[u.ID]; ok {
+		return "该账号在 Bot 保护名单中，不可禁用/删除。"
+	}
 	return ""
 }
 
 func (s *TelegramBotService) replyDevicePolicy(ctx context.Context) telegramCommandReply {
 	cfg := loadBotConfig(ctx, s.repo)
 	text := fmt.Sprintf(
-		"<b>设备策略</b>\n\n① 防共享：<b>%s</b>\n   并发播放上限 %d / 登录客户端上限 %d；超限会禁用账号，管理员可解禁。\n   设备指纹异常警告 %d 次后禁用账号。\n\n② 自定义删号规则：<b>%s</b>\n   保号模式：%s；需要满足 %d 条；启用规则 %d 条。\n\n<b>命令：</b>\n<code>/antishare on play=3 login=3 warn=2</code>\n<code>/cleanup on|off|run</code>\n<code>/cleanup_mode any|all|count 2</code>\n<code>/cleanup_rule list|add|del|enable|disable</code>\n\n策略默认关闭；删号前会先通过 Bot 通知用户；管理员/受保护账号永不自动处理。",
+		"<b>设备策略</b>\n\n① 防共享：<b>%s</b>\n   并发播放上限 %d / 登录客户端上限 %d；超限会禁用账号，管理员可解禁。\n   设备指纹异常警告 %d 次后禁用账号。\n\n② Sakura 保号规则：<b>%s</b>\n   保号模式：%s；需要满足 %d 条；启用规则 %d 条。\n\n<b>命令：</b>\n<code>/antishare on play=3 login=3 warn=2</code>\n<code>/cleanup on|off|run</code>\n<code>/cleanup_mode any|all|count 2</code>\n<code>/cleanup_rule list|add|edit|del|enable|disable</code>\n\n策略默认关闭；清理前会先通过 Bot 通知用户；管理员/受保护账号永不自动处理。",
 		onOff(cfg.AntiShareEnabled), cfg.MaxConcurrentPlay, cfg.MaxLoggedClients, cfg.WarnThreshold,
 		onOff(cfg.AccountCleanupEnabled), cleanupModeLabel(cfg.AccountCleanupKeepMode), cfg.AccountCleanupRequiredCount, countEnabledCleanupRules(cfg.AccountCleanupRules))
 	return telegramCommandReply{
 		Text: text,
 		Buttons: [][]telegramInlineButton{
 			{{Text: toggleLabel("防共享", cfg.AntiShareEnabled), Data: "dp_toggle:antishare"}},
-			{{Text: toggleLabel("删号规则", cfg.AccountCleanupEnabled), Data: "dp_toggle:cleanup"}},
+			{{Text: toggleLabel("保号规则", cfg.AccountCleanupEnabled), Data: "dp_toggle:cleanup"}},
 			{{Text: "⬅️ 返回菜单", Data: "menu_main"}},
 		},
 	}
@@ -1206,7 +1206,7 @@ func (s *TelegramBotService) cmdCleanup(ctx context.Context, args []string) tele
 		if err != nil {
 			return telegramCommandReply{Text: "巡检失败：" + err.Error()}
 		}
-		return telegramCommandReply{Text: fmt.Sprintf("删号规则巡检完成，清理 <b>%d</b> 个账号。", removed)}
+		return telegramCommandReply{Text: fmt.Sprintf("保号规则巡检完成，清理 <b>%d</b> 个账号。", removed)}
 	default:
 		return telegramCommandReply{Text: "用法：<code>/cleanup on|off|run</code>"}
 	}
@@ -1280,21 +1280,31 @@ func (s *TelegramBotService) cmdCleanupRule(ctx context.Context, args []string) 
 			return telegramCommandReply{Text: "保存失败：" + err.Error()}
 		}
 		return telegramCommandReply{Text: "已更新规则状态。\n\n" + formatCleanupRules(rules)}
-	case "add":
+	case "add", "set", "edit", "update":
 		rule, err := parseCleanupRuleCommand(args[1:])
 		if err != nil {
 			return telegramCommandReply{Text: err.Error() + "\n\n" + cleanupRuleHelp()}
 		}
-		for _, r := range rules {
-			if r.ID == rule.ID {
-				return telegramCommandReply{Text: "规则 ID 已存在，请换一个 ID。"}
+		updated := false
+		for i := range rules {
+			if rules[i].ID == rule.ID {
+				rules[i] = rule
+				updated = true
+				break
 			}
 		}
-		rules = normalizeCleanupRules(append(rules, rule))
+		if !updated {
+			rules = append(rules, rule)
+		}
+		rules = normalizeCleanupRules(rules)
 		if err := s.saveCleanupRules(ctx, rules); err != nil {
 			return telegramCommandReply{Text: "保存失败：" + err.Error()}
 		}
-		return telegramCommandReply{Text: "已新增规则。\n\n" + formatCleanupRules(rules)}
+		actionText := "已新增规则。"
+		if updated {
+			actionText = "已更新规则。"
+		}
+		return telegramCommandReply{Text: actionText + "\n\n" + formatCleanupRules(rules)}
 	default:
 		return telegramCommandReply{Text: cleanupRuleHelp()}
 	}
@@ -1373,18 +1383,31 @@ func parseCleanupRuleCommand(args []string) (accountCleanupRule, error) {
 			rule.WindowDaysMin, _ = strconv.Atoi(values[0])
 			rule.WindowDaysMax, _ = strconv.Atoi(values[1])
 			rule.MinHours, _ = strconv.ParseFloat(values[2], 64)
+			if rule.Name == "" {
+				rule.Name = fmt.Sprintf("%d~%d 天观看满 %s 小时", rule.WindowDaysMin, rule.WindowDaysMax, formatRuleHours(rule.MinHours))
+			}
 		}
 	case "recent_login":
 		name, values := cleanupRuleNameAndValues(args[2:], 1)
 		rule.Name = name
 		if len(values) >= 1 {
 			rule.WindowDaysMax, _ = strconv.Atoi(values[0])
+			if rule.Name == "" {
+				rule.Name = fmt.Sprintf("%d 天内登录", rule.WindowDaysMax)
+			}
 		}
 	case "signin_streak", "account_age_grace":
 		name, values := cleanupRuleNameAndValues(args[2:], 1)
 		rule.Name = name
 		if len(values) >= 1 {
 			rule.MinCount, _ = strconv.Atoi(values[0])
+			if rule.Name == "" {
+				if rule.Type == "signin_streak" {
+					rule.Name = fmt.Sprintf("连续签到 %d 天", rule.MinCount)
+				} else {
+					rule.Name = fmt.Sprintf("新号宽限 %d 天", rule.MinCount)
+				}
+			}
 		}
 	default:
 		return accountCleanupRule{}, fmt.Errorf("不支持的规则类型：%s", rule.Type)
@@ -1488,12 +1511,13 @@ func cleanupRuleTypeLabel(t string) string {
 }
 
 func cleanupRuleHelp() string {
-	return "<b>删号/保号规则命令</b>\n\n" +
+	return "<b>Sakura 保号规则命令</b>\n\n" +
 		"<code>/cleanup_rule list</code> — 查看规则\n" +
 		"<code>/cleanup_rule add watch_hours watch_3_5d_6h 观看3到5天满6小时 3 5 6</code>\n" +
 		"<code>/cleanup_rule add recent_login login_7d 七天内登录 7</code>\n" +
 		"<code>/cleanup_rule add signin_streak sign_3 连续签到3天 3</code>\n" +
 		"<code>/cleanup_rule add account_age_grace new_7d 新号宽限7天 7</code>\n" +
+		"<code>/cleanup_rule edit 规则类型 规则ID 名称 参数...</code> — 修改同 ID 规则\n" +
 		"<code>/cleanup_rule enable 规则ID</code> / <code>disable 规则ID</code>\n" +
 		"<code>/cleanup_rule del 规则ID</code>\n\n" +
 		"保号模式：<code>/cleanup_mode any|all|count 2</code>"

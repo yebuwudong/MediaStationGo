@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
@@ -18,7 +20,7 @@ var (
 )
 
 // Bot / 设备管控相关的设置键。全部存储在 settings 表，由管理员通过
-// Telegram Bot 命令调整。带安全默认值：所有"自动删号"策略默认关闭。
+// Telegram Bot 命令调整。带安全默认值：所有自动处理策略默认关闭。
 const (
 	// 开放注册（开注名额）。
 	SettingOpenRegEnabled = "telegram.openreg_enabled" // 是否开放注册
@@ -29,23 +31,17 @@ const (
 	SettingAntiShareEnabled  = "device.antishare_enabled"   // 总开关（默认关）
 	SettingMaxConcurrentPlay = "device.max_concurrent_play" // 最大并发播放设备
 	SettingMaxLoggedClients  = "device.max_logged_clients"  // 最大同时登录客户端
-	SettingWarnThreshold     = "device.warn_threshold"      // 警告几次后删号
+	SettingWarnThreshold     = "device.warn_threshold"      // 警告几次后禁用
 	SettingPlayWindowSeconds = "device.play_window_seconds" // 并发播放判定窗口（秒）
 	SettingClientActiveDays  = "device.client_active_days"  // 登录设备活跃天数窗口
 
-	// 不活跃清理（独立开关）。
-	SettingInactiveEnabled   = "device.inactive_enabled"         // 总开关（默认关）
-	SettingInactiveMinHours  = "device.inactive_min_hours"       // 窗口内最低观看小时
-	SettingInactiveWindowMin = "device.inactive_window_days_min" // 随机窗口下限（天）
-	SettingInactiveWindowMax = "device.inactive_window_days_max" // 随机窗口上限（天）
-	SettingInactiveGraceDays = "device.inactive_grace_days"      // 新号宽限期（天）
-
-	// 自定义删号/保号规则。规则默认关闭；开启后按 KeepMode 计算用户
-	// 是否满足足够的保号条件，未满足才会删号。
+	// Sakura 风格保号规则。规则默认关闭；开启后按 KeepMode 计算用户
+	// 是否满足足够的保号条件，未满足才会被清理。
 	SettingAccountCleanupEnabled       = "device.account_cleanup_enabled"
 	SettingAccountCleanupKeepMode      = "device.account_cleanup_keep_mode"      // any / all / count
 	SettingAccountCleanupRequiredCount = "device.account_cleanup_required_count" // keep_mode=count 时需要满足几条
 	SettingAccountCleanupRules         = "device.account_cleanup_rules"          // JSON []accountCleanupRule
+	SettingProtectedUserIDs            = "device.protected_user_ids"             // comma separated user IDs; Sakura /prouser
 )
 
 // botConfig 是设备管控的已解析配置（含默认值）。
@@ -56,12 +52,6 @@ type botConfig struct {
 	WarnThreshold     int
 	PlayWindowSeconds int
 	ClientActiveDays  int
-
-	InactiveEnabled   bool
-	InactiveMinHours  int
-	InactiveWindowMin int
-	InactiveWindowMax int
-	InactiveGraceDays int
 
 	AccountCleanupEnabled       bool
 	AccountCleanupKeepMode      string
@@ -92,18 +82,12 @@ type accountCleanupRule struct {
 // defaultBotConfig returns the safe defaults requested by the operator.
 func defaultBotConfig() botConfig {
 	return botConfig{
-		AntiShareEnabled:  false, // 自动删号默认关闭，需管理员显式开启
+		AntiShareEnabled:  false, // 防共享默认关闭，需管理员显式开启
 		MaxConcurrentPlay: 3,
 		MaxLoggedClients:  3,
-		WarnThreshold:     2, // 两次警告后再犯删号
+		WarnThreshold:     2, // 两次警告后再犯禁用
 		PlayWindowSeconds: 90,
 		ClientActiveDays:  30,
-
-		InactiveEnabled:   false, // 默认关闭
-		InactiveMinHours:  6,
-		InactiveWindowMin: 3,
-		InactiveWindowMax: 5,
-		InactiveGraceDays: 7,
 
 		AccountCleanupEnabled:       false,
 		AccountCleanupKeepMode:      "any",
@@ -134,16 +118,11 @@ func loadBotConfig(ctx context.Context, repo *repository.Container) botConfig {
 		return v
 	}
 	cfg.AntiShareEnabled = parseBoolSetting(get(SettingAntiShareEnabled), cfg.AntiShareEnabled)
-	cfg.InactiveEnabled = parseBoolSetting(get(SettingInactiveEnabled), cfg.InactiveEnabled)
 	cfg.MaxConcurrentPlay = parseIntSettingDefault(get(SettingMaxConcurrentPlay), cfg.MaxConcurrentPlay)
 	cfg.MaxLoggedClients = parseIntSettingDefault(get(SettingMaxLoggedClients), cfg.MaxLoggedClients)
 	cfg.WarnThreshold = parseIntSettingDefault(get(SettingWarnThreshold), cfg.WarnThreshold)
 	cfg.PlayWindowSeconds = parseIntSettingDefault(get(SettingPlayWindowSeconds), cfg.PlayWindowSeconds)
 	cfg.ClientActiveDays = parseIntSettingDefault(get(SettingClientActiveDays), cfg.ClientActiveDays)
-	cfg.InactiveMinHours = parseIntSettingDefault(get(SettingInactiveMinHours), cfg.InactiveMinHours)
-	cfg.InactiveWindowMin = parseIntSettingDefault(get(SettingInactiveWindowMin), cfg.InactiveWindowMin)
-	cfg.InactiveWindowMax = parseIntSettingDefault(get(SettingInactiveWindowMax), cfg.InactiveWindowMax)
-	cfg.InactiveGraceDays = parseIntSettingDefault(get(SettingInactiveGraceDays), cfg.InactiveGraceDays)
 	cfg.AccountCleanupEnabled = parseBoolSetting(get(SettingAccountCleanupEnabled), cfg.AccountCleanupEnabled)
 	cfg.AccountCleanupKeepMode = normalizeCleanupKeepMode(get(SettingAccountCleanupKeepMode), cfg.AccountCleanupKeepMode)
 	cfg.AccountCleanupRequiredCount = parseIntSettingDefault(get(SettingAccountCleanupRequiredCount), cfg.AccountCleanupRequiredCount)
@@ -153,13 +132,63 @@ func loadBotConfig(ctx context.Context, repo *repository.Container) botConfig {
 			cfg.AccountCleanupRules = normalizeCleanupRules(rules)
 		}
 	}
-	if cfg.InactiveWindowMax < cfg.InactiveWindowMin {
-		cfg.InactiveWindowMax = cfg.InactiveWindowMin
-	}
 	if cfg.AccountCleanupRequiredCount < 1 {
 		cfg.AccountCleanupRequiredCount = 1
 	}
 	return cfg
+}
+
+// ProtectedUserIDSet returns the explicit Sakura-compatible protected user list.
+// Admins and the default admin are protected separately by UserIsProtectedAccount.
+func ProtectedUserIDSet(ctx context.Context, repo *repository.Container) map[string]struct{} {
+	out := make(map[string]struct{})
+	if repo == nil || repo.Setting == nil {
+		return out
+	}
+	raw, err := repo.Setting.Get(ctx, SettingProtectedUserIDs)
+	if err != nil {
+		return out
+	}
+	for _, value := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == '，' || r == '；' || r == ' ' || r == '\n' || r == '\t'
+	}) {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out[value] = struct{}{}
+		}
+	}
+	return out
+}
+
+// SaveProtectedUserIDSet persists the explicit protected user list.
+func SaveProtectedUserIDSet(ctx context.Context, repo *repository.Container, ids map[string]struct{}) error {
+	if repo == nil || repo.Setting == nil {
+		return nil
+	}
+	values := make([]string, 0, len(ids))
+	for id := range ids {
+		if strings.TrimSpace(id) != "" {
+			values = append(values, id)
+		}
+	}
+	sort.Strings(values)
+	return repo.Setting.Set(ctx, SettingProtectedUserIDs, strings.Join(values, ","))
+}
+
+// UserIsProtectedAccount reports whether a user is protected from destructive
+// Bot/device-policy operations.
+func UserIsProtectedAccount(ctx context.Context, repo *repository.Container, user *model.User) bool {
+	if repo == nil || user == nil {
+		return true
+	}
+	if user.Role == "admin" {
+		return true
+	}
+	if first, err := repo.User.FirstAdmin(ctx); err == nil && first != nil && first.ID == user.ID {
+		return true
+	}
+	_, ok := ProtectedUserIDSet(ctx, repo)[user.ID]
+	return ok
 }
 
 // parseIntSettingDefault parses an int setting, returning fallback on error.
@@ -195,7 +224,9 @@ func normalizeCleanupRules(rules []accountCleanupRule) []accountCleanupRule {
 		if r.Name == "" {
 			r.Name = r.ID
 		}
-		inferCleanupRuleValuesFromID(&r)
+		if shouldInferCleanupRuleValues(r) {
+			inferCleanupRuleValuesFromID(&r)
+		}
 		if r.WindowDaysMin < 1 {
 			r.WindowDaysMin = 1
 		}
@@ -214,6 +245,11 @@ func normalizeCleanupRules(rules []accountCleanupRule) []accountCleanupRule {
 		}
 	}
 	return out
+}
+
+func shouldInferCleanupRuleValues(rule accountCleanupRule) bool {
+	name := strings.TrimSpace(rule.Name)
+	return name == "" || strings.EqualFold(name, strings.TrimSpace(rule.ID))
 }
 
 func inferCleanupRuleValuesFromID(rule *accountCleanupRule) {
