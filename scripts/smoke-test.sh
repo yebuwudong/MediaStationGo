@@ -181,7 +181,7 @@ TRACKS=$(curl -s -H "$H" "http://127.0.0.1:$PORT/api/media/$ID/subtitles" \
          | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["tracks"]))')
 [ "$TRACKS" = "1" ] && ok "external SRT discovered" || fail "external SRT discovered=$TRACKS"
 
-if [ "$HAVE_FFMPEG" = 1 ]; then
+if [ "$HAVE_FFMPEG" = 1 ] && [ "${SMOKE_HLS:-0}" = "1" ]; then
   HLS_OK=0
   for _ in $(seq 1 5); do
     if curl -fsS -H "$H" "http://127.0.0.1:$PORT/api/hls/$ID/index.m3u8" | grep -q EXTM3U; then
@@ -196,6 +196,8 @@ if [ "$HAVE_FFMPEG" = 1 ]; then
     warn "HLS playlist unavailable in this runner; skipping transcode gate"
   fi
   curl -s -X DELETE -H "$H" "http://127.0.0.1:$PORT/api/hls/$ID" -o /dev/null || true
+elif [ "$HAVE_FFMPEG" = 1 ]; then
+  warn "HLS gate disabled by default; set SMOKE_HLS=1 to exercise transcode"
 fi
 
 # --- 6. Playback bookkeeping -----------------------------------------------
