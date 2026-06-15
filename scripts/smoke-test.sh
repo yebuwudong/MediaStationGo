@@ -119,12 +119,22 @@ MEDIASTATION_CACHE_CACHE_DIR="$CACHE" \
 "$BIN" >"$LOG" 2>&1 &
 PID=$!
 
-# Wait until /api/health responds.
-for _ in $(seq 1 20); do
-  curl -s -o /dev/null "http://127.0.0.1:$PORT/api/health" && break
+# Wait until /api/health responds. CI runners can be slow immediately after
+# building the binary, so give startup a full minute before failing.
+HEALTH_OK=0
+for _ in $(seq 1 120); do
+  if curl -s -o /dev/null "http://127.0.0.1:$PORT/api/health"; then
+    HEALTH_OK=1
+    break
+  fi
   sleep 0.5
 done
-curl -s "http://127.0.0.1:$PORT/api/health" | grep -q '"ok"' && ok "/api/health" || fail "/api/health"
+if [ "$HEALTH_OK" = 1 ] && curl -s "http://127.0.0.1:$PORT/api/health" | grep -q '"ok"'; then
+  ok "/api/health"
+else
+  fail "/api/health"
+  exit 1
+fi
 
 # --- 3. Auth ----------------------------------------------------------------
 hdr "Auth"
