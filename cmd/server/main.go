@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net"
@@ -68,6 +69,9 @@ func main() {
 	db, err := database.Open(cfg, logger)
 	if err != nil {
 		logger.Fatal("database open failed", zap.Error(err))
+	}
+	if err := waitForDatabase(db, logger); err != nil {
+		logger.Fatal("database not ready", zap.Error(err))
 	}
 	if err := database.AutoMigrate(db); err != nil {
 		logger.Fatal("auto-migrate failed", zap.Error(err))
@@ -142,6 +146,28 @@ func applyCPUThreadLimit(cfg *config.Config, logger *zap.Logger) {
 			zap.Int("max_cpu_threads", cfg.App.MaxCPUThreads),
 			zap.Int("previous", prev))
 	}
+}
+
+func waitForDatabase(db interface{ DB() (*sql.DB, error) }, logger *zap.Logger) error {
+	sqlDB, err := db.DB()
+	if err != nil {
+		return err
+	}
+	var lastErr error
+	for attempt := 1; attempt <= 30; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		err = sqlDB.PingContext(ctx)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if logger != nil {
+			logger.Warn("database not ready; retrying", zap.Int("attempt", attempt), zap.Error(err))
+		}
+		time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+	}
+	return lastErr
 }
 
 func buildRouter(cfg *config.Config, logger *zap.Logger, svc *service.Container) *gin.Engine {

@@ -22,7 +22,6 @@ services:
 
   opensearch:
     image: opensearchproject/opensearch:2
-    container_name: mediastation-opensearch
     restart: unless-stopped
     environment:
       discovery.type: single-node

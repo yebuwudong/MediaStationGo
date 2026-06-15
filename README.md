@@ -153,7 +153,7 @@ environment:
 ```bash
 docker compose pull
 docker compose up -d
-docker logs -f mediastation-go
+docker compose logs -f mediastation-go
 ```
 
 看到 `sqlite data migrated to postgres`，或确认网页里的用户、媒体库、设置都正常后，再处理旧 SQLite 文件。
@@ -278,7 +278,6 @@ services:
     # Docker Hub 备用：
     # image: shukbet/mediastationgo:latest
 
-    container_name: mediastation-go
     restart: unless-stopped
     init: true
     depends_on:
@@ -330,7 +329,6 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    container_name: mediastation-postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: mediastation
@@ -339,7 +337,7 @@ services:
     volumes:
       - ./postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mediastation -d mediastation"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U mediastation -d mediastation"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -390,7 +388,7 @@ docker compose up -d
 ### 查看日志
 
 ```bash
-docker logs -f mediastation-go
+docker compose logs -f mediastation-go
 ```
 
 ### 备份
@@ -429,7 +427,7 @@ docker compose down
 
 ```bash
 docker ps
-docker logs --tail=100 mediastation-go
+docker compose logs --tail=100 mediastation-go
 ```
 
 确认浏览器访问的是：

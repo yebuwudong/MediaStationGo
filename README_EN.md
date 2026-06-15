@@ -153,7 +153,7 @@ Recommended SQLite to PostgreSQL upgrade flow:
 ```bash
 docker compose pull
 docker compose up -d
-docker logs -f mediastation-go
+docker compose logs -f mediastation-go
 ```
 
 After you see `sqlite data migrated to postgres`, or after the web UI shows your users, libraries, and settings correctly, you can stop using the old SQLite file as a migration source.
@@ -278,7 +278,6 @@ services:
     # Docker Hub backup:
     # image: shukbet/mediastationgo:latest
 
-    container_name: mediastation-go
     restart: unless-stopped
     init: true
     depends_on:
@@ -331,7 +330,6 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    container_name: mediastation-postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: mediastation
@@ -340,7 +338,7 @@ services:
     volumes:
       - ./postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mediastation -d mediastation"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U mediastation -d mediastation"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -391,7 +389,7 @@ docker compose up -d
 ### Logs
 
 ```bash
-docker logs -f mediastation-go
+docker compose logs -f mediastation-go
 ```
 
 ### Backup
@@ -430,7 +428,7 @@ Check the container:
 
 ```bash
 docker ps
-docker logs --tail=100 mediastation-go
+docker compose logs --tail=100 mediastation-go
 ```
 
 Then open:
