@@ -70,7 +70,7 @@ type Library struct {
 type Media struct {
 	Base
 	LibraryID    string  `gorm:"index;size:36" json:"library_id"`
-	SeriesID     string  `gorm:"index;size:36" json:"series_id,omitempty"`
+	SeriesID     string  `gorm:"index;size:128" json:"series_id,omitempty"`
 	Title        string  `gorm:"size:255;not null" json:"title"`
 	OriginalName string  `gorm:"size:255" json:"original_name,omitempty"`
 	Path         string  `gorm:"uniqueIndex;size:1024;not null" json:"path"`
@@ -115,7 +115,7 @@ type Media struct {
 
 	// IsDuplicate flags this media as a duplicate of another media row.
 	IsDuplicate bool   `gorm:"default:false" json:"is_duplicate"`
-	DuplicateOf string `gorm:"size:36" json:"duplicate_of,omitempty"`
+	DuplicateOf string `gorm:"size:128" json:"duplicate_of,omitempty"`
 }
 
 // APIConfig stores third-party data-source configuration. The api_key
@@ -160,7 +160,7 @@ type Series struct {
 type PlaybackHistory struct {
 	Base
 	UserID     string    `gorm:"index;size:36;not null" json:"user_id"`
-	MediaID    string    `gorm:"index;size:36;not null" json:"media_id"`
+	MediaID    string    `gorm:"index;size:128;not null" json:"media_id"`
 	PositionMs int64     `json:"position_ms"`
 	DurationMs int64     `json:"duration_ms"`
 	WatchedAt  time.Time `json:"watched_at"`
@@ -171,7 +171,7 @@ type PlaybackHistory struct {
 type Favorite struct {
 	Base
 	UserID  string `gorm:"index;size:36;not null;uniqueIndex:uniq_user_media" json:"user_id"`
-	MediaID string `gorm:"index;size:36;not null;uniqueIndex:uniq_user_media" json:"media_id"`
+	MediaID string `gorm:"index;size:128;not null;uniqueIndex:uniq_user_media" json:"media_id"`
 }
 
 // Playlist 是用户策划的、有序的媒体列表。
@@ -186,7 +186,7 @@ type Playlist struct {
 type PlaylistItem struct {
 	Base
 	PlaylistID string `gorm:"index;size:36;not null" json:"playlist_id"`
-	MediaID    string `gorm:"index;size:36;not null" json:"media_id"`
+	MediaID    string `gorm:"index;size:128;not null" json:"media_id"`
 	Position   int    `json:"position"`
 }
 

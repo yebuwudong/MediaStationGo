@@ -662,6 +662,12 @@ func ensurePostgresColumnCompatibility(db *gorm.DB) error {
 	statements := []string{
 		`ALTER TABLE media ALTER COLUMN container TYPE varchar(128)`,
 		`ALTER TABLE media ALTER COLUMN genres TYPE text`,
+		`ALTER TABLE media ALTER COLUMN series_id TYPE varchar(128)`,
+		`ALTER TABLE media ALTER COLUMN duplicate_of TYPE varchar(128)`,
+		`ALTER TABLE playback_histories ALTER COLUMN media_id TYPE varchar(128)`,
+		`ALTER TABLE favorites ALTER COLUMN media_id TYPE varchar(128)`,
+		`ALTER TABLE playlist_items ALTER COLUMN media_id TYPE varchar(128)`,
+		`ALTER TABLE strm_records ALTER COLUMN media_id TYPE varchar(128)`,
 	}
 	for _, stmt := range statements {
 		if err := db.Exec(stmt).Error; err != nil {
