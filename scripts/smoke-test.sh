@@ -59,21 +59,22 @@ command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null || HAVE_FFMPEG=0
 hdr "Preparing $ROOT"
 mkdir -p "$DATA" "$CACHE" "$MEDIA/movies" "$MEDIA/tv/Show/Season 01" "$MEDIA/anime"
 
-if [ "$HAVE_FFMPEG" = 1 ]; then
-  ffmpeg -y -loglevel error -f lavfi -i "color=c=blue:s=320x240:d=2" \
+if [ "$HAVE_FFMPEG" = 1 ] && \
+   ffmpeg -y -loglevel error -f lavfi -i "color=c=blue:s=320x240:d=2" \
                           -f lavfi -i "sine=frequency=1000:duration=2" \
                           -c:v libx264 -preset ultrafast -c:a aac \
-                          "$MEDIA/movies/Inception.2010.1080p.BluRay.x264.mp4"
-  ffmpeg -y -loglevel error -f lavfi -i "color=c=red:s=320x240:d=2" \
+                          "$MEDIA/movies/Inception.2010.1080p.BluRay.x264.mp4" && \
+   ffmpeg -y -loglevel error -f lavfi -i "color=c=red:s=320x240:d=2" \
                           -f lavfi -i "sine=frequency=440:duration=2" \
                           -c:v libx264 -preset ultrafast -c:a aac \
-                          "$MEDIA/tv/Show/Season 01/Show.S01E01.mkv"
-  ffmpeg -y -loglevel error -f lavfi -i "color=c=cyan:s=320x240:d=2" \
+                          "$MEDIA/tv/Show/Season 01/Show.S01E01.mkv" && \
+   ffmpeg -y -loglevel error -f lavfi -i "color=c=cyan:s=320x240:d=2" \
                           -f lavfi -i "sine=frequency=500:duration=2" \
                           -c:v libx264 -preset ultrafast -c:a aac \
-                          "$MEDIA/anime/[Erai-raws] One Piece - 1100 [1080p].mkv"
+                          "$MEDIA/anime/[Erai-raws] One Piece - 1100 [1080p].mkv"; then
   ok "ffmpeg sample media generated"
 else
+  HAVE_FFMPEG=0
   # Generate small dummy files so the scanner can still find them.
   printf "dummy" > "$MEDIA/movies/Inception.2010.1080p.BluRay.x264.mp4"
   printf "dummy" > "$MEDIA/tv/Show/Season 01/Show.S01E01.mkv"
