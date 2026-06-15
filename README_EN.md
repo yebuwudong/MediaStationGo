@@ -144,7 +144,8 @@ environment:
 
 - Fresh installs: `docker compose up -d` uses PostgreSQL and does not create a new SQLite primary database.
 - Upgrades: if `./data/mediastation.db` exists, the first start with the new compose file imports it into PostgreSQL.
-- Migration only runs when the PostgreSQL target tables are empty. If PostgreSQL already has data, the SQLite import is skipped.
+- Migration fills missing rows by primary key and skips rows that already exist. If it fails partway through, a later start continues the remaining tables.
+- After a successful import, PostgreSQL gets a completion marker in the `settings` table, so the old SQLite file is not imported again.
 - Redis is a hot cache and OpenSearch is a search index; neither is a source database.
 
 Recommended SQLite to PostgreSQL upgrade flow:

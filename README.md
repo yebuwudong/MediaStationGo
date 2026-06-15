@@ -144,7 +144,8 @@ environment:
 
 - 新部署：直接 `docker compose up -d`，会使用 PostgreSQL，不会创建新的 SQLite 主库。
 - 旧版本升级：如果存在 `./data/mediastation.db`，首次启动新版 compose 时会自动导入到 PostgreSQL。
-- 导入只在 PostgreSQL 目标库为空时运行；PG 里已有数据时会跳过，避免覆盖现有数据。
+- 导入按主键补齐缺失数据，已有行会跳过；如果中途失败，修复后再次启动会继续补剩余表。
+- 成功导入后会在 PostgreSQL 的 `settings` 表写入完成标记，之后即使旧 SQLite 文件还在也不会重复导入。
 - Redis 是热缓存，OpenSearch 是搜索索引；它们都不是源数据库，丢失后可以重建。
 
 旧 SQLite 升级到 PostgreSQL 的建议步骤：

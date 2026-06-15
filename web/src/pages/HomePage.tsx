@@ -11,6 +11,7 @@ import type { Library, Media } from '../types'
 import { groupSeries } from '../utils/groupSeries'
 
 const hasArtwork = (media?: Media | null) => !!(media?.poster_url || media?.backdrop_url)
+const asArray = <T,>(value: unknown): T[] => (Array.isArray(value) ? value as T[] : [])
 
 export function HomePage() {
   const [libraries, setLibraries] = useState<Library[]>([])
@@ -24,14 +25,14 @@ export function HomePage() {
       setLoading(true)
       try {
         const [libs, recentItems, hist] = await Promise.all([
-          libraryAPI.list().catch(() => [] as Library[]),
-          mediaAPI.search('', 120).then((d) => d.items).catch(() => [] as Media[]),
-          playbackAPI.recentHistory().catch(() => [] as HistoryItem[]),
+          libraryAPI.list().then((rows) => asArray<Library>(rows)).catch(() => [] as Library[]),
+          mediaAPI.search('', 120).then((d) => asArray<Media>(d?.items)).catch(() => [] as Media[]),
+          playbackAPI.recentHistory().then((rows) => asArray<HistoryItem>(rows)).catch(() => [] as HistoryItem[]),
         ])
         if (cancelled) return
         setLibraries(libs)
         setRecent(recentItems)
-        setHistory(hist.filter((h) => !h.completed && !!h.media))
+        setHistory(hist.filter((h) => h && !h.completed && !!h.media))
       } finally {
         if (!cancelled) setLoading(false)
       }

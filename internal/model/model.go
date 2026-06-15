@@ -80,7 +80,7 @@ type Media struct {
 	Height       int     `json:"height"`
 	VideoCodec   string  `gorm:"size:32" json:"video_codec,omitempty"`
 	AudioCodec   string  `gorm:"size:32" json:"audio_codec,omitempty"`
-	Container    string  `gorm:"size:16" json:"container,omitempty"`
+	Container    string  `gorm:"size:128" json:"container,omitempty"`
 	PosterURL    string  `gorm:"size:1024" json:"poster_url,omitempty"`
 	BackdropURL  string  `gorm:"size:1024" json:"backdrop_url,omitempty"`
 	Overview     string  `gorm:"type:text" json:"overview,omitempty"`

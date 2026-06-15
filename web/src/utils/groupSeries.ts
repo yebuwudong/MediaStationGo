@@ -60,9 +60,11 @@ function seriesTitleFromPath(path?: string): string {
   return normalizeTitle(parts[dirIndex])
 }
 
-export function groupSeries(items: Media[]): SeriesCard[] {
+export function groupSeries(items: Media[] = []): SeriesCard[] {
+  const safeItems = Array.isArray(items) ? items : []
   const groups = new Map<string, SeriesCard>()
-  for (const m of items) {
+  for (const m of safeItems) {
+    if (!m) continue
     const key = getSeriesKey(m)
 
     const g = groups.get(key)

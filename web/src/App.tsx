@@ -1,4 +1,4 @@
-import { Suspense, lazy } from 'react'
+import { Component, Suspense, lazy, type ErrorInfo, type ReactNode } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 
 import { Layout } from './components/Layout'
@@ -105,10 +105,46 @@ const LicensePage = lazy(() =>
 
 const Loading = () => <p className="px-6 py-8 text-sand-500">加载中…</p>
 
+class AppErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
+  state = { hasError: false }
+
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('MediaStation UI crashed', error, info)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-gray-50 px-6 py-16 text-gray-900">
+          <div className="mx-auto max-w-xl rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
+            <p className="text-lg font-bold">页面加载失败</p>
+            <p className="mt-2 text-sm text-gray-500">
+              当前页面遇到异常，刷新后会重新加载资源和登录状态。
+            </p>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="mt-5 rounded-xl bg-gray-950 px-4 py-2 text-sm font-bold text-white hover:bg-gray-800"
+            >
+              刷新页面
+            </button>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
 export default function App() {
   return (
-    <Suspense fallback={<Loading />}>
-      <Routes>
+    <AppErrorBoundary>
+      <Suspense fallback={<Loading />}>
+        <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route
           path="/"
@@ -275,7 +311,8 @@ export default function App() {
           />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </Suspense>
+        </Routes>
+      </Suspense>
+    </AppErrorBoundary>
   )
 }

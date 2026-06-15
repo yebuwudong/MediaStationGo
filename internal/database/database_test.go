@@ -115,3 +115,100 @@ func TestCopyModelTablesMigratesExistingSQLiteRows(t *testing.T) {
 		t.Fatalf("user not preserved: %#v", got)
 	}
 }
+
+func TestCopyModelTablesResumesPartialSQLiteMigration(t *testing.T) {
+	src, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, db := range []*gorm.DB{src, dst} {
+		if err := db.AutoMigrate(&model.User{}, &model.Media{}, &model.Setting{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	user := model.User{Username: "admin", PasswordHash: "hash", Role: "admin", IsActive: true}
+	if err := src.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := dst.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		LibraryID:    "library-1",
+		Title:        "Resume Migration",
+		Path:         "/media/resume.mp4",
+		Container:    "mov,mp4,m4a,3gp,3g2,mj2",
+		ScrapeStatus: "matched",
+		OriginalName: "Resume Migration",
+		PosterURL:    "/media/poster.jpg",
+		BackdropURL:  "/media/backdrop.jpg",
+		VideoCodec:   "hevc",
+		AudioCodec:   "eac3",
+		DurationSec:  120,
+		SizeBytes:    1024,
+		Width:        3840,
+		Height:       2160,
+		SeasonNum:    1,
+		EpisodeNum:   1,
+	}
+	if err := src.Create(&media).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := src.Create(&model.Setting{Key: "organize.auto", Value: "false"}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	copied, err := copyModelTables(src, dst, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if copied != 2 {
+		t.Fatalf("copied rows = %d, want 2", copied)
+	}
+	var got model.Media
+	if err := dst.First(&got, "path = ?", media.Path).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Container != media.Container {
+		t.Fatalf("container = %q, want %q", got.Container, media.Container)
+	}
+
+	copied, err = copyModelTables(src, dst, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if copied != 0 {
+		t.Fatalf("second copy rows = %d, want 0", copied)
+	}
+}
+
+func TestSQLiteMigrationCompleteMarker(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Setting{}); err != nil {
+		t.Fatal(err)
+	}
+	complete, err := sqliteMigrationMarkedComplete(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete {
+		t.Fatal("fresh database should not be marked migrated")
+	}
+	if err := markSQLiteMigrationComplete(db); err != nil {
+		t.Fatal(err)
+	}
+	complete, err = sqliteMigrationMarkedComplete(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !complete {
+		t.Fatal("database should be marked migrated")
+	}
+}
