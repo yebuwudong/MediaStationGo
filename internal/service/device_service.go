@@ -219,11 +219,42 @@ func (s *DeviceService) SweepAccountCleanup(ctx context.Context) (int, error) {
 	if !cfg.AccountCleanupEnabled {
 		return 0, nil
 	}
-	users, err := s.repo.User.List(ctx)
+	candidates, err := s.accountCleanupCandidates(ctx, cfg)
 	if err != nil {
 		return 0, err
 	}
 	removed := 0
+	for _, candidate := range candidates {
+		s.notify(ctx, candidate.UserID, fmt.Sprintf("⛔️ 账号 <b>%s</b> 未满足保号规则，已被清理。\n规则结果：%s\n如需恢复请联系管理员。", candidate.Username, candidate.Details))
+		s.log.Warn("account cleanup: deleting account", zap.String("user", candidate.Username), zap.String("details", candidate.Details))
+		_ = s.repo.UserDevice.DeleteByUser(ctx, candidate.UserID)
+		if err := s.repo.User.Delete(ctx, candidate.UserID); err == nil {
+			removed++
+		}
+	}
+	return removed, nil
+}
+
+type accountCleanupCandidate struct {
+	UserID   string
+	Username string
+	Details  string
+}
+
+func (s *DeviceService) PreviewAccountCleanup(ctx context.Context) ([]accountCleanupCandidate, error) {
+	cfg := loadBotConfig(ctx, s.repo)
+	if !cfg.AccountCleanupEnabled {
+		return nil, nil
+	}
+	return s.accountCleanupCandidates(ctx, cfg)
+}
+
+func (s *DeviceService) accountCleanupCandidates(ctx context.Context, cfg botConfig) ([]accountCleanupCandidate, error) {
+	users, err := s.repo.User.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	candidates := make([]accountCleanupCandidate, 0)
 	for i := range users {
 		u := &users[i]
 		if s.isProtected(ctx, u) || !u.IsActive {
@@ -233,14 +264,13 @@ func (s *DeviceService) SweepAccountCleanup(ctx context.Context) (int, error) {
 		if keep {
 			continue
 		}
-		s.notify(ctx, u.ID, fmt.Sprintf("⛔️ 账号 <b>%s</b> 未满足保号规则，已被清理。\n规则结果：%s\n如需恢复请联系管理员。", u.Username, details))
-		s.log.Warn("account cleanup: deleting account", zap.String("user", u.Username), zap.String("details", details))
-		_ = s.repo.UserDevice.DeleteByUser(ctx, u.ID)
-		if err := s.repo.User.Delete(ctx, u.ID); err == nil {
-			removed++
-		}
+		candidates = append(candidates, accountCleanupCandidate{
+			UserID:   u.ID,
+			Username: u.Username,
+			Details:  details,
+		})
 	}
-	return removed, nil
+	return candidates, nil
 }
 
 // KickDevice marks a device as kicked so the next request from it is rejected

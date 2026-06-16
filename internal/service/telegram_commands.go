@@ -134,9 +134,6 @@ func (s *TelegramBotService) telegramCommandDefinitions(ctx context.Context, cha
 		{Aliases: []string{"/revuser"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) {
 			return s.cmdSakuraProtectedUser(ctx, args, false), nil
 		}},
-		{Aliases: []string{"/restart", "/update_bot", "/paolu", "/bindall_id", "/sync_favorites", "/coins", "/score", "/coinsall", "/coinsclear", "/red", "/srank", "/white_channel", "/rev_white_channel", "/unban_channel", "/config"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) {
-			return s.cmdSakuraUnsupported("Mgo 兼容命令", "这些命令涉及外部 Bot 自身运维/积分红包/皮套人管理，已在 MediaStationGo 中由权限、通知渠道、设备策略替代。"), nil
-		}},
 	}
 }
 
@@ -170,15 +167,18 @@ func (s *TelegramBotService) executeCommand(ctx context.Context, channel *model.
 		return telegramCommandReply{Text: fmt.Sprintf("未知命令: %s\n\n输入 /help 查看可用命令列表。", cmd)}, nil
 	}
 	if telegramIsGroupChat(msg.Chat.Type) && !def.GroupAllowed {
-		if def.AdminOnly && s.telegramUserIsAdmin(ctx, channel, msg.From.ID) {
-			return telegramCommandReply{Text: telegramGroupPrivateAdminHint()}, nil
+		if !def.AdminOnly || !s.telegramUserIsAdmin(ctx, channel, msg.From.ID) {
+			return telegramCommandReply{}, nil
 		}
-		return telegramCommandReply{}, nil
 	}
 	if def.AdminOnly && !s.telegramUserIsAdmin(ctx, channel, msg.From.ID) {
 		return telegramCommandReply{Text: def.AdminOnlyText}, nil
 	}
-	return def.Handle(args)
+	reply, err := def.Handle(args)
+	if telegramIsGroupChat(msg.Chat.Type) && def.AdminOnly && !def.GroupAllowed {
+		reply.Buttons = nil
+	}
+	return reply, err
 }
 
 func telegramSupportedCommand(cmd string) bool {
@@ -204,9 +204,7 @@ var telegramSupportedCommandSet = map[string]struct{}{
 	"/check_ex": {}, "/deleted": {}, "/low_activity": {}, "/uranks": {}, "/days_ranks": {}, "/week_ranks": {},
 	"/embyadmin": {}, "/unbanall": {}, "/banall": {}, "/embylibs_unblockall": {}, "/embylibs_blockall": {},
 	"/extraembylibs_unblockall": {}, "/extraembylibs_blockall": {}, "/proadmin": {}, "/revadmin": {},
-	"/backup_db": {}, "/restore_from_db": {}, "/restart": {}, "/update_bot": {}, "/paolu": {}, "/bindall_id": {}, "/sync_favorites": {}, "/config": {},
-	"/coins": {}, "/score": {}, "/coinsall": {}, "/coinsclear": {}, "/red": {}, "/srank": {}, "/prouser": {}, "/revuser": {},
-	"/white_channel": {}, "/rev_white_channel": {}, "/unban_channel": {},
+	"/backup_db": {}, "/restore_from_db": {}, "/prouser": {}, "/revuser": {},
 }
 
 type telegramBotCommand struct {
@@ -254,7 +252,7 @@ func telegramAdminBotCommandMenu() []telegramBotCommand {
 		telegramBotCommand{Command: "downloads", Description: "下载列表(管理员)"},
 		telegramBotCommand{Command: "stats", Description: "媒体库统计(管理员)"},
 		telegramBotCommand{Command: "users", Description: "用户管理(管理员)"},
-		telegramBotCommand{Command: "cleanup", Description: "开启关闭或执行保号巡检(管理员)"},
+		telegramBotCommand{Command: "cleanup", Description: "保号清理预览/确认(管理员)"},
 		telegramBotCommand{Command: "cleanup_mode", Description: "设置保号规则匹配模式(管理员)"},
 		telegramBotCommand{Command: "cleanup_rule", Description: "Mgo保号规则管理(管理员)"},
 	)

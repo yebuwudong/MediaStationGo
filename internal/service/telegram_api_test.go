@@ -449,4 +449,22 @@ func TestTelegramCommandFiltering(t *testing.T) {
 			t.Fatalf("%s should be supported so group slash commands get feedback", cmd)
 		}
 	}
+	for _, cmd := range []string{"/restart", "/update_bot", "/coins", "/red", "/white_channel", "/config"} {
+		if telegramSupportedCommand(cmd) {
+			t.Fatalf("%s should not be treated as supported until it has a real Mgo implementation", cmd)
+		}
+	}
+}
+
+func TestTelegramSupportedCommandSetMatchesRegistry(t *testing.T) {
+	_, bot := newBotTestService(t)
+	channel := &model.NotifyChannel{Name: "Telegram", Type: "telegram", Enabled: true, Config: `{"admin_user_ids":"9001"}`}
+	msg := &TelegramMessage{From: TelegramUser{ID: 9001, Username: "admin"}, Chat: TelegramChat{ID: 9001, Type: "private"}}
+	for _, def := range bot.telegramCommandDefinitions(t.Context(), channel, msg) {
+		for _, alias := range def.Aliases {
+			if !telegramSupportedCommand(alias) {
+				t.Fatalf("registered command %s must be in telegramSupportedCommandSet", alias)
+			}
+		}
+	}
 }

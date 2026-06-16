@@ -167,7 +167,11 @@ func TestTelegramGroupHidesAdminPanelFromRegularUsers(t *testing.T) {
 
 func TestTelegramGroupAdminMenuDoesNotExposeButtonsInGroup(t *testing.T) {
 	ctx := t.Context()
-	_, bot := newBotTestService(t)
+	repos, bot := newBotTestService(t)
+	admin := &model.User{Username: "root", PasswordHash: "x", Role: "admin", IsActive: true}
+	if err := repos.User.Create(ctx, admin); err != nil {
+		t.Fatal(err)
+	}
 	channel := &model.NotifyChannel{Name: "Telegram", Type: "telegram", Enabled: true, Config: `{"group_chat_id":"-100123","admin_user_ids":"9001"}`}
 	msg := &TelegramMessage{
 		From: TelegramUser{ID: 9001, Username: "admin", FirstName: "Admin"},
@@ -188,6 +192,17 @@ func TestTelegramGroupAdminMenuDoesNotExposeButtonsInGroup(t *testing.T) {
 	}
 	if !strings.Contains(reply.Text, "请私聊 Bot") || telegramReplyHasButtonPrefix(reply, "adm_") {
 		t.Fatalf("group admin callback should not render admin panel publicly: %#v", reply)
+	}
+
+	reply, err := bot.executeCommand(ctx, channel, msg, "/users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reply.Text, "用户管理") {
+		t.Fatalf("bound group admin text command should run, got %q", reply.Text)
+	}
+	if len(reply.Buttons) != 0 {
+		t.Fatalf("group admin text command must not expose inline buttons publicly: %#v", reply.Buttons)
 	}
 }
 

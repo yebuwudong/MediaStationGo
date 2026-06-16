@@ -1125,7 +1125,7 @@ func (s *TelegramBotService) protectReason(ctx context.Context, userID string) s
 func (s *TelegramBotService) replyDevicePolicy(ctx context.Context) telegramCommandReply {
 	cfg := loadBotConfig(ctx, s.repo)
 	text := fmt.Sprintf(
-		"<b>设备策略</b>\n\n① 防共享：<b>%s</b>\n   并发播放上限 %d / 登录客户端上限 %d；超限会禁用账号，管理员可解禁。\n   设备指纹异常警告 %d 次后禁用账号。\n\n② Mgo 保号规则：<b>%s</b>\n   保号模式：%s；需要满足 %d 条；启用规则 %d 条。\n\n<b>命令：</b>\n<code>/antishare on play=3 login=3 warn=2</code>\n<code>/cleanup on|off|run</code>\n<code>/cleanup_mode any|all|count 2</code>\n<code>/cleanup_rule list|add|edit|修改|del|enable|disable</code>\n\n策略默认关闭；清理前会先通过 Bot 通知用户；管理员/受保护账号永不自动处理。",
+		"<b>设备策略</b>\n\n① 防共享：<b>%s</b>\n   并发播放上限 %d / 登录客户端上限 %d；超限会禁用账号，管理员可解禁。\n   设备指纹异常警告 %d 次后禁用账号。\n\n② Mgo 保号规则：<b>%s</b>\n   保号模式：%s；需要满足 %d 条；启用规则 %d 条。\n\n<b>命令：</b>\n<code>/antishare on play=3 login=3 warn=2</code>\n<code>/cleanup run</code> 预览候选\n<code>/cleanup run confirm</code> 确认清理\n<code>/cleanup on|off</code>\n<code>/cleanup_mode any|all|count 2</code>\n<code>/cleanup_rule list|add|edit|修改|del|enable|disable</code>\n\n策略默认关闭；清理前会先预览候选；管理员/受保护账号永不自动处理。",
 		onOff(cfg.AntiShareEnabled), cfg.MaxConcurrentPlay, cfg.MaxLoggedClients, cfg.WarnThreshold,
 		onOff(cfg.AccountCleanupEnabled), cleanupModeLabel(cfg.AccountCleanupKeepMode), cfg.AccountCleanupRequiredCount, countEnabledCleanupRules(cfg.AccountCleanupRules))
 	return telegramCommandReply{
@@ -1197,19 +1197,70 @@ func (s *TelegramBotService) cmdCleanup(ctx context.Context, args []string) tele
 			return telegramCommandReply{Text: "关闭失败：" + err.Error()}
 		}
 		return s.replyDevicePolicy(ctx)
-	case "run", "sweep", "巡检":
+	case "run", "sweep", "巡检", "preview", "预览":
 		device := s.device
 		if device == nil {
 			device = NewDeviceService(s.log, s.repo)
 		}
-		removed, err := device.SweepAccountCleanup(ctx)
-		if err != nil {
-			return telegramCommandReply{Text: "巡检失败：" + err.Error()}
+		if len(args) > 1 && isCleanupConfirmArg(args[1]) {
+			cfg := loadBotConfig(ctx, s.repo)
+			if !cfg.AccountCleanupEnabled {
+				return telegramCommandReply{Text: "保号规则未开启，不会清理账号。"}
+			}
+			if countEnabledCleanupRules(cfg.AccountCleanupRules) == 0 {
+				return telegramCommandReply{Text: "没有启用的保号规则，不会清理账号。"}
+			}
+			removed, err := device.SweepAccountCleanup(ctx)
+			if err != nil {
+				return telegramCommandReply{Text: "确认清理失败：" + err.Error()}
+			}
+			return telegramCommandReply{Text: fmt.Sprintf("保号规则确认清理完成，已清理 <b>%d</b> 个账号。", removed)}
 		}
-		return telegramCommandReply{Text: fmt.Sprintf("保号规则巡检完成，清理 <b>%d</b> 个账号。", removed)}
+		candidates, err := device.PreviewAccountCleanup(ctx)
+		if err != nil {
+			return telegramCommandReply{Text: "巡检预览失败：" + err.Error()}
+		}
+		return telegramCommandReply{Text: s.formatCleanupPreview(ctx, candidates)}
 	default:
-		return telegramCommandReply{Text: "用法：<code>/cleanup on|off|run</code>"}
+		return telegramCommandReply{Text: "用法：<code>/cleanup on|off</code>、<code>/cleanup run</code> 预览、<code>/cleanup run confirm</code> 确认清理"}
 	}
+}
+
+func isCleanupConfirmArg(arg string) bool {
+	switch strings.ToLower(strings.TrimSpace(arg)) {
+	case "confirm", "yes", "delete", "确认", "清理", "删除":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *TelegramBotService) formatCleanupPreview(ctx context.Context, candidates []accountCleanupCandidate) string {
+	cfg := loadBotConfig(ctx, s.repo)
+	if !cfg.AccountCleanupEnabled {
+		return "保号规则未开启，不会清理账号。"
+	}
+	if countEnabledCleanupRules(cfg.AccountCleanupRules) == 0 {
+		return "没有启用的保号规则，不会清理账号。"
+	}
+	if len(candidates) == 0 {
+		return "保号规则预览完成：没有需要清理的账号。"
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("<b>保号规则预览</b>\n\n将清理候选：<b>%d</b> 个账号。\n当前只是预览，未删除任何账号。\n\n", len(candidates)))
+	limit := len(candidates)
+	if limit > 10 {
+		limit = 10
+	}
+	for i := 0; i < limit; i++ {
+		candidate := candidates[i]
+		sb.WriteString(fmt.Sprintf("%d. <b>%s</b>\n%s\n", i+1, escapeHTML(candidate.Username), escapeHTML(candidate.Details)))
+	}
+	if len(candidates) > limit {
+		sb.WriteString(fmt.Sprintf("……另有 %d 个候选未展示。\n", len(candidates)-limit))
+	}
+	sb.WriteString("\n确认无误后再执行：<code>/cleanup run confirm</code>")
+	return sb.String()
 }
 
 func (s *TelegramBotService) cmdCleanupMode(ctx context.Context, args []string) telegramCommandReply {

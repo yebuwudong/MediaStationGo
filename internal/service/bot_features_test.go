@@ -418,6 +418,108 @@ func TestBotCleanupRulesCanBeDeletedUntilEmpty(t *testing.T) {
 	}
 }
 
+func TestBotCleanupRunPreviewsBeforeConfirm(t *testing.T) {
+	ctx := context.Background()
+	repos, bot := newBotTestService(t)
+	admin := &model.User{Username: "root", PasswordHash: "x", Role: "admin", IsActive: true}
+	if err := repos.User.Create(ctx, admin); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	old := now.Add(-30 * 24 * time.Hour)
+	stale := &model.User{Username: "stale", PasswordHash: "x", Role: "user", IsActive: true}
+	stale.CreatedAt = old
+	stale.LastLoginAt = &old
+	recent := &model.User{Username: "recent", PasswordHash: "x", Role: "user", IsActive: true}
+	recent.CreatedAt = old
+	recent.LastLoginAt = &now
+	newUser := &model.User{Username: "newbie", PasswordHash: "x", Role: "user", IsActive: true}
+	newUser.CreatedAt = now
+	for _, user := range []*model.User{stale, recent, newUser} {
+		if err := repos.User.Create(ctx, user); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repos.Setting.Set(ctx, SettingAccountCleanupEnabled, "true"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Setting.Set(ctx, SettingAccountCleanupKeepMode, "any"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Setting.Set(ctx, SettingAccountCleanupRules, `[
+		{"id":"login_7d","name":"最近登录","type":"recent_login","enabled":true,"window_days_max":7},
+		{"id":"new_7d","name":"新号宽限","type":"account_age_grace","enabled":true,"min_count":7}
+	]`); err != nil {
+		t.Fatal(err)
+	}
+	channel := &model.NotifyChannel{Name: "Telegram", Type: "telegram", Enabled: true, Config: `{"admin_user_ids":"9001"}`}
+	msg := &TelegramMessage{From: TelegramUser{ID: 9001, Username: "root"}, Chat: TelegramChat{ID: 9001, Type: "private"}}
+
+	reply, err := bot.executeCommand(ctx, channel, msg, "/cleanup run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reply.Text, "当前只是预览") || !strings.Contains(reply.Text, "stale") || !strings.Contains(reply.Text, "/cleanup run confirm") {
+		t.Fatalf("cleanup run should preview candidates and confirmation command, got %q", reply.Text)
+	}
+	if got, _ := repos.User.FindByID(ctx, stale.ID); got == nil {
+		t.Fatal("cleanup preview must not delete the stale user")
+	}
+
+	reply, err = bot.executeCommand(ctx, channel, msg, "/deleted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reply.Text, "当前只是预览") {
+		t.Fatalf("/deleted alias should preview only, got %q", reply.Text)
+	}
+	if got, _ := repos.User.FindByID(ctx, stale.ID); got == nil {
+		t.Fatal("/deleted preview alias must not delete users")
+	}
+
+	reply, err = bot.executeCommand(ctx, channel, msg, "/cleanup run confirm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reply.Text, "已清理 <b>1</b>") {
+		t.Fatalf("cleanup confirm should delete exactly one stale user, got %q", reply.Text)
+	}
+	if got, _ := repos.User.FindByID(ctx, stale.ID); got != nil {
+		t.Fatal("stale user should be deleted after explicit confirmation")
+	}
+	for _, user := range []*model.User{recent, newUser, admin} {
+		if got, _ := repos.User.FindByID(ctx, user.ID); got == nil {
+			t.Fatalf("%s should be kept by保号 rules/protection", user.Username)
+		}
+	}
+}
+
+func TestBotCleanupConfirmRequiresEnabledRules(t *testing.T) {
+	ctx := context.Background()
+	repos, bot := newBotTestService(t)
+	user := &model.User{Username: "viewer", PasswordHash: "x", Role: "user", IsActive: true}
+	user.CreatedAt = time.Now().Add(-30 * 24 * time.Hour)
+	if err := repos.User.Create(ctx, user); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Setting.Set(ctx, SettingAccountCleanupEnabled, "true"); err != nil {
+		t.Fatal(err)
+	}
+	channel := &model.NotifyChannel{Name: "Telegram", Type: "telegram", Enabled: true, Config: `{"admin_user_ids":"9001"}`}
+	msg := &TelegramMessage{From: TelegramUser{ID: 9001, Username: "root"}, Chat: TelegramChat{ID: 9001, Type: "private"}}
+
+	reply, err := bot.executeCommand(ctx, channel, msg, "/cleanup run confirm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reply.Text, "没有启用的保号规则") {
+		t.Fatalf("cleanup confirm without rules should be blocked, got %q", reply.Text)
+	}
+	if got, _ := repos.User.FindByID(ctx, user.ID); got == nil {
+		t.Fatal("cleanup confirm without enabled rules must not delete users")
+	}
+}
+
 func TestBotCleanupRuleListInfersDaysAndHidesDuplicateNames(t *testing.T) {
 	ctx := context.Background()
 	repos, bot := newBotTestService(t)

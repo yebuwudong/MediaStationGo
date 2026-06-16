@@ -282,7 +282,7 @@ func telegramPrivateMessageForUser(msg *TelegramMessage) *TelegramMessage {
 }
 
 func telegramGroupPrivateAdminHint() string {
-	return "管理命令请私聊 Bot 使用 <code>/menu</code> 或对应管理员命令，避免在群组公开管理面板。"
+	return "群组内不展示管理面板；管理员可在已绑定群组直接发送文本管理命令，涉及账号凭据的操作仍请私聊 Bot。"
 }
 
 func telegramGroupPrivateUserHint(action string) string {
@@ -479,7 +479,7 @@ func (s *TelegramBotService) cmdHelp(ctx context.Context, msg *TelegramMessage) 
 	if telegramIsGroupChat(msg.Chat.Type) {
 		adminHint := ""
 		if s.telegramUserIsAdmin(ctx, channel, msg.From.ID) {
-			adminHint = "\n\n管理员命令和管理面板请私聊 Bot 使用，避免在群组公开。"
+			adminHint = "\n\n管理员可在已绑定群组直接发送文本管理命令；管理面板和账号凭据操作请私聊 Bot。"
 		}
 		return "<b>MediaStationGo 群组可用命令</b>\n\n" +
 			"<b>/menu</b> — 打开群组自助菜单\n" +
@@ -523,7 +523,9 @@ func (s *TelegramBotService) cmdHelp(ctx context.Context, msg *TelegramMessage) 
 		"<b>/unbind 用户1 用户2</b> — 批量解绑 Telegram 绑定（管理员）\n" +
 		"<b>/unbind_duplicates</b> / <b>/unbind_inactive 天数</b> — 清理重复/无效绑定或久未登录绑定（管理员）\n" +
 		"<b>/antishare on play=3 login=3 warn=2</b> — 防共享策略（管理员）\n" +
-		"<b>/cleanup on|off|run</b> — 保号规则开关/巡检（管理员）\n" +
+		"<b>/cleanup run</b> — 预览保号清理候选（管理员）\n" +
+		"<b>/cleanup run confirm</b> — 确认清理候选账号（管理员）\n" +
+		"<b>/cleanup on|off</b> — 保号规则开关（管理员）\n" +
 		"<b>/cleanup_mode any|all|count 2</b> — 保号模式（管理员）\n" +
 		"<b>/cleanup_rule list|add|edit|修改|del|enable|disable</b> — Mgo 保号规则（管理员）\n" +
 		"<b>/ban 用户名</b> / <b>/unban 用户名</b> — 禁用/解禁用户（管理员）\n" +
@@ -532,6 +534,12 @@ func (s *TelegramBotService) cmdHelp(ctx context.Context, msg *TelegramMessage) 
 		"<b>/search 关键词</b> — 搜索媒体库\n" +
 		"<b>/downloads</b> — 下载列表\n" +
 		"<b>/stats</b> — 媒体库统计\n\n" +
+		"<b>Mgo 兼容 Sakura 管理命令：</b>\n" +
+		"用户：<code>/ucr</code> <code>/uinfo</code> <code>/rmemby</code> <code>/only_rm_record</code> <code>/renewall</code>\n" +
+		"审计：<code>/userip</code> <code>/auditip</code> <code>/auditdevice</code> <code>/auditclient</code> <code>/udeviceid</code>\n" +
+		"清理：<code>/syncunbound</code> <code>/syncgroupm</code> <code>/check_ex</code> <code>/deleted</code> <code>/low_activity</code>\n" +
+		"权限：<code>/embyadmin</code> <code>/banall</code> <code>/unbanall</code> <code>/prouser</code> <code>/revuser</code> <code>/embylibs_blockall</code> <code>/embylibs_unblockall</code>\n" +
+		"运维：<code>/proadmin</code> <code>/revadmin</code> <code>/backup_db</code> <code>/restore_from_db</code>\n\n" +
 		"<b>自动推送事件：</b>\n" +
 		"• 订阅命中新资源\n" +
 		"• 下载任务完成\n" +
