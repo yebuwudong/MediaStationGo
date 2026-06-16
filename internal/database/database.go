@@ -798,7 +798,7 @@ WHERE deleted_at IS NULL
     SELECT id
     FROM (
       SELECT id,
-             ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at ASC, id ASC) AS rn
+             ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY updated_at DESC, created_at DESC, id DESC) AS rn
       FROM telegram_bindings
       WHERE deleted_at IS NULL
     ) AS ranked_bindings

@@ -66,10 +66,10 @@ func (s *SignIn) BeforeCreate(_ *gorm.DB) error {
 	return nil
 }
 
-// UserDevice 记录一个用户在某台设备/客户端上的会话指纹，用于设备管控：
-//   - 登录设备数：某用户名下 UserDevice 行数（近期活跃）。
-//   - 并发播放数：LastPlayAt 在并发窗口内的 UserDevice 行数。
-//   - 设备指纹：首次见到的 Fingerprint；后续同一 DeviceID 上报不同指纹则告警。
+// UserDevice 记录一个用户在某台终端设备上的登录渠道，用于设备管控：
+//   - 登录终端数：按 Fingerprint 去重后的近期活跃终端数。
+//   - 并发播放数：按 Fingerprint 去重后的播放终端数。
+//   - 设备指纹：同一终端不同 App 共用 Fingerprint，Client 只作为渠道标签。
 //   - 观看时长：结合 PlaybackHistory 统计随机窗口内的观看时长。
 type UserDevice struct {
 	Base

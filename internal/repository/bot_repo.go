@@ -128,23 +128,24 @@ func (r *UserDeviceRepository) ListByUser(ctx context.Context, userID string) ([
 	return rows, err
 }
 
-// CountActiveClients counts distinct logged-in devices for a user that were
-// seen on or after `since` (used for the "max logged-in clients" rule).
+// CountActiveClients counts distinct terminal devices for a user that were
+// seen on or after `since`. Multiple apps on the same terminal share the same
+// fingerprint and count as one terminal; rows remain as login channels.
 func (r *UserDeviceRepository) CountActiveClients(ctx context.Context, userID string, since time.Time) (int64, error) {
 	var n int64
 	err := r.db.WithContext(ctx).Model(&model.UserDevice{}).
 		Where("user_id = ? AND last_seen_at >= ? AND kicked = ?", userID, since, false).
-		Count(&n).Error
+		Select("COUNT(DISTINCT COALESCE(NULLIF(fingerprint, ''), device_id))").Scan(&n).Error
 	return n, err
 }
 
-// CountConcurrentPlaying counts devices for a user whose last playback ping was
-// on or after `since` (used for the "max concurrent playback" rule).
+// CountConcurrentPlaying counts terminal devices for a user whose last playback
+// ping was on or after `since` (used for the max concurrent playback rule).
 func (r *UserDeviceRepository) CountConcurrentPlaying(ctx context.Context, userID string, since time.Time) (int64, error) {
 	var n int64
 	err := r.db.WithContext(ctx).Model(&model.UserDevice{}).
 		Where("user_id = ? AND last_play_at IS NOT NULL AND last_play_at >= ?", userID, since).
-		Count(&n).Error
+		Select("COUNT(DISTINCT COALESCE(NULLIF(fingerprint, ''), device_id))").Scan(&n).Error
 	return n, err
 }
 

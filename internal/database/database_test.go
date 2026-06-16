@@ -43,6 +43,13 @@ func TestEnforceTelegramBindingOneToOneCleansDuplicatesAndAddsIndex(t *testing.T
 	if count != 1 {
 		t.Fatalf("active bindings for user-1 = %d, want 1", count)
 	}
+	var kept model.TelegramBinding
+	if err := db.First(&kept, "user_id = ?", "user-1").Error; err != nil {
+		t.Fatal(err)
+	}
+	if kept.TelegramUserID != 10002 {
+		t.Fatalf("kept telegram binding = %d, want newest 10002", kept.TelegramUserID)
+	}
 	if err := db.Create(&model.TelegramBinding{TelegramUserID: 10003, ChatID: 10003, UserID: "user-1"}).Error; err == nil {
 		t.Fatal("expected unique index to reject another active binding for the same user")
 	}

@@ -302,7 +302,7 @@ func TestTelegramStartClearsStaleUserBinding(t *testing.T) {
 	}
 }
 
-func TestTelegramStartRejectsAccountAlreadyBoundToAnotherTelegram(t *testing.T) {
+func TestTelegramStartReplacesAccountBindingFromAnotherTelegram(t *testing.T) {
 	ctx := t.Context()
 	repos, auth, _, _ := newAuthTestServices(t)
 	user, _, err := auth.Register(ctx, "viewer", "secret-pass")
@@ -332,8 +332,8 @@ func TestTelegramStartRejectsAccountAlreadyBoundToAnotherTelegram(t *testing.T) 
 	}
 	reply := bot.cmdStart(ctx, msg, []string{"viewer", "secret-pass"})
 
-	if !strings.Contains(reply.Text, "已绑定其他 Telegram") {
-		t.Fatalf("expected already-bound rejection, got %q", reply.Text)
+	if !strings.Contains(reply.Text, "绑定成功") {
+		t.Fatalf("expected new telegram account to replace old binding, got %q", reply.Text)
 	}
 	var accountBindings int64
 	if err := repos.DB.Model(&model.TelegramBinding{}).Where("user_id = ?", user.ID).Count(&accountBindings).Error; err != nil {
@@ -342,8 +342,11 @@ func TestTelegramStartRejectsAccountAlreadyBoundToAnotherTelegram(t *testing.T) 
 	if accountBindings != 1 {
 		t.Fatalf("account should keep exactly one telegram binding, got %d", accountBindings)
 	}
-	if binding := bot.telegramBinding(ctx, 20002); binding != nil {
-		t.Fatal("second telegram account must not be bound")
+	if binding := bot.telegramBinding(ctx, 20002); binding == nil || binding.UserID != user.ID {
+		t.Fatalf("new telegram account should be bound to user, got %#v", binding)
+	}
+	if binding := bot.telegramBinding(ctx, 20001); binding != nil {
+		t.Fatalf("old telegram binding should be removed, got %#v", binding)
 	}
 }
 

@@ -1369,10 +1369,8 @@ func (s *TelegramBotService) upsertTelegramBinding(ctx context.Context, msg *Tel
 		var existing model.TelegramBinding
 		err := tx.Where("telegram_user_id = ?", telegramUserID).First(&existing).Error
 		if err == nil {
-			if existing.UserID != userID {
-				if err := s.ensureTelegramAccountBindingAvailableTx(ctx, tx, userID, telegramUserID); err != nil {
-					return err
-				}
+			if err := s.replaceTelegramAccountBindingTx(ctx, tx, userID, telegramUserID); err != nil {
+				return err
 			}
 			if err := tx.Model(&existing).Updates(map[string]any{
 				"telegram_name": name,
@@ -1391,7 +1389,7 @@ func (s *TelegramBotService) upsertTelegramBinding(ctx context.Context, msg *Tel
 		if err := tx.Unscoped().Where("telegram_user_id = ?", telegramUserID).Delete(&model.TelegramBinding{}).Error; err != nil {
 			return err
 		}
-		if err := s.ensureTelegramAccountBindingAvailableTx(ctx, tx, userID, telegramUserID); err != nil {
+		if err := s.replaceTelegramAccountBindingTx(ctx, tx, userID, telegramUserID); err != nil {
 			return err
 		}
 		err = tx.Create(&model.TelegramBinding{
@@ -1430,29 +1428,10 @@ func telegramPrivateChatIDFromBinding(binding model.TelegramBinding) int64 {
 	return binding.TelegramUserID
 }
 
-func (s *TelegramBotService) ensureTelegramAccountBindingAvailable(ctx context.Context, userID string, telegramUserID int64) error {
-	return s.ensureTelegramAccountBindingAvailableTx(ctx, s.repo.DB.WithContext(ctx), userID, telegramUserID)
-}
-
-func (s *TelegramBotService) ensureTelegramAccountBindingAvailableTx(ctx context.Context, tx *gorm.DB, userID string, telegramUserID int64) error {
-	var bound model.TelegramBinding
-	err := tx.WithContext(ctx).
+func (s *TelegramBotService) replaceTelegramAccountBindingTx(ctx context.Context, tx *gorm.DB, userID string, telegramUserID int64) error {
+	return tx.WithContext(ctx).Unscoped().
 		Where("user_id = ? AND telegram_user_id <> ?", userID, telegramUserID).
-		First(&bound).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	var user model.User
-	if err := tx.WithContext(ctx).Where("id = ?", bound.UserID).First(&user).Error; errors.Is(err, gorm.ErrRecordNotFound) {
-		_ = tx.WithContext(ctx).Unscoped().Delete(&model.TelegramBinding{}, "id = ?", bound.ID).Error
-		return nil
-	} else if err != nil {
-		return err
-	}
-	return errTelegramAccountAlreadyBound
+		Delete(&model.TelegramBinding{}).Error
 }
 
 func telegramBindingUniqueErr(err error) bool {

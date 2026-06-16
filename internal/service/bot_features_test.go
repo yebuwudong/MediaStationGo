@@ -100,6 +100,9 @@ func TestFingerprintStability(t *testing.T) {
 	if a != b {
 		t.Fatalf("fingerprint should be case/space-insensitive: %s != %s", a, b)
 	}
+	if a != fingerprint("Emby", "iPhone") {
+		t.Fatal("different apps on the same terminal must share one fingerprint")
+	}
 	if a == fingerprint("Infuse", "iPad") {
 		t.Fatal("different device names must yield different fingerprints")
 	}
@@ -236,6 +239,92 @@ func TestDeviceKickAndConcurrency(t *testing.T) {
 	}
 	if n < 4 {
 		t.Fatalf("expected >=4 concurrent playing, got %d", n)
+	}
+}
+
+func TestTerminalDeviceLimitDeduplicatesAppsOnSameDevice(t *testing.T) {
+	ctx := context.Background()
+	repos, _ := newBotTestService(t)
+	dev := NewDeviceService(zap.NewNop(), repos)
+	u := &model.User{Username: "device-user", PasswordHash: "x", Role: "user", IsActive: true}
+	if err := repos.User.Create(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Setting.Set(ctx, SettingAntiShareEnabled, "true"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Setting.Set(ctx, SettingMaxLoggedClients, "3"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, login := range []struct {
+		id     string
+		name   string
+		client string
+	}{
+		{id: "phone-infuse", name: "iPhone", client: "Infuse"},
+		{id: "phone-emby", name: " iPhone ", client: "Emby"},
+		{id: "phone-jellyfin", name: "IPHONE", client: "Jellyfin"},
+	} {
+		dev.RecordLogin(ctx, u.ID, login.id, login.name, login.client, "1.2.3.4")
+	}
+	count, err := repos.UserDevice.CountActiveClients(ctx, u.ID, time.Now().Add(-24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("same terminal through multiple apps should count as 1, got %d", count)
+	}
+	got, _ := repos.User.FindByID(ctx, u.ID)
+	if !got.IsActive {
+		t.Fatal("same terminal through multiple apps must not disable the account")
+	}
+
+	dev.RecordLogin(ctx, u.ID, "tablet", "iPad", "Infuse", "1.2.3.4")
+	dev.RecordLogin(ctx, u.ID, "pc", "Windows PC", "Browser", "1.2.3.4")
+	count, err = repos.UserDevice.CountActiveClients(ctx, u.ID, time.Now().Add(-24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Fatalf("three distinct terminal devices should count as 3, got %d", count)
+	}
+	got, _ = repos.User.FindByID(ctx, u.ID)
+	if !got.IsActive {
+		t.Fatal("device limit is inclusive; 3 of 3 terminals should stay active")
+	}
+
+	dev.RecordLogin(ctx, u.ID, "tv", "Apple TV", "Emby", "1.2.3.4")
+	got, _ = repos.User.FindByID(ctx, u.ID)
+	if got.IsActive {
+		t.Fatal("fourth distinct terminal should disable the account")
+	}
+}
+
+func TestConcurrentPlaybackDeduplicatesAppsOnSameDevice(t *testing.T) {
+	ctx := context.Background()
+	repos, _ := newBotTestService(t)
+	u := &model.User{Username: "play-user", PasswordHash: "x", Role: "user", IsActive: true}
+	if err := repos.User.Create(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	fp := fingerprint("Infuse", "Living Room TV")
+	for _, row := range []model.UserDevice{
+		{UserID: u.ID, DeviceID: "tv-emby", DeviceName: "Living Room TV", Client: "Emby", Fingerprint: fp, FirstSeenAt: now, LastSeenAt: now, LastPlayAt: &now},
+		{UserID: u.ID, DeviceID: "tv-jellyfin", DeviceName: "living room tv", Client: "Jellyfin", Fingerprint: fp, FirstSeenAt: now, LastSeenAt: now, LastPlayAt: &now},
+		{UserID: u.ID, DeviceID: "phone", DeviceName: "iPhone", Client: "Infuse", Fingerprint: fingerprint("Infuse", "iPhone"), FirstSeenAt: now, LastSeenAt: now, LastPlayAt: &now},
+	} {
+		if err := repos.UserDevice.Create(ctx, &row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	count, err := repos.UserDevice.CountConcurrentPlaying(ctx, u.ID, now.Add(-time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("same terminal playback through multiple apps should count as 1 terminal, got %d", count)
 	}
 }
 

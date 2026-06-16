@@ -45,11 +45,15 @@ func (s *DeviceService) SetNotifier(fn func(ctx context.Context, userID, text st
 	s.notifyUser = fn
 }
 
-// fingerprint derives a stable short hash from the client + device name. A
-// changed fingerprint for the same device id signals the session was cloned
-// onto different hardware/software.
+// fingerprint derives a stable terminal hash from the device name. Client/app
+// names are deliberately ignored so one phone/TV/PC using multiple apps is
+// still counted as one terminal device; Client remains a login channel label.
 func fingerprint(client, deviceName string) string {
-	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(client)) + "|" + strings.ToLower(strings.TrimSpace(deviceName))))
+	terminal := strings.ToLower(strings.TrimSpace(deviceName))
+	if terminal == "" {
+		terminal = strings.ToLower(strings.TrimSpace(client))
+	}
+	sum := sha256.Sum256([]byte(terminal))
 	return hex.EncodeToString(sum[:])[:16]
 }
 
@@ -59,9 +63,9 @@ func (s *DeviceService) isProtected(ctx context.Context, u *model.User) bool {
 	return UserIsProtectedAccount(ctx, s.repo, u)
 }
 
-// RecordLogin records (or refreshes) a device session at authentication time
-// and runs the logged-in-client + fingerprint anti-share checks. It is safe to
-// call on every Emby/Jellyfin AuthenticateByName request.
+// RecordLogin records (or refreshes) a login channel at authentication time and
+// runs the terminal-device + fingerprint anti-share checks. It is safe to call
+// on every Emby/Jellyfin AuthenticateByName request.
 func (s *DeviceService) RecordLogin(ctx context.Context, userID, deviceID, deviceName, client, ip string) {
 	if userID == "" {
 		return
@@ -110,7 +114,7 @@ func (s *DeviceService) RecordLogin(ctx context.Context, userID, deviceID, devic
 	}
 	since := now.Add(-time.Duration(cfg.ClientActiveDays) * 24 * time.Hour)
 	if n, err := s.repo.UserDevice.CountActiveClients(ctx, userID, since); err == nil && int(n) > cfg.MaxLoggedClients {
-		s.disableForPolicy(ctx, userID, fmt.Sprintf("同时登录客户端 %d 台，超过上限 %d 台", n, cfg.MaxLoggedClients))
+		s.disableForPolicy(ctx, userID, fmt.Sprintf("同时登录终端设备 %d 台，超过上限 %d 台", n, cfg.MaxLoggedClients))
 	}
 }
 
@@ -138,6 +142,9 @@ func (s *DeviceService) RecordPlayback(ctx context.Context, userID, deviceID, de
 		existing.LastPlayAt = &now
 		_ = s.repo.UserDevice.Create(ctx, existing)
 	} else {
+		existing.DeviceName = deviceName
+		existing.Client = client
+		existing.Fingerprint = fingerprint(client, deviceName)
 		existing.LastSeenAt = now
 		existing.LastPlayAt = &now
 		_ = s.repo.UserDevice.Save(ctx, existing)
@@ -149,7 +156,7 @@ func (s *DeviceService) RecordPlayback(ctx context.Context, userID, deviceID, de
 	}
 	since := now.Add(-time.Duration(cfg.PlayWindowSeconds) * time.Second)
 	if n, err := s.repo.UserDevice.CountConcurrentPlaying(ctx, userID, since); err == nil && int(n) > cfg.MaxConcurrentPlay {
-		s.disableForPolicy(ctx, userID, fmt.Sprintf("同时播放设备 %d 台，超过上限 %d 台", n, cfg.MaxConcurrentPlay))
+		s.disableForPolicy(ctx, userID, fmt.Sprintf("同时播放终端设备 %d 台，超过上限 %d 台", n, cfg.MaxConcurrentPlay))
 	}
 }
 
