@@ -242,7 +242,7 @@ func telegramCommandNames(commands []telegramBotCommand) map[string]bool {
 func TestTelegramProxyCandidatesDefaultLocalFallbacks(t *testing.T) {
 	got := telegramProxyCandidates(map[string]string{})
 	joined := strings.Join(got, ",")
-	for _, want := range []string{"host.docker.internal:20171", "socks5://172.17.0.1:20170", "127.0.0.1:10808", "172.17.0.1:7890"} {
+	for _, want := range []string{"127.0.0.1:10808", "127.0.0.1:7890", "host.docker.internal:7890", "172.17.0.1:7890"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("default proxy candidates %q missing %q", joined, want)
 		}

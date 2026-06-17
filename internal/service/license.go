@@ -18,6 +18,7 @@ const (
 
 type LicenseActivationState struct {
 	Valid          bool   `json:"valid"`
+	LicenseKey     string `json:"license_key,omitempty"`
 	LicenseType    string `json:"license_type,omitempty"`
 	ExpiryDate     string `json:"expiry_date,omitempty"`
 	MaxDevices     int    `json:"max_devices,omitempty"`
