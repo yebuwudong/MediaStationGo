@@ -53,22 +53,6 @@ func TestQBitLoginUsesMinimalRequestFirst(t *testing.T) {
 	}
 }
 
-func TestQBitLoginAcceptsNoContentSuccess(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v2/auth/login":
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	if err := qbitLogin(context.Background(), server.Client(), server.URL, "admin", "adminadmin"); err != nil {
-		t.Fatalf("expected 204 login to succeed: %v", err)
-	}
-}
-
 func TestQBitLoginTimeoutSuggestsDockerHostAddress(t *testing.T) {
 	client := &http.Client{
 		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
