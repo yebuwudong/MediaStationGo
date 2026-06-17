@@ -242,6 +242,8 @@ docker compose pull mediastation-go
 docker compose up -d --no-deps mediastation-go
 ```
 
+不要执行裸 `docker compose pull` 做日常更新。PostgreSQL / Redis 是数据与缓存基础组件，compose 已设置为 `pull_policy: never`；需要升级它们时，请先备份 `./postgres`，再手动修改镜像版本并单独拉取。
+
 第二档和第三档更新时继续带上叠加文件：
 
 ```bash

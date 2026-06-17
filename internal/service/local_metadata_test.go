@@ -77,6 +77,36 @@ func TestReadLocalEpisodeMetadataMergesShowAndEpisode(t *testing.T) {
 	}
 }
 
+func TestReadLocalEpisodeMetadataIgnoresNoneNumericFields(t *testing.T) {
+	root := t.TempDir()
+	showDir := filepath.Join(root, "链锯人 总集篇 (2025)")
+	seasonDir := filepath.Join(showDir, "Season 1")
+	if err := os.MkdirAll(seasonDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mediaPath := filepath.Join(seasonDir, "链锯人 总集篇 - S01E01.mkv")
+	if err := os.WriteFile(mediaPath, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(showDir, "tvshow.nfo"), []byte(`<tvshow><title>链锯人 总集篇</title><year>2025</year></tvshow>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nfoPath(mediaPath), []byte(`<episodedetails><title>第 1 集</title><season>None</season><episode>None</episode><rating>None</rating></episodedetails>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ReadLocalMetadata(mediaPath, root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.Title != "链锯人 总集篇" || got.Year != 2025 {
+		t.Fatalf("unexpected metadata: %+v", got)
+	}
+	if got.SeasonNum != 0 || got.EpisodeNum != 0 || got.Rating != 0 {
+		t.Fatalf("None numeric fields should parse as zero, got %+v", got)
+	}
+}
+
 func TestReadLocalVarietyMetadataUsesLocalArtwork(t *testing.T) {
 	root := t.TempDir()
 	showDir := filepath.Join(root, "哈哈哈哈哈")

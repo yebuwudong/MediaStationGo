@@ -1,14 +1,8 @@
 // Package service — scraper orchestrator.
 //
-// ScraperService takes a Media row and tries to enrich it with metadata
-// from one or more providers. Selection is driven by the library type:
-//
-//	library.type == "anime"   -> Bangumi  (fallback: TMDb)
-//	library.type == "tv"      -> TheTVDB  (fallback: TMDb)
-//	default                   -> TMDb
-//
-// After the primary match we optionally upgrade poster / backdrop with
-// Fanart.tv when an API key is configured.
+// ScraperService takes a Media row and tries to enrich it with metadata from
+// local NFO first, then TMDb -> Douban -> Bangumi -> TheTVDB. Fanart.tv is
+// artwork-only and upgrades poster/backdrop after a metadata match.
 package service
 
 import (
@@ -282,20 +276,41 @@ func (s *ScraperService) EnrichOne(ctx context.Context, m *model.Media) error {
 			zap.String("library_type", lib.Type))
 		return nil
 	}
-	// Optional Fanart upgrade.
-	if s.fanart != nil && s.fanart.Enabled() && match.TMDbID > 0 {
-		if a, err := s.fanart.MovieArtwork(ctx, match.TMDbID); err == nil && a != nil {
-			if a.Poster != "" {
-				match.PosterURL = a.Poster
-			}
-			if a.Backdrop != "" {
-				match.BackdropURL = a.Backdrop
-			}
-		}
-	}
+	s.applyFanartArtwork(ctx, match)
 	mergeLocalMetadataIntoMatch(match, local)
 
 	return s.applyProviderMatch(ctx, m, lib, match)
+}
+
+func (s *ScraperService) applyFanartArtwork(ctx context.Context, match *Match) {
+	if s == nil || s.fanart == nil || !s.fanart.Enabled() || match == nil {
+		return
+	}
+	apply := func(a *Artwork) {
+		if a == nil {
+			return
+		}
+		if a.Poster != "" {
+			match.PosterURL = a.Poster
+		}
+		if a.Backdrop != "" {
+			match.BackdropURL = a.Backdrop
+		}
+	}
+	if match.TMDbID > 0 {
+		if a, err := s.fanart.MovieArtwork(ctx, match.TMDbID); err == nil {
+			apply(a)
+		} else {
+			s.log.Debug("fanart movie artwork failed", zap.Int("tmdb_id", match.TMDbID), zap.Error(err))
+		}
+	}
+	if strings.TrimSpace(match.TheTVDBID) != "" {
+		if a, err := s.fanart.TVArtwork(ctx, strings.TrimSpace(match.TheTVDBID)); err == nil {
+			apply(a)
+		} else {
+			s.log.Debug("fanart tv artwork failed", zap.String("thetvdb_id", match.TheTVDBID), zap.Error(err))
+		}
+	}
 }
 
 func mediaYearHint(m *model.Media) int {
@@ -695,32 +710,13 @@ func librarySupportsSeasons(lib *model.Library) bool {
 	}
 }
 
-// lookup runs the provider chain. When the library is missing we fall
-// back to TMDb only.
-//
-// 库类型决定首选 provider：
-//
-//	anime  -> Bangumi  -> TMDb /search/tv  -> TMDb /search/movie
-//	tv     -> TMDb /search/tv -> TMDb /search/movie -> TheTVDB
-//	movie  -> TMDb /search/movie
-//	(空)    -> TMDb /search/movie
-//
-// 任何 provider 错误都不会中止链式查询；只要返回 nil/err，就继续走下一个
-// provider。这避免了 Bangumi token 未配置时 anime 库整体失败的问题。
+// lookup runs the provider chain after local NFO has been considered:
+// TMDb -> Douban -> Bangumi -> TheTVDB. Douban and Bangumi do not require API
+// keys; providers that are unavailable or return an error are skipped.
 func (s *ScraperService) lookup(ctx context.Context, lib *model.Library, query string, year int) *Match {
 	kind := ""
 	if lib != nil {
 		kind = lib.Type
-	}
-	switch kind {
-	case "anime":
-		if s.bangumi != nil && s.bangumi.Enabled() {
-			if m, err := s.bangumi.Search(ctx, query); err == nil && m != nil {
-				return m
-			} else if err != nil {
-				s.log.Debug("bangumi search failed", zap.String("query", query), zap.Error(err))
-			}
-		}
 	}
 	if s.tmdb != nil && s.tmdb.Enabled() {
 		// anime / tv 先用 TMDb /search/tv（剧名通常是 TV 类目）。
@@ -737,18 +733,25 @@ func (s *ScraperService) lookup(ctx context.Context, lib *model.Library, query s
 			s.log.Debug("tmdb movie search failed", zap.String("query", query), zap.Error(err))
 		}
 	}
-	if (kind == "anime" || kind == "tv" || kind == "variety" || kind == "show" || kind == "shows") && s.thetvdb != nil && s.thetvdb.Enabled() {
-		if m, err := s.thetvdb.SearchSeries(ctx, query); err == nil && m != nil {
-			return m
-		} else if err != nil {
-			s.log.Debug("thetvdb search failed", zap.String("query", query), zap.Error(err))
-		}
-	}
 	if s.douban != nil && s.douban.Enabled() {
 		if m, err := s.douban.SearchMatch(ctx, query); err == nil && m != nil {
 			return m
 		} else if err != nil {
 			s.log.Debug("douban search failed", zap.String("query", query), zap.Error(err))
+		}
+	}
+	if s.bangumi != nil && s.bangumi.Enabled() {
+		if m, err := s.bangumi.Search(ctx, query); err == nil && m != nil {
+			return m
+		} else if err != nil {
+			s.log.Debug("bangumi search failed", zap.String("query", query), zap.Error(err))
+		}
+	}
+	if (kind == "anime" || kind == "tv" || kind == "variety" || kind == "show" || kind == "shows") && s.thetvdb != nil && s.thetvdb.Enabled() {
+		if m, err := s.thetvdb.SearchSeries(ctx, query); err == nil && m != nil {
+			return m
+		} else if err != nil {
+			s.log.Debug("thetvdb search failed", zap.String("query", query), zap.Error(err))
 		}
 	}
 	return nil

@@ -2,7 +2,7 @@
 #
 # 快速开始：
 #   1. 按需修改下方 volumes 的宿主机路径。
-#   2. docker compose pull
+#   2. docker compose pull mediastation-go
 #   3. docker compose up -d
 #   4. 浏览器打开 http://<服务器IP>:18080
 #
@@ -201,6 +201,9 @@ services:
 
   postgres:
     image: postgres:16-alpine
+    # 数据库基础镜像不参与日常应用更新，避免误拉新版 PostgreSQL。
+    # 如需升级 PostgreSQL，请先备份 ./postgres 后再手动调整镜像版本并拉取。
+    pull_policy: never
     container_name: mediastation-postgres
     restart: unless-stopped
     environment:

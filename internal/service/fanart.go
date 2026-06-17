@@ -6,8 +6,8 @@
 //
 // Endpoints used:
 //
-//   GET /v3/movies/{tmdb_id}        (artwork keyed by TMDb id)
-//   GET /v3/tv/{thetvdb_id}         (artwork keyed by TheTVDB id)
+//	GET /v3/movies/{tmdb_id}        (artwork keyed by TMDb id)
+//	GET /v3/tv/{thetvdb_id}         (artwork keyed by TheTVDB id)
 //
 // The provider is enabled iff secrets.fanart_tv_api_key is non-empty.
 package service
@@ -84,6 +84,46 @@ func (f *FanartProvider) MovieArtwork(ctx context.Context, tmdbID int) (*Artwork
 	}
 	if len(p.MovieThumb) > 0 {
 		a.Thumb = p.MovieThumb[0].URL
+	}
+	return a, nil
+}
+
+// TVArtwork looks up artwork for a TheTVDB series id.
+func (f *FanartProvider) TVArtwork(ctx context.Context, theTVDBID string) (*Artwork, error) {
+	if !f.Enabled() || theTVDBID == "" {
+		return nil, nil
+	}
+	type entry struct {
+		URL  string `json:"url"`
+		Lang string `json:"lang"`
+	}
+	type page struct {
+		TVPoster  []entry `json:"tvposter"`
+		ShowBack  []entry `json:"showbackground"`
+		HDLogo    []entry `json:"hdtvlogo"`
+		ClearLogo []entry `json:"clearlogo"`
+		TVThumb   []entry `json:"tvthumb"`
+	}
+	u := fmt.Sprintf("https://webservice.fanart.tv/v3/tv/%s?api_key=%s",
+		theTVDBID, f.cfg.Secrets.FanartAPIKey)
+	var p page
+	if err := f.getJSON(ctx, u, &p); err != nil {
+		return nil, err
+	}
+	a := &Artwork{}
+	if len(p.TVPoster) > 0 {
+		a.Poster = p.TVPoster[0].URL
+	}
+	if len(p.ShowBack) > 0 {
+		a.Backdrop = p.ShowBack[0].URL
+	}
+	if len(p.HDLogo) > 0 {
+		a.Logo = p.HDLogo[0].URL
+	} else if len(p.ClearLogo) > 0 {
+		a.Logo = p.ClearLogo[0].URL
+	}
+	if len(p.TVThumb) > 0 {
+		a.Thumb = p.TVThumb[0].URL
 	}
 	return a, nil
 }

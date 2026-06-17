@@ -267,6 +267,11 @@ func (s *SchedulerService) loopWithInitialDelay(ctx context.Context, j *schedule
 		case <-timer.C:
 		}
 		if err := s.runOnce(ctx, j); err != nil {
+			if errors.Is(err, ErrSchedulerJobAlreadyRunning) {
+				s.log.Debug("scheduled job skipped; previous run still active", zap.String("name", j.name))
+				delay = j.interval
+				continue
+			}
 			s.log.Warn("scheduled job failed",
 				zap.String("name", j.name), zap.Error(err))
 		}

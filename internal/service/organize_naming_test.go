@@ -3,6 +3,7 @@ package service
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
@@ -156,6 +157,49 @@ func TestOrganizeDirectoryHonorsMoviePilotStyleNamingFormat(t *testing.T) {
 	want := filepath.Join(dest, "电视剧", "Verify Show (2026)", "Season 1", "Verify Show - S01E02 - 第 2 集.mkv")
 	if _, err := os.Stat(want); err != nil {
 		t.Fatalf("MoviePilot-style naming format not honored, want %q: %v", want, err)
+	}
+}
+
+func TestOrganizeDirectoryUsesSeriesFolderWhenFileTitleIsOnlyReleaseTags(t *testing.T) {
+	root := t.TempDir()
+	dest := filepath.Join(root, "media")
+	src := filepath.Join(root, "downloads", "链锯人 总集篇 (2025)", "Season 1", "2025.2160p.120fps.WEB-DL.H265.10bit.DTS5.1.S01E01.mkv")
+	writeOrgFile(t, src, "episode")
+
+	repos := newOrganizerTestRepo(t)
+	template := "{{title}}{% if year %} ({{year}}){% endif %}/Season {{season}}/{{title}} - {{season_episode}}{% if video_format %} - {{video_format}}{% endif %}{{fileExt}}"
+	if err := repos.Setting.Set(t.Context(), "organize.tv_format", template); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Setting.Set(t.Context(), "organize.anime_format", template); err != nil {
+		t.Fatal(err)
+	}
+	organizer := NewOrganizerService(&config.Config{}, zap.NewNop(), repos)
+	if _, err := organizer.OrganizeDirectory(t.Context(), OrganizeOptions{
+		SourcePath:    src,
+		DestPath:      dest,
+		MediaType:     "anime",
+		MediaCategory: "日番",
+		TransferMode:  TransferCopy,
+	}); err != nil {
+		t.Fatalf("organize anime: %v", err)
+	}
+
+	want := filepath.Join(dest, "电视剧", "日番", "链锯人 总集篇 (2025)", "Season 1", "链锯人 总集篇 - S01E01 - 2160p.120fps.WEB-DL.H265.10bit.DTS5.1.mkv")
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("organize should use series folder title and keep video_format, want %q: %v", want, err)
+	}
+}
+
+func TestOrganizeNamingTemplateKeepsVideoFormatToken(t *testing.T) {
+	rel := renderOrganizeNamingTemplate("{title} - {episode_tag} - {video_format}{fileExt}", organizeNamingData{
+		Title:       "链锯人 总集篇",
+		EpisodeTag:  "S01E01",
+		VideoFormat: extractOrganizeReleaseTag("2025.2160p.120fps.WEB-DL.H265.10bit.DTS5.1.mkv"),
+		FileExt:     ".mkv",
+	})
+	if !strings.Contains(rel, "2160p.120fps.WEB-DL.H265.10bit.DTS5.1") {
+		t.Fatalf("video_format was lost from rendered name: %q", rel)
 	}
 }
 
