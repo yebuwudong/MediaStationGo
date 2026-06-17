@@ -1,0 +1,6 @@
+version: "1"
+
+# Disable Pull app auto-sync for this fork. Without an explicit config, Pull
+# defaults to hard-resetting the fork's default branch to upstream, which would
+# overwrite local development commits on origin/main.
+rules: []
