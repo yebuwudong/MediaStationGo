@@ -77,3 +77,16 @@ func TestApplyLicenseStatusReflectsUnlimitedUsers(t *testing.T) {
 		t.Fatalf("unlimited status should clear previous finite user limit: %+v", state)
 	}
 }
+
+func TestLicenseHeartbeatPayloadIncludesStoredLicenseKey(t *testing.T) {
+	payload := licenseHeartbeatPayload(service.LicenseActivationState{
+		LicenseKey: "MS-ABCD-EFGH-JKLM-NPQR",
+	}, "device-1", "NAS")
+
+	if payload["fingerprint"] != "device-1" || payload["instance_id"] != "device-1" || payload["device_name"] != "NAS" {
+		t.Fatalf("heartbeat identity payload is wrong: %#v", payload)
+	}
+	if payload["key"] != "MS-ABCD-EFGH-JKLM-NPQR" {
+		t.Fatalf("heartbeat should include stored license key for server-side backfill: %#v", payload)
+	}
+}

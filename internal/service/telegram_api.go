@@ -53,47 +53,26 @@ func telegramHTTPClient(timeout time.Duration, cfg map[string]string) *http.Clie
 func telegramHTTPClients(timeout time.Duration, cfg map[string]string) []*http.Client {
 	clients := []*http.Client{}
 	seen := map[string]bool{}
-
-	addProxy := func(proxyURL *url.URL) {
-		if proxyURL == nil {
-			return
+	for _, proxyRaw := range telegramProxyCandidates(cfg) {
+		proxyURL, err := normalizeProxyURL(proxyRaw, "http")
+		if err != nil || proxyURL == nil {
+			continue
 		}
 		key := proxyURL.String()
 		if seen[key] {
-			return
+			continue
 		}
 		seen[key] = true
 		transport := NewExternalTransport()
 		transport.Proxy = http.ProxyURL(proxyURL)
 		clients = append(clients, &http.Client{Timeout: timeout, Transport: transport})
 	}
-
-	for _, proxyRaw := range telegramExplicitProxyCandidates(cfg) {
-		proxyURL, err := normalizeProxyURL(proxyRaw, "http")
-		if err != nil || proxyURL == nil {
-			continue
-		}
-		addProxy(proxyURL)
-	}
-	if proxyURL, err := telegramAutoProxyURL(cfg); err == nil {
-		addProxy(proxyURL)
-	}
-	if telegramAPIBaseURL(cfg) == defaultTelegramAPIBaseURL {
-		for _, proxyRaw := range telegramFallbackProxyCandidates() {
-			proxyURL, err := normalizeProxyURL(proxyRaw, "http")
-			if err != nil || proxyURL == nil {
-				continue
-			}
-			addProxy(proxyURL)
-		}
-	}
 	transport := NewExternalTransport()
-	transport.Proxy = nil
 	clients = append(clients, &http.Client{Timeout: timeout, Transport: transport})
 	return clients
 }
 
-func telegramExplicitProxyCandidates(cfg map[string]string) []string {
+func telegramProxyCandidates(cfg map[string]string) []string {
 	out := []string{}
 	for _, value := range []string{
 		cfg["proxy_url"],
@@ -103,48 +82,22 @@ func telegramExplicitProxyCandidates(cfg map[string]string) []string {
 			out = append(out, value)
 		}
 	}
-	return out
-}
-
-func telegramProxyCandidates(cfg map[string]string) []string {
-	out := telegramExplicitProxyCandidates(cfg)
 	if len(out) > 0 {
 		return out
 	}
-	return telegramFallbackProxyCandidates()
-}
-
-func telegramFallbackProxyCandidates() []string {
-	// Common local proxy ports used by Clash / v2rayN / v2rayA. Docker on Linux
-	// reaches host services through host.docker.internal (when extra_hosts is
-	// configured) or the bridge gateway 172.17.0.1. These are only fallbacks:
-	// explicit channel/env proxy and environment/system proxy are tried first.
-	return []string{
-		"http://host.docker.internal:20171",
-		"socks5://host.docker.internal:20170",
-		"http://172.17.0.1:20171",
-		"socks5://172.17.0.1:20170",
-		"http://host.docker.internal:7890",
-		"http://host.docker.internal:10808",
-		"http://172.17.0.1:7890",
-		"http://172.17.0.1:10808",
+	for _, value := range []string{
 		"http://127.0.0.1:10808",
 		"http://127.0.0.1:10809",
 		"http://127.0.0.1:7890",
 		"http://127.0.0.1:7891",
+		"http://host.docker.internal:7890",
+		"http://host.docker.internal:10808",
+		"http://172.17.0.1:7890",
+		"http://172.17.0.1:10808",
+	} {
+		out = append(out, value)
 	}
-}
-
-func telegramAutoProxyURL(cfg map[string]string) (*url.URL, error) {
-	base := telegramAPIBaseURL(cfg)
-	if _, err := url.ParseRequestURI(base); err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequest(http.MethodGet, base, nil)
-	if err != nil {
-		return nil, err
-	}
-	return ProxyFromEnvironmentOrSystem(req)
+	return out
 }
 
 func telegramPostForm(ctx context.Context, cfg map[string]string, method string, form url.Values, timeout time.Duration) error {

@@ -98,6 +98,7 @@ func licenseActivateHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		state := licenseStateFromSigned(upstream, deviceID, deviceName)
+		state.LicenseKey = strings.TrimSpace(req.Key)
 		if err := persistLicenseState(c.Request.Context(), svc, state); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -111,7 +112,7 @@ func licenseStatusHandler(svc *service.Container) gin.HandlerFunc {
 		state, _ := loadLicenseState(c.Request.Context(), svc)
 		client, err := newLicenseClient(c.Request.Context(), svc)
 		if err == nil {
-			deviceID, idErr := ensureLicenseDeviceID(c.Request.Context(), svc, "")
+			deviceID, idErr := ensureLicenseDeviceID(c.Request.Context(), svc, state.DeviceID)
 			if idErr == nil {
 				deviceName, _ := svc.Repo.Setting.Get(c.Request.Context(), licenseDeviceNameSetting)
 				if strings.TrimSpace(deviceName) == "" {
@@ -119,12 +120,10 @@ func licenseStatusHandler(svc *service.Container) gin.HandlerFunc {
 					_ = svc.Repo.Setting.Set(c.Request.Context(), licenseDeviceNameSetting, deviceName)
 				}
 				var signed licenseServerSignedResp
-				if heartbeatErr := client.post(c.Request.Context(), "/api/v1/heartbeat", map[string]any{
-					"fingerprint": deviceID,
-					"instance_id": deviceID,
-					"device_name": deviceName,
-				}, &signed); heartbeatErr == nil && client.verifySigned(&signed) == nil {
-					state = licenseStateFromSigned(signed, deviceID, deviceName)
+				if heartbeatErr := client.post(c.Request.Context(), "/api/v1/heartbeat", licenseHeartbeatPayload(state, deviceID, deviceName), &signed); heartbeatErr == nil && client.verifySigned(&signed) == nil {
+					nextState := licenseStateFromSigned(signed, deviceID, deviceName)
+					nextState.LicenseKey = state.LicenseKey
+					state = nextState
 					_ = persistLicenseState(c.Request.Context(), svc, state)
 				} else {
 					var upstream licenseServerStatusResp
@@ -156,7 +155,8 @@ func licenseHeartbeatHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		deviceID, err := ensureLicenseDeviceID(c.Request.Context(), svc, "")
+		oldState, _ := loadLicenseState(c.Request.Context(), svc)
+		deviceID, err := ensureLicenseDeviceID(c.Request.Context(), svc, oldState.DeviceID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -167,11 +167,7 @@ func licenseHeartbeatHandler(svc *service.Container) gin.HandlerFunc {
 			_ = svc.Repo.Setting.Set(c.Request.Context(), licenseDeviceNameSetting, deviceName)
 		}
 		var upstream licenseServerSignedResp
-		if err := client.post(c.Request.Context(), "/api/v1/heartbeat", map[string]any{
-			"fingerprint": deviceID,
-			"instance_id": deviceID,
-			"device_name": deviceName,
-		}, &upstream); err != nil {
+		if err := client.post(c.Request.Context(), "/api/v1/heartbeat", licenseHeartbeatPayload(oldState, deviceID, deviceName), &upstream); err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 			return
 		}
@@ -180,6 +176,7 @@ func licenseHeartbeatHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		state := licenseStateFromSigned(upstream, deviceID, deviceName)
+		state.LicenseKey = oldState.LicenseKey
 		if err := persistLicenseState(c.Request.Context(), svc, state); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -373,6 +370,18 @@ func licenseStateFromSigned(resp licenseServerSignedResp, deviceID, deviceName s
 	}
 }
 
+func licenseHeartbeatPayload(state service.LicenseActivationState, deviceID, deviceName string) map[string]any {
+	payload := map[string]any{
+		"fingerprint": deviceID,
+		"instance_id": deviceID,
+		"device_name": deviceName,
+	}
+	if key := strings.TrimSpace(state.LicenseKey); key != "" {
+		payload["key"] = key
+	}
+	return payload
+}
+
 func licenseStatusMaxUsers(state service.LicenseActivationState) any {
 	active := state.Valid && !licenseStateExpired(state.ExpiryDate)
 	if active {
@@ -414,6 +423,9 @@ func persistLicenseState(ctx context.Context, svc *service.Container, state serv
 	data, err := json.Marshal(state)
 	if err != nil {
 		return err
+	}
+	if strings.TrimSpace(state.DeviceID) != "" {
+		_ = svc.Repo.Setting.Set(ctx, licenseDeviceIDSetting, strings.TrimSpace(state.DeviceID))
 	}
 	return svc.Repo.Setting.Set(ctx, service.LicenseSettingActivation, string(data))
 }
