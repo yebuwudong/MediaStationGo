@@ -52,10 +52,16 @@ func TestServeSPAServesAssetsImmutableAndBypassesAPIRoutes(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(webDir, "assets"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(webDir, "brand"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(webDir, "index.html"), []byte("index"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(webDir, "assets", "app.js"), []byte("console.log('ok')"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(webDir, "brand", "mgo-emby-icon.svg"), []byte("<svg></svg>"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -70,6 +76,22 @@ func TestServeSPAServesAssetsImmutableAndBypassesAPIRoutes(t *testing.T) {
 	}
 	if got := assetResp.Header().Get("Cache-Control"); !strings.Contains(got, "immutable") {
 		t.Fatalf("asset Cache-Control = %q, want immutable", got)
+	}
+
+	brandReq := httptest.NewRequest(http.MethodGet, "/brand/mgo-emby-icon.svg", nil)
+	brandResp := httptest.NewRecorder()
+	router.ServeHTTP(brandResp, brandReq)
+	if brandResp.Code != http.StatusOK {
+		t.Fatalf("brand asset status = %d, want 200", brandResp.Code)
+	}
+	if got := brandResp.Header().Get("Cache-Control"); !strings.Contains(got, "no-store") {
+		t.Fatalf("brand asset Cache-Control = %q, want no-store", got)
+	}
+	if !strings.Contains(brandResp.Body.String(), "<svg") {
+		t.Fatalf("brand asset should serve svg, got %q", brandResp.Body.String())
+	}
+	if strings.Contains(brandResp.Body.String(), "index") {
+		t.Fatalf("brand asset should not serve SPA index: %q", brandResp.Body.String())
 	}
 
 	for _, path := range []string{
