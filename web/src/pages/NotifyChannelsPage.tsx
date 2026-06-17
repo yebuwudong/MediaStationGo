@@ -197,6 +197,16 @@ const EVENT_OPTIONS = [
   { value: 'system_alert', label: '系统异常通知' },
 ]
 
+const EVENT_ALL = '__all__'
+const EVENT_NONE = '__none__'
+type EventMode = 'all' | 'custom' | 'none'
+
+function initialEventMode(events: string[] | undefined): EventMode {
+  if (events?.includes(EVENT_NONE)) return 'none'
+  if (events?.includes(EVENT_ALL) || !events || events.length === 0) return 'all'
+  return 'custom'
+}
+
 function ChannelCard({
   channel,
   onTest,
@@ -252,6 +262,8 @@ function ChannelCard({
 }
 
 function eventSummary(events: string[] | undefined): string {
+  if (events?.includes(EVENT_NONE)) return '事件：不推送'
+  if (events?.includes(EVENT_ALL)) return '事件：全部'
   if (!events || events.length === 0) return '事件：全部'
   const labels = events.map((event) => EVENT_OPTIONS.find((item) => item.value === event)?.label ?? event)
   return `事件：${labels.join('、')}`
@@ -324,6 +336,7 @@ function ChannelFormModal({
     normalizeInitialConfig(editing?.type ?? 'telegram', editing?.config ?? {}),
   )
   const [events, setEvents] = useState<string[]>(editing?.events ?? [])
+  const [eventMode, setEventMode] = useState<EventMode>(initialEventMode(editing?.events))
   const [enabled, setEnabled] = useState(editing?.enabled ?? true)
   const [saving, setSaving] = useState(false)
 
@@ -344,6 +357,11 @@ function ChannelFormModal({
         return
       }
     }
+    const selectedEvents = events.filter((event) => EVENT_OPTIONS.some((item) => item.value === event))
+    if (eventMode === 'custom' && selectedEvents.length === 0) {
+      toast.error('请至少选择一个推送事件，或选择关闭全部推送事件')
+      return
+    }
     setSaving(true)
     try {
       const cleanedConfig = Object.fromEntries(
@@ -354,7 +372,7 @@ function ChannelFormModal({
         name: name.trim(),
         type: type,
         config: cleanedConfig,
-        events,
+        events: eventMode === 'all' ? [EVENT_ALL] : eventMode === 'none' ? [EVENT_NONE] : selectedEvents,
         enabled,
       }
       if (editing) {
@@ -378,7 +396,9 @@ function ChannelFormModal({
 
   const toggleEvent = (event: string) => {
     setEvents((current) =>
-      current.includes(event) ? current.filter((item) => item !== event) : [...current, event],
+      current.includes(event)
+        ? current.filter((item) => item !== event)
+        : [...current.filter((item) => item !== EVENT_ALL && item !== EVENT_NONE), event],
     )
   }
 
@@ -622,12 +642,33 @@ function ChannelFormModal({
             <div className="space-y-2 rounded-lg border border-gray-200 bg-gray-50/60 p-3">
               <label className="flex cursor-pointer items-center gap-2 text-sm text-ink-100">
                 <input
-                  type="checkbox"
+                  type="radio"
+                  name="notify-event-mode"
                   className="h-4 w-4 accent-primary-400"
-                  checked={events.length === 0}
-                  onChange={() => setEvents([])}
+                  checked={eventMode === 'all'}
+                  onChange={() => setEventMode('all')}
                 />
                 全部事件
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-ink-100">
+                <input
+                  type="radio"
+                  name="notify-event-mode"
+                  className="h-4 w-4 accent-primary-400"
+                  checked={eventMode === 'none'}
+                  onChange={() => setEventMode('none')}
+                />
+                关闭全部推送事件
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-ink-100">
+                <input
+                  type="radio"
+                  name="notify-event-mode"
+                  className="h-4 w-4 accent-primary-400"
+                  checked={eventMode === 'custom'}
+                  onChange={() => setEventMode('custom')}
+                />
+                仅推送勾选事件
               </label>
               <div className="grid gap-2 sm:grid-cols-2">
                 {EVENT_OPTIONS.map((event) => (
@@ -635,6 +676,7 @@ function ChannelFormModal({
                     <input
                       type="checkbox"
                       className="h-4 w-4 accent-primary-400"
+                      disabled={eventMode !== 'custom'}
                       checked={events.includes(event.value)}
                       onChange={() => toggleEvent(event.value)}
                     />

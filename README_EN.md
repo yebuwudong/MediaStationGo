@@ -1,7 +1,7 @@
 # MediaStationGo
 
 <p align="center">
-  <img src="web/public/brand/mgo-emby-icon.png" width="96" height="96" alt="MediaStationGo Logo" />
+  <img src="web/public/brand/mgo-emby-icon.svg" width="96" height="96" alt="MediaStationGo Logo" />
 </p>
 
 <h3 align="center">A lightweight, polished, NAS-friendly private media center</h3>
@@ -151,8 +151,8 @@ environment:
 Recommended SQLite to PostgreSQL upgrade flow:
 
 ```bash
-docker compose pull
-docker compose up -d
+docker compose pull mediastation-go
+docker compose up -d --no-deps mediastation-go
 docker compose logs -f mediastation-go
 ```
 
@@ -384,8 +384,8 @@ services:
 ### Update
 
 ```bash
-docker compose pull
-docker compose up -d
+docker compose pull mediastation-go
+docker compose up -d --no-deps mediastation-go
 ```
 
 ### Logs

@@ -16,11 +16,11 @@ else
   exit 1
 fi
 
-echo "==> Pulling latest configured image"
+echo "==> Pulling latest $SERVICE image only (PostgreSQL/Redis/OpenSearch are left untouched)"
 "${COMPOSE[@]}" pull "$SERVICE"
 
-echo "==> Recreating service"
-"${COMPOSE[@]}" up -d "$SERVICE"
+echo "==> Recreating $SERVICE without dependencies"
+"${COMPOSE[@]}" up -d --no-deps "$SERVICE"
 
 running_image_id="$(docker inspect -f '{{.Image}}' "$CONTAINER" 2>/dev/null || true)"
 if [[ -z "$running_image_id" ]]; then
