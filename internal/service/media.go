@@ -109,6 +109,8 @@ func inferLibraryKind(name, path, requested string) string {
 		return "tv"
 	case containsAnyText(text, "电影", "movie", "film"):
 		return "movie"
+	case containsAnyText(text, "音乐", "歌曲", "music", "song", "songs"):
+		return "music"
 	}
 	if requested != "" {
 		return requested

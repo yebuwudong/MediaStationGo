@@ -93,7 +93,7 @@ export function Layout() {
     const groupPaths: Record<string, string[]> = {
       media: ['/', '/libraries', '/library', '/poster-wall', '/discover', '/search', '/dlna', '/ai'],
       personal: ['/favourites', '/playlists', '/playlist', '/history', '/profile', '/play-profiles'],
-      downloads: ['/downloads', '/download-clients', '/subscriptions', '/site-search'],
+      downloads: ['/downloads', '/download-clients', '/subscriptions', '/subscription-center', '/site-search', '/pt-resources'],
       tools: ['/storage', '/storage-config', '/files', '/strm', '/duplicates', '/tasks', '/scheduler', '/recycle', '/stats'],
       system: ['/admin', '/sites', '/notify-channels', '/license', '/settings', '/assistant'],
     }
@@ -213,11 +213,13 @@ export function Layout() {
             label="下载订阅"
             collapsed={!sidebarExpanded}
             open={openGroups.downloads ?? false}
-            active={isRouteIn(['/downloads', '/download-clients', '/subscriptions', '/site-search'])}
+            active={isRouteIn(['/downloads', '/download-clients', '/subscriptions', '/subscription-center', '/site-search', '/pt-resources'])}
             onToggle={toggleGroup}
           >
             {can('can_manage_downloads') && <SidebarLink to="/downloads" icon={<CloudDownload size={16} />} label="下载中心" child />}
+            {can('can_manage_subscriptions') && <SidebarLink to="/subscription-center" icon={<Compass size={16} />} label="订阅中心" child />}
             {can('can_manage_subscriptions') && <SidebarLink to="/subscriptions" icon={<Rss size={16} />} label="订阅管理" child />}
+            {can('can_manage_sites') && <SidebarLink to="/pt-resources" icon={<Globe size={16} />} label="PT 资源" child />}
             {can('can_manage_sites') && <SidebarLink to="/site-search" icon={<Search size={16} />} label="站点检索" child />}
             {isAdmin && <SidebarLink to="/download-clients" icon={<Sliders size={16} />} label="下载器管理" child />}
           </SidebarGroup>

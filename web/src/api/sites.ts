@@ -7,14 +7,42 @@ import { api } from './client'
 export interface SiteSearchResult {
   site_name: string
   site_id: string
+  id?: string
   title: string
+  subtitle?: string
+  poster_url?: string
+  backdrop_url?: string
   torrent_url: string
   download_url: string
   category?: string
   size: number
   seeders: number
   leechers: number
+  snatched?: number
   free: boolean
+  adult?: boolean
+  upload_time?: string
+}
+
+export interface SiteCategory {
+  id: string
+  name: string
+  group: string
+  site_id?: string
+  site_name?: string
+  site_type?: string
+  adult: boolean
+  description?: string
+}
+
+export interface SiteBrowseResponse {
+  items: SiteSearchResult[]
+  total: number
+  page: number
+  page_size?: number
+  total_pages?: number
+  category?: string
+  keyword?: string
 }
 
 export interface CreateSiteInput {
@@ -66,4 +94,50 @@ export const sitesAPI = {
     api
       .get('/sites/search', { params: { keyword } })
       .then((r) => r.data),
+
+  categories: (siteID = '') =>
+    api
+      .get<{ items: SiteCategory[] }>('/sites/categories', { params: { site_id: siteID || undefined } })
+      .then((r) => r.data.items ?? []),
+
+  browse: (params: {
+    site_id?: string
+    category?: string
+    keyword?: string
+    page?: number
+    include_adult?: boolean
+  }) =>
+    api
+      .get<SiteBrowseResponse>('/sites/browse', { params })
+      .then((r) => r.data),
+
+  detail: (siteID: string, id: string) =>
+    api
+      .get('/sites/detail', { params: { site_id: siteID, id } })
+      .then((r) => r.data),
+
+  download: (input: {
+    site_id?: string
+    id?: string
+    title: string
+    download_url?: string
+    torrent_url?: string
+    save_path?: string
+    media_type?: string
+    media_category?: string
+    source_category?: string
+  }) => api.post('/sites/download', input).then((r) => r.data),
+
+  subscribe: (input: {
+    site_id?: string
+    category?: string
+    include_adult?: boolean
+    name: string
+    keyword: string
+    filter?: string
+    media_type?: string
+    media_category?: string
+    save_path?: string
+    enabled?: boolean
+  }) => api.post('/sites/subscribe', input).then((r) => r.data),
 }

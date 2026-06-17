@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -187,6 +189,84 @@ func TestEmbyVirtualSeriesArtworkUsesListCache(t *testing.T) {
 	}
 }
 
+func TestEmbyVirtualSeriesArtworkFallsBackToLocalEpisodeThumbnail(t *testing.T) {
+	svc := newTestEmbyService(t)
+	workDir := t.TempDir()
+	svc.cfg.Cache.CacheDir = filepath.Join(workDir, "cache")
+	ffmpegPath := filepath.Join(workDir, "ffmpeg")
+	if err := os.WriteFile(ffmpegPath, []byte("#!/bin/sh\nlast=\nfor arg do\n  last=$arg\ndone\nprintf '\\377\\330\\377\\331' > \"$last\"\n"), 0o755); err != nil {
+		t.Fatalf("write fake ffmpeg: %v", err)
+	}
+	svc.cfg.App.FFmpegPath = ffmpegPath
+
+	videoPath := filepath.Join(workDir, "shows", "胆胆", "Season 01", "胆胆 - S01E01.mp4")
+	if err := os.MkdirAll(filepath.Dir(videoPath), 0o755); err != nil {
+		t.Fatalf("mkdir video dir: %v", err)
+	}
+	if err := os.WriteFile(videoPath, []byte("fake video"), 0o644); err != nil {
+		t.Fatalf("write video: %v", err)
+	}
+
+	lib := model.Library{Name: "本地", Path: filepath.Join(workDir, "shows"), Type: "auto", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	media := model.Media{
+		Base:       model.Base{ID: "local-ep-1"},
+		LibraryID:  lib.ID,
+		Title:      "胆胆",
+		Path:       videoPath,
+		SeasonNum:  1,
+		EpisodeNum: 1,
+	}
+	if err := svc.repo.DB.Create(&media).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	root, err := svc.Items(t.Context(), ItemsParams{ParentID: lib.ID, Limit: 50})
+	if err != nil {
+		t.Fatalf("library items: %v", err)
+	}
+	items := root["Items"].([]map[string]any)
+	if len(items) != 1 || items[0]["Type"] != "Series" {
+		t.Fatalf("expected local episode to be grouped as a series, got %#v", items)
+	}
+	seriesID := items[0]["Id"].(string)
+	seriesTags := items[0]["ImageTags"].(map[string]string)
+	if seriesTags["Primary"] != seriesID {
+		t.Fatalf("series should advertise primary image fallback, got %#v", seriesTags)
+	}
+
+	seriesThumb, err := svc.ImageURL(t.Context(), seriesID, "Primary")
+	if err != nil {
+		t.Fatalf("series image fallback: %v", err)
+	}
+	if stat, err := os.Stat(seriesThumb); err != nil || stat.Size() == 0 {
+		t.Fatalf("series thumbnail not generated at %q stat=%#v err=%v", seriesThumb, stat, err)
+	}
+
+	seasons, err := svc.Items(t.Context(), ItemsParams{ParentID: seriesID, Limit: 50})
+	if err != nil {
+		t.Fatalf("series items: %v", err)
+	}
+	seasonItems := seasons["Items"].([]map[string]any)
+	if len(seasonItems) != 1 || seasonItems[0]["Type"] != "Season" {
+		t.Fatalf("expected one season, got %#v", seasonItems)
+	}
+	seasonID := seasonItems[0]["Id"].(string)
+	seasonTags := seasonItems[0]["ImageTags"].(map[string]string)
+	if seasonTags["Primary"] != seasonID {
+		t.Fatalf("season should advertise primary image fallback, got %#v", seasonTags)
+	}
+	seasonThumb, err := svc.ImageURL(t.Context(), seasonID, "Primary")
+	if err != nil {
+		t.Fatalf("season image fallback: %v", err)
+	}
+	if seasonThumb != seriesThumb {
+		t.Fatalf("season should reuse first episode thumbnail, got %q want %q", seasonThumb, seriesThumb)
+	}
+}
+
 func TestEmbyCloudAnimeUsesSeriesNameFromChineseSeasonFolder(t *testing.T) {
 	svc := newTestEmbyService(t)
 	lib := model.Library{Name: "OpenList · 国漫", Path: `cloud://openlist/国漫`, Type: "anime", Enabled: true}
@@ -226,20 +306,125 @@ func TestEmbyCloudAnimeUsesSeriesNameFromChineseSeasonFolder(t *testing.T) {
 	}
 }
 
-func TestEmbyMovieLibrarySeasonNumbersStayMovies(t *testing.T) {
+func TestEmbyMovieTypedLibraryAutoDetectsEpisodes(t *testing.T) {
 	svc := newTestEmbyService(t)
-	lib := model.Library{Name: "动画电影", Path: `/media/movies/animation`, Type: "movie", Enabled: true}
+	lib := model.Library{Name: "顶级媒体", Path: `/media`, Type: "movie", Enabled: true}
+	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	movie := model.Media{
+		Base:      model.Base{ID: "movie-1"},
+		LibraryID: lib.ID,
+		Title:     "真正的电影",
+		Path:      `/media/Movie.2024.mkv`,
+		PosterURL: `/poster-movie.jpg`,
+	}
+	episode := model.Media{
+		Base:       model.Base{ID: "episode-1"},
+		LibraryID:  lib.ID,
+		Title:      "自动识别的剧",
+		Path:       `/media/Shows/自动识别的剧/Season 01/自动识别的剧.S01E01.mkv`,
+		PosterURL:  `/poster-episode.jpg`,
+		SeasonNum:  1,
+		EpisodeNum: 1,
+	}
+	if err := svc.repo.DB.Create(&movie).Error; err != nil {
+		t.Fatalf("create movie: %v", err)
+	}
+	if err := svc.repo.DB.Create(&episode).Error; err != nil {
+		t.Fatalf("create episode: %v", err)
+	}
+
+	view := svc.libraryAsView(t.Context(), &lib)
+	if view["CollectionType"] != "mixed" {
+		t.Fatalf("mixed library collection type = %#v", view["CollectionType"])
+	}
+	views, err := svc.Views(t.Context(), "user-1")
+	if err != nil {
+		t.Fatalf("views: %v", err)
+	}
+	viewItems := views["Items"].([]map[string]any)
+	if len(viewItems) != 2 {
+		t.Fatalf("mixed library should split into movie/show views, got %#v", viewItems)
+	}
+	var movieViewID, showViewID string
+	for _, item := range viewItems {
+		switch item["CollectionType"] {
+		case "movies":
+			movieViewID = item["Id"].(string)
+		case "tvshows":
+			showViewID = item["Id"].(string)
+		}
+	}
+	if movieViewID == "" || showViewID == "" {
+		t.Fatalf("split views should expose movies and tvshows, got %#v", viewItems)
+	}
+
+	movieViewItems, err := svc.Items(t.Context(), ItemsParams{ParentID: movieViewID, IncludeItemTypes: []string{"Movie"}, Recursive: true, Limit: 50})
+	if err != nil {
+		t.Fatalf("movie virtual view items: %v", err)
+	}
+	movieOnly := movieViewItems["Items"].([]map[string]any)
+	if len(movieOnly) != 1 || movieOnly[0]["Id"] != movie.ID || movieOnly[0]["Type"] != "Movie" {
+		t.Fatalf("movie virtual view should only expose movie rows, got %#v", movieViewItems)
+	}
+	showViewItems, err := svc.Items(t.Context(), ItemsParams{ParentID: showViewID, IncludeItemTypes: []string{"Series"}, Recursive: true, Limit: 50})
+	if err != nil {
+		t.Fatalf("show virtual view items: %v", err)
+	}
+	showOnly := showViewItems["Items"].([]map[string]any)
+	if len(showOnly) != 1 || showOnly[0]["Type"] != "Series" {
+		t.Fatalf("show virtual view should expose series rows, got %#v", showViewItems)
+	}
+
+	out, err := svc.Items(t.Context(), ItemsParams{ParentID: lib.ID, Limit: 50})
+	if err != nil {
+		t.Fatalf("items: %v", err)
+	}
+	items := out["Items"].([]map[string]any)
+	if len(items) != 2 {
+		t.Fatalf("mixed library should expose movie and series, got %#v", out)
+	}
+	types := map[any]bool{}
+	for _, item := range items {
+		types[item["Type"]] = true
+	}
+	if !types["Movie"] || !types["Series"] {
+		t.Fatalf("mixed library should include Movie and Series, got %#v", items)
+	}
+
+	episodes, err := svc.Items(t.Context(), ItemsParams{ParentID: lib.ID, IncludeItemTypes: []string{"Episode"}, Limit: 50})
+	if err != nil {
+		t.Fatalf("episode query: %v", err)
+	}
+	episodeItems := episodes["Items"].([]map[string]any)
+	if len(episodeItems) != 1 || episodeItems[0]["Type"] != "Episode" {
+		t.Fatalf("movie-typed library should expose strong episode as Episode, got %#v", episodes)
+	}
+
+	item, err := svc.Item(t.Context(), episode.ID, "user-1")
+	if err != nil {
+		t.Fatalf("item: %v", err)
+	}
+	if item["Type"] != "Episode" {
+		t.Fatalf("direct item should be Episode, got %#v", item)
+	}
+}
+
+func TestEmbyWeakEpisodeNumbersStayMovies(t *testing.T) {
+	svc := newTestEmbyService(t)
+	lib := model.Library{Name: "电影", Path: `/media/movies`, Type: "movie", Enabled: true}
 	if err := svc.repo.Library.Create(t.Context(), &lib); err != nil {
 		t.Fatalf("create library: %v", err)
 	}
 	media := model.Media{
-		Base:       model.Base{ID: "movie-with-episode-numbers"},
+		Base:       model.Base{ID: "weak-number-movie"},
 		LibraryID:  lib.ID,
-		Title:      "Movie Mistaken S01E01",
-		Path:       `/media/movies/animation/Movie.Mistaken.S01E01.mkv`,
+		Title:      "TG - 30",
+		Path:       `/media/movies/TG - 30.mkv`,
 		PosterURL:  `/poster.jpg`,
 		SeasonNum:  1,
-		EpisodeNum: 1,
+		EpisodeNum: 30,
 	}
 	if err := svc.repo.DB.Create(&media).Error; err != nil {
 		t.Fatalf("create media: %v", err)
@@ -250,15 +435,8 @@ func TestEmbyMovieLibrarySeasonNumbersStayMovies(t *testing.T) {
 		t.Fatalf("items: %v", err)
 	}
 	items := out["Items"].([]map[string]any)
-	if len(items) != 1 {
-		t.Fatalf("movie library item filtered out by season numbers: %#v", out)
-	}
-	if items[0]["Type"] != "Movie" || items[0]["ParentId"] != lib.ID {
-		t.Fatalf("movie library item should stay Movie, got %#v", items[0])
-	}
-	tags := items[0]["ImageTags"].(map[string]string)
-	if tags["Primary"] == "" {
-		t.Fatalf("movie poster should expose Primary image tag: %#v", items[0])
+	if len(items) != 1 || items[0]["Type"] != "Movie" {
+		t.Fatalf("weak parsed numbers should stay Movie, got %#v", out)
 	}
 
 	episodes, err := svc.Items(t.Context(), ItemsParams{ParentID: lib.ID, IncludeItemTypes: []string{"Episode"}, Limit: 50})
@@ -266,15 +444,7 @@ func TestEmbyMovieLibrarySeasonNumbersStayMovies(t *testing.T) {
 		t.Fatalf("episode query: %v", err)
 	}
 	if len(episodes["Items"].([]map[string]any)) != 0 {
-		t.Fatalf("movie library should not expose movies as episodes, got %#v", episodes)
-	}
-
-	item, err := svc.Item(t.Context(), media.ID, "user-1")
-	if err != nil {
-		t.Fatalf("item: %v", err)
-	}
-	if item["Type"] != "Movie" || item["ParentId"] != lib.ID {
-		t.Fatalf("direct item should stay Movie, got %#v", item)
+		t.Fatalf("weak parsed numbers should not expose Episode, got %#v", episodes)
 	}
 }
 

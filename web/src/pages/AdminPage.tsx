@@ -78,7 +78,6 @@ function LibraryPanel() {
   const [libs, setLibs] = useState<Library[]>([])
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
-  const [type, setType] = useState('movie')
 
   const refresh = () => libraryAPI.list({ includeHidden: true }).then(setLibs)
   useEffect(() => {
@@ -88,7 +87,7 @@ function LibraryPanel() {
   const handleCreate = async (e: FormEvent) => {
     e.preventDefault()
     try {
-      await libraryAPI.create(name, path, type)
+      await libraryAPI.create(name, path, 'auto')
       toast.success('媒体库已创建')
       setName('')
       setPath('')
@@ -103,7 +102,7 @@ function LibraryPanel() {
 
   return (
     <div className="space-y-6">
-      <form onSubmit={handleCreate} className="glass-panel grid gap-3 md:grid-cols-4">
+      <form onSubmit={handleCreate} className="glass-panel grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
         <input
           required
           className="input-base"
@@ -113,23 +112,16 @@ function LibraryPanel() {
         />
         <input
           required
-          className="input-base md:col-span-2"
+          className="input-base"
           placeholder="容器路径，如 /media/电视剧/国产剧"
           value={path}
           onChange={(e) => setPath(e.target.value)}
         />
-        <p className="md:col-span-4 -mt-2 text-xs text-sand-500">
+        <p className="md:col-span-2 -mt-2 text-xs text-sand-500">
           Docker 部署时请优先填写容器内路径，例如 /media/电影、/media/电视剧/国产剧；如果误填 NAS
-          宿主机路径，系统会尝试按 compose 挂载自动转换。
+          宿主机路径，系统会尝试按 compose 挂载自动转换。媒体分类会在 Emby 兼容接口中按文件自动识别。
         </p>
-        <select className="input-base" value={type} onChange={(e) => setType(e.target.value)}>
-          <option value="movie">电影</option>
-          <option value="tv">电视剧</option>
-          <option value="variety">综艺</option>
-          <option value="anime">动漫</option>
-          <option value="music">音乐</option>
-        </select>
-        <button type="submit" className="neon-button md:col-span-4">
+        <button type="submit" className="neon-button md:col-span-2">
           新建媒体库
         </button>
       </form>
@@ -149,7 +141,7 @@ function LibraryPanel() {
               <tr key={l.id} className="border-t border-gray-200">
                 <td className="py-2 text-ink-600">{l.name}</td>
                 <td className="text-ink-100">{l.path}</td>
-                <td className="text-ink-100">{l.type}</td>
+                <td className="text-ink-100">{l.type === 'music' ? '音乐' : '自动识别'}</td>
                 <td className="space-x-2 py-2 text-right">
                   <button
                     className="rounded-lg border border-primary-400/40 px-2 py-1 text-xs text-brand-500 hover:bg-primary-400/10"

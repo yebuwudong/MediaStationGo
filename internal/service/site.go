@@ -218,23 +218,23 @@ func (s *SiteService) FindByID(ctx context.Context, id string) (*model.Site, err
 // upload_bytes, download_bytes are excluded to prevent injection.
 var siteUpdatableFields = map[string]bool{
 	"name":              true,
-	"url":              true,
-	"type":             true,
-	"auth_type":        true,
-	"api_key":          true,
-	"cookie":           true,
-	"auth_header":      true,
-	"user_agent":       true,
-	"rss_url":          true,
-	"timeout":          true,
-	"priority":         true,
-	"use_proxy":        true,
-	"rate_limit":       true,
+	"url":               true,
+	"type":              true,
+	"auth_type":         true,
+	"api_key":           true,
+	"cookie":            true,
+	"auth_header":       true,
+	"user_agent":        true,
+	"rss_url":           true,
+	"timeout":           true,
+	"priority":          true,
+	"use_proxy":         true,
+	"rate_limit":        true,
 	"browser_emulation": true,
-	"downloader":       true,
-	"enabled":          true,
-	"is_default":       true,
-	"extra":            true,
+	"downloader":        true,
+	"enabled":           true,
+	"is_default":        true,
+	"extra":             true,
 }
 
 // Update applies a partial patch to an existing site.
@@ -363,14 +363,21 @@ func (s *SiteService) TestConnection(ctx context.Context, id string) (bool, stri
 type SearchResult struct {
 	SiteName    string `json:"site_name"`
 	SiteID      string `json:"site_id"`
+	ID          string `json:"id,omitempty"`
 	Title       string `json:"title"`
+	Subtitle    string `json:"subtitle,omitempty"`
+	PosterURL   string `json:"poster_url,omitempty"`
+	BackdropURL string `json:"backdrop_url,omitempty"`
 	TorrentURL  string `json:"torrent_url"`
 	DownloadURL string `json:"download_url"`
 	Category    string `json:"category,omitempty"`
 	Size        int64  `json:"size"`
 	Seeders     int    `json:"seeders"`
 	Leechers    int    `json:"leechers"`
+	Snatched    int    `json:"snatched,omitempty"`
 	Free        bool   `json:"free"`
+	Adult       bool   `json:"adult,omitempty"`
+	UploadTime  string `json:"upload_time,omitempty"`
 }
 
 // Search fans out a keyword query to every enabled site and returns
@@ -432,18 +439,7 @@ func (s *SiteService) Search(ctx context.Context, keyword string) ([]SearchResul
 			}
 			for _, item := range items {
 				mu.Lock()
-				results = append(results, SearchResult{
-					SiteName:    site.Name,
-					SiteID:      site.ID,
-					Title:       item.Title,
-					TorrentURL:  item.DetailURL,
-					DownloadURL: item.DownloadURL,
-					Category:    item.Category,
-					Size:        item.Size,
-					Seeders:     item.Seeders,
-					Leechers:    item.Leechers,
-					Free:        item.Free,
-				})
+				results = append(results, siteSearchResultFromItem(site, item, false))
 				mu.Unlock()
 			}
 		}(sites[i])

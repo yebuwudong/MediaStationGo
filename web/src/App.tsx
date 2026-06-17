@@ -39,6 +39,9 @@ const DownloadsPage = lazy(() =>
 const SubscriptionsPage = lazy(() =>
   import('./pages/SubscriptionsPage').then((m) => ({ default: m.SubscriptionsPage })),
 )
+const SubscriptionCenterPage = lazy(() =>
+  import('./pages/SubscriptionCenterPage').then((m) => ({ default: m.SubscriptionCenterPage })),
+)
 const ProfilePage = lazy(() =>
   import('./pages/ProfilePage').then((m) => ({ default: m.ProfilePage })),
 )
@@ -74,6 +77,9 @@ const SitesPage = lazy(() =>
 )
 const SiteSearchPage = lazy(() =>
   import('./pages/SiteSearchPage').then((m) => ({ default: m.SiteSearchPage })),
+)
+const PTResourcesPage = lazy(() =>
+  import('./pages/PTResourcesPage').then((m) => ({ default: m.PTResourcesPage })),
 )
 const AIAssistantPage = lazy(() =>
   import('./pages/AIAssistantPage').then((m) => ({ default: m.AIAssistantPage })),
@@ -165,12 +171,14 @@ export default function App() {
           <Route path="media/:id" element={<MediaDetailPage />} />
           <Route path="play/:id" element={<PlayerPage />} />
           <Route path="downloads" element={<DownloadsPage />} />
+          <Route path="subscription-center" element={<SubscriptionCenterPage />} />
           <Route path="subscriptions" element={<SubscriptionsPage />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route path="dlna" element={<DlnaPage />} />
           <Route path="history" element={<WatchHistoryPage />} />
           <Route path="poster-wall" element={<PosterWallPage />} />
           <Route path="site-search" element={<SiteSearchPage />} />
+          <Route path="pt-resources" element={<PTResourcesPage />} />
           <Route path="ai" element={<AIAssistantPage />} />
           <Route path="play-profiles" element={<ProfileManagementPage />} />
           <Route

@@ -88,6 +88,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 RUN printf '#!/bin/sh\n\
 PUID=${PUID:-$(id -u mediastation)}\n\
 PGID=${PGID:-$(id -g mediastation)}\n\
+if [ "$PUID" = "0" ]; then\n\
+  exec mediastation-go\n\
+fi\n\
 if [ "$PUID" != "$(id -u mediastation)" ] || [ "$PGID" != "$(id -g mediastation)" ]; then\n\
   deluser mediastation 2>/dev/null || true\n\
   delgroup mediastation 2>/dev/null || true\n\
@@ -96,9 +99,6 @@ if [ "$PUID" != "$(id -u mediastation)" ] || [ "$PGID" != "$(id -g mediastation)
 fi\n\
 chown -R mediastation:mediastation /data /cache 2>/dev/null || true\n\
 chown mediastation:mediastation /media 2>/dev/null || true\n\
-if [ "$PUID" = "0" ]; then\n\
-  exec mediastation-go\n\
-fi\n\
 exec su-exec mediastation mediastation-go\n' > /entrypoint.sh \
     && chmod +x /entrypoint.sh
 

@@ -136,6 +136,11 @@ func registerAuthenticatedRoutes(api *gin.RouterGroup, cfg *config.Config, svc *
 		authed.GET("/sites", requirePermission(svc, "can_manage_sites"), siteHandler.ListSites)
 		authed.GET("/sites/types", requirePermission(svc, "can_manage_sites"), siteHandler.GetSiteTypes)
 		authed.GET("/sites/auth-types", requirePermission(svc, "can_manage_sites"), siteHandler.GetAuthTypes)
+		authed.GET("/sites/categories", requirePermission(svc, "can_manage_sites"), siteCategoriesHandler(svc))
+		authed.GET("/sites/browse", requirePermission(svc, "can_manage_sites"), siteBrowseHandler(svc))
+		authed.GET("/sites/detail", requirePermission(svc, "can_manage_sites"), siteDetailHandler(svc))
+		authed.POST("/sites/download", requirePermission(svc, "can_manage_downloads"), siteDownloadHandler(svc))
+		authed.POST("/sites/subscribe", requirePermission(svc, "can_manage_subscriptions"), siteSubscribeHandler(svc))
 		authed.POST("/sites", requirePermission(svc, "can_manage_sites"), siteHandler.CreateSite)
 		authed.GET("/sites/:id", requirePermission(svc, "can_manage_sites"), siteHandler.GetSite)
 		authed.PUT("/sites/:id", requirePermission(svc, "can_manage_sites"), siteHandler.UpdateSite)
@@ -170,6 +175,7 @@ func registerAuthenticatedRoutes(api *gin.RouterGroup, cfg *config.Config, svc *
 		// Multi-section TMDb feed used by DiscoverPage.
 		authed.GET("/discover/sections", requirePermission(svc, "can_view_discover"), discoverSectionsHandler(svc))
 		authed.GET("/discover/feed", requirePermission(svc, "can_view_discover"), discoverFeedHandler(svc))
+		authed.GET("/discover/search", requirePermission(svc, "can_view_discover"), discoverSearchHandler(svc))
 
 		// System metadata + read-only scheduler view.
 		authed.GET("/system/info", systemInfoHandler(svc))

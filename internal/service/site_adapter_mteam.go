@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -67,6 +68,10 @@ func (a *MTeamAdapter) Authenticate(ctx context.Context, cfg SiteConfig) error {
 }
 
 func (a *MTeamAdapter) Search(ctx context.Context, cfg SiteConfig, keyword string, page int) (*SiteSearchResult, error) {
+	return a.SearchWithCategory(ctx, cfg, keyword, "", page)
+}
+
+func (a *MTeamAdapter) SearchWithCategory(ctx context.Context, cfg SiteConfig, keyword, category string, page int) (*SiteSearchResult, error) {
 	// 与参考项目对齐：使用 camelCase 字段名，page 从 1 开始。
 	if page <= 0 {
 		page = 1
@@ -75,6 +80,9 @@ func (a *MTeamAdapter) Search(ctx context.Context, cfg SiteConfig, keyword strin
 		"keyword":    keyword,
 		"pageNumber": page,
 		"pageSize":   50,
+	}
+	if category != "" {
+		payload["categories"] = []string{category}
 	}
 	body, _ := json.Marshal(payload)
 
@@ -116,14 +124,92 @@ func (a *MTeamAdapter) Browse(ctx context.Context, cfg SiteConfig, category stri
 	return parseMTeamJSON(data, cfg.Name, cfg.URL)
 }
 
-func (a *MTeamAdapter) GetDetail(ctx context.Context, cfg SiteConfig, id string) (*TorrentDetail, error) {
-	u := cfg.URL + "/api/torrent/detail?id=" + url.QueryEscape(id)
-	data, status, err := doRequestJSON(ctx, a.client, "POST", u, cfg, nil)
-	if err != nil {
-		return nil, fmt.Errorf("detail: %w", err)
+func (a *MTeamAdapter) Categories(ctx context.Context, cfg SiteConfig) ([]SiteCategory, error) {
+	var (
+		lastErr   error
+		best      []SiteCategory
+		bestScore int
+	)
+	for _, endpoint := range []struct {
+		method string
+		path   string
+		body   []byte
+	}{
+		{method: "GET", path: "/api/torrent/categoryList"},
+		{method: "POST", path: "/api/torrent/categoryList", body: []byte("{}")},
+		{method: "GET", path: "/api/torrent/categories"},
+		{method: "GET", path: "/api/torrent/category"},
+	} {
+		data, status, err := doRequestJSON(ctx, a.client, endpoint.method, cfg.URL+endpoint.path, cfg, endpoint.body)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if status != http.StatusOK {
+			lastErr = fmt.Errorf("category %s failed: status %d", endpoint.path, status)
+			continue
+		}
+		cats, err := parseMTeamCategoriesJSON(data, cfg.Type)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if len(cats) > 0 {
+			score := siteCategoryQualityScore(cats)
+			if score > bestScore {
+				best = cats
+				bestScore = score
+			}
+		}
 	}
-	if status != http.StatusOK {
-		return nil, fmt.Errorf("detail failed: status %d", status)
+	if len(best) > 0 {
+		return best, nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("mteam categories unavailable")
+}
+
+func siteCategoryQualityScore(cats []SiteCategory) int {
+	score := len(cats)
+	for _, cat := range cats {
+		if strings.TrimSpace(cat.Name) != "" && strings.TrimSpace(cat.Name) != strings.TrimSpace(cat.ID) {
+			score += 10
+		}
+	}
+	return score
+}
+
+func (a *MTeamAdapter) GetDetail(ctx context.Context, cfg SiteConfig, id string) (*TorrentDetail, error) {
+	var (
+		data    []byte
+		status  int
+		err     error
+		lastErr error
+	)
+	for _, attempt := range []struct {
+		method string
+		url    string
+		body   []byte
+	}{
+		{method: "POST", url: cfg.URL + "/api/torrent/detail?id=" + url.QueryEscape(id), body: []byte("{}")},
+		{method: "POST", url: cfg.URL + "/api/torrent/detail", body: []byte(`{"id":"` + id + `"}`)},
+		{method: "GET", url: cfg.URL + "/api/torrent/detail?id=" + url.QueryEscape(id)},
+	} {
+		data, status, err = doRequestJSON(ctx, a.client, attempt.method, attempt.url, cfg, attempt.body)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if status == http.StatusOK && mteamResponseCodeOK(data) {
+			lastErr = nil
+			break
+		}
+		lastErr = fmt.Errorf("detail failed: status %d", status)
+	}
+	if lastErr != nil {
+		return nil, lastErr
 	}
 
 	var resp map[string]interface{}
@@ -147,6 +233,20 @@ func (a *MTeamAdapter) GetDetail(ctx context.Context, cfg SiteConfig, id string)
 	if v, ok := dataField["subtitle"].(string); ok {
 		detail.Subtitle = v
 	}
+	detail.PosterURL = firstNonEmpty(
+		mteamStringField(dataField, "poster", "posterUrl", "cover", "coverUrl", "image", "imageUrl", "smallCover"),
+		mteamNestedStringField(dataField, "movieInfo", "poster", "posterUrl", "cover", "image"),
+	)
+	detail.BackdropURL = firstNonEmpty(
+		mteamStringField(dataField, "backdrop", "backdropUrl", "background", "banner"),
+		mteamNestedStringField(dataField, "movieInfo", "backdrop", "backdropUrl", "background"),
+	)
+	if detail.PosterURL != "" {
+		detail.PosterURL = absolutizeURL(cfg.URL, detail.PosterURL)
+	}
+	if detail.BackdropURL != "" {
+		detail.BackdropURL = absolutizeURL(cfg.URL, detail.BackdropURL)
+	}
 	if v, ok := dataField["size"].(float64); ok {
 		detail.Size = int64(v)
 	}
@@ -168,6 +268,9 @@ func (a *MTeamAdapter) GetDetail(ctx context.Context, cfg SiteConfig, id string)
 		detail.DownloadURL = v
 	}
 	if v, ok := dataField["description"].(string); ok {
+		if detail.PosterURL == "" {
+			detail.PosterURL = firstImageURLFromHTML(cfg.URL, v)
+		}
 		detail.Description = stripHTML(v)
 	}
 
@@ -302,6 +405,20 @@ func parseMTeamJSON(data []byte, siteName, baseURL string) (*SiteSearchResult, e
 		if v, ok := t["subtitle"].(string); ok {
 			item.Subtitle = v
 		}
+		item.PosterURL = firstNonEmpty(
+			mteamStringField(t, "poster", "posterUrl", "cover", "coverUrl", "image", "imageUrl", "smallCover"),
+			mteamNestedStringField(t, "movieInfo", "poster", "posterUrl", "cover", "image"),
+		)
+		item.BackdropURL = firstNonEmpty(
+			mteamStringField(t, "backdrop", "backdropUrl", "background", "banner"),
+			mteamNestedStringField(t, "movieInfo", "backdrop", "backdropUrl", "background"),
+		)
+		if item.PosterURL != "" {
+			item.PosterURL = absolutizeURL(baseURL, item.PosterURL)
+		}
+		if item.BackdropURL != "" {
+			item.BackdropURL = absolutizeURL(baseURL, item.BackdropURL)
+		}
 		if v, ok := t["category"].(map[string]interface{}); ok {
 			if name, ok := v["name"].(string); ok {
 				item.Category = name
@@ -342,4 +459,170 @@ func parseMTeamJSON(data []byte, siteName, baseURL string) (*SiteSearchResult, e
 	}
 
 	return result, nil
+}
+
+func mteamResponseCodeOK(data []byte) bool {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return true
+	}
+	code := mteamCodeString(raw["code"])
+	return code == "" || code == "0" || code == "200"
+}
+
+func parseMTeamCategoriesJSON(data []byte, siteType string) ([]SiteCategory, error) {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("parse categories: %w", err)
+	}
+	code := mteamCodeString(raw["code"])
+	if code != "" && code != "0" && code != "200" {
+		msg, _ := raw["message"].(string)
+		if msg == "" {
+			msg = fmt.Sprintf("code=%s", code)
+		}
+		return nil, fmt.Errorf("mteam categories: %s", msg)
+	}
+	payload := any(raw)
+	if dataField, ok := raw["data"]; ok && dataField != nil {
+		payload = dataField
+	}
+	cats := collectSiteCategoriesFromJSON(payload, siteType, "")
+	return dedupeSiteCategories(cats), nil
+}
+
+func collectSiteCategoriesFromJSON(value any, siteType, group string) []SiteCategory {
+	switch v := value.(type) {
+	case []interface{}:
+		out := make([]SiteCategory, 0, len(v))
+		for _, item := range v {
+			out = append(out, collectSiteCategoriesFromJSON(item, siteType, group)...)
+		}
+		return out
+	case map[string]interface{}:
+		if cat, ok := categoryFromJSONObject(v, siteType, group); ok {
+			out := []SiteCategory{cat}
+			for _, key := range []string{"children", "items", "list", "data", "subCategories"} {
+				if child, exists := v[key]; exists {
+					out = append(out, collectSiteCategoriesFromJSON(child, siteType, cat.Name)...)
+				}
+			}
+			return out
+		}
+		out := []SiteCategory{}
+		for key, child := range v {
+			nextGroup := group
+			if key != "data" && key != "list" && key != "items" && key != "children" {
+				nextGroup = inferSiteCategoryGroup(key, key)
+			}
+			if label, ok := child.(string); ok && strings.TrimSpace(label) != "" && looksCategoryID(key) {
+				out = append(out, SiteCategory{
+					ID:       strings.TrimSpace(key),
+					Name:     strings.TrimSpace(label),
+					Group:    inferSiteCategoryGroup(label, key),
+					SiteType: siteType,
+					Adult:    looksAdultPTResource(label + " " + key),
+				})
+				continue
+			}
+			out = append(out, collectSiteCategoriesFromJSON(child, siteType, nextGroup)...)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func categoryFromJSONObject(obj map[string]interface{}, siteType, group string) (SiteCategory, bool) {
+	id := mteamStringField(obj, "id", "value", "categoryId", "cat", "code")
+	name := mteamStringField(
+		obj,
+		"name", "label", "title", "text",
+		"categoryName", "displayName", "className",
+		"zhName", "cnName", "nameZh", "nameCn", "chs", "zh",
+	)
+	if id == "" && name == "" {
+		return SiteCategory{}, false
+	}
+	if name == "" {
+		name = "原站分类 " + id
+	}
+	if group == "" {
+		group = inferSiteCategoryGroup(name, id)
+	}
+	return SiteCategory{
+		ID:       strings.TrimSpace(id),
+		Name:     strings.TrimSpace(name),
+		Group:    group,
+		SiteType: siteType,
+		Adult:    looksAdultPTResource(name + " " + id + " " + group),
+	}, true
+}
+
+func dedupeSiteCategories(in []SiteCategory) []SiteCategory {
+	out := make([]SiteCategory, 0, len(in))
+	seen := map[string]struct{}{}
+	for _, cat := range in {
+		if strings.TrimSpace(cat.Name) == "" && strings.TrimSpace(cat.ID) == "" {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(cat.ID) + "\x00" + strings.TrimSpace(cat.Name))
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, cat)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Adult != out[j].Adult {
+			return !out[i].Adult
+		}
+		if out[i].Group != out[j].Group {
+			return out[i].Group < out[j].Group
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+func looksCategoryID(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 16 {
+		return false
+	}
+	for _, ch := range value {
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'z') && (ch < 'A' || ch > 'Z') && ch != '_' && ch != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func mteamStringField(obj map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if v, ok := obj[key]; ok {
+			switch val := v.(type) {
+			case string:
+				if strings.TrimSpace(val) != "" {
+					return strings.TrimSpace(val)
+				}
+			case float64:
+				if val != 0 {
+					return strconv.Itoa(int(val))
+				}
+			case int:
+				if val != 0 {
+					return strconv.Itoa(val)
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func mteamNestedStringField(obj map[string]interface{}, parent string, keys ...string) string {
+	if nested, ok := obj[parent].(map[string]interface{}); ok {
+		return mteamStringField(nested, keys...)
+	}
+	return ""
 }

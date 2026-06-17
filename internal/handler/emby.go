@@ -685,33 +685,63 @@ func embyViewsHandler(svc *service.Container) gin.HandlerFunc {
 func embyVirtualFoldersHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Cache-Control", "no-store")
-		libs, err := svc.Repo.Library.List(c.Request.Context())
+		uid := embyUserID(c)
+		if svc.Emby == nil {
+			libs, err := svc.Repo.Library.List(c.Request.Context())
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			libs = service.FilterDisplayCloudLibraries(c.Request.Context(), svc.Repo, libs)
+			visibility := service.UserDefaultMediaVisibility(c.Request.Context(), svc.Repo, uid)
+			out := make([]gin.H, 0, len(libs))
+			for _, lib := range libs {
+				if !service.LibraryVisibleForUser(c.Request.Context(), svc.Repo, lib, visibility) {
+					continue
+				}
+				collectionType := "movies"
+				switch lib.Type {
+				case "tv", "anime", "variety":
+					collectionType = "tvshows"
+				case "music":
+					collectionType = "music"
+				}
+				out = append(out, gin.H{
+					"Name":               lib.Name,
+					"Locations":          []string{lib.Path},
+					"CollectionType":     collectionType,
+					"ItemId":             lib.ID,
+					"Id":                 lib.ID,
+					"PrimaryImageItemId": lib.ID,
+					"RefreshStatus":      "Idle",
+					"LibraryOptions":     gin.H{},
+				})
+			}
+			c.JSON(http.StatusOK, out)
+			return
+		}
+		views, err := svc.Emby.Views(c.Request.Context(), uid)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		libs = service.FilterDisplayCloudLibraries(c.Request.Context(), svc.Repo, libs)
-		uid := embyUserID(c)
-		visibility := service.UserDefaultMediaVisibility(c.Request.Context(), svc.Repo, uid)
-		out := make([]gin.H, 0, len(libs))
-		for _, lib := range libs {
-			if !service.LibraryVisibleForUser(c.Request.Context(), svc.Repo, lib, visibility) {
+		rawItems, _ := views["Items"].([]map[string]any)
+		out := make([]gin.H, 0, len(rawItems))
+		for _, item := range rawItems {
+			id, _ := item["Id"].(string)
+			name, _ := item["Name"].(string)
+			path, _ := item["Path"].(string)
+			collectionType, _ := item["CollectionType"].(string)
+			if id == "" || name == "" {
 				continue
 			}
-			collectionType := "movies"
-			switch lib.Type {
-			case "tv", "anime", "variety":
-				collectionType = "tvshows"
-			case "music":
-				collectionType = "music"
-			}
 			out = append(out, gin.H{
-				"Name":               lib.Name,
-				"Locations":          []string{lib.Path},
+				"Name":               name,
+				"Locations":          []string{path},
 				"CollectionType":     collectionType,
-				"ItemId":             lib.ID,
-				"Id":                 lib.ID,
-				"PrimaryImageItemId": lib.ID,
+				"ItemId":             id,
+				"Id":                 id,
+				"PrimaryImageItemId": id,
 				"RefreshStatus":      "Idle",
 				"LibraryOptions":     gin.H{},
 			})
@@ -921,14 +951,14 @@ var embyPlaceholderPNG = []byte{
 // /api/img 会变成 401，所以这里复用 ImageProxy 但不再走 /api 路由。
 func embyItemImageHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 		defer cancel()
 		req := c.Request.WithContext(ctx)
 		id := c.Param("id")
 		imgType := strings.ToLower(c.Param("type"))
 		raw, err := svc.Emby.ImageURL(ctx, id, imgType)
 		if err != nil || raw == "" {
-			embyServePlaceholderImage(c)
+			c.Status(http.StatusNotFound)
 			return
 		}
 		if typ, ref, ok := parseCloudPlayImageURL(raw); ok {

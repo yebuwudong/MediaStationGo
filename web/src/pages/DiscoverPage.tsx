@@ -234,7 +234,7 @@ function DiscoverCard({ item, onSelect }: { item: DiscoverItem; onSelect: (item:
   )
 }
 
-function DiscoverDetailModal({ item, onClose }: { item: DiscoverItem; onClose: () => void }) {
+export function DiscoverDetailModal({ item, onClose }: { item: DiscoverItem; onClose: () => void }) {
   const source = item.source || (item.bangumi_id ? 'bangumi' : item.douban_id ? 'douban' : 'tmdb')
   const keyword = item.subscribe_keyword || buildSubscribeKeyword(item)
   const [form, setForm] = useState({

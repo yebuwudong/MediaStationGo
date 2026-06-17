@@ -9,6 +9,7 @@ package handler
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -44,10 +45,12 @@ func discoverSectionsHandler(_ *service.Container) gin.HandlerFunc {
 func discoverFeedHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		keys := strings.Split(c.DefaultQuery("sections", "tmdb_trending_day,tmdb_popular_movie,douban_hot_movie,bangumi_calendar"), ",")
+		page := parsePositiveQueryInt(c, "page", 1, 50)
+		limit := parsePositiveQueryInt(c, "limit", 40, 100)
 		out := gin.H{}
 		for _, raw := range keys {
 			k := strings.TrimSpace(raw)
-			items, err := discoverSectionItems(c.Request.Context(), svc, k)
+			items, err := discoverSectionItems(c.Request.Context(), svc, k, page, limit)
 			if err != nil {
 				svc.Log.Debug("discover fetch failed")
 				items = nil
@@ -58,22 +61,54 @@ func discoverFeedHandler(svc *service.Container) gin.HandlerFunc {
 	}
 }
 
-func discoverSectionItems(ctx context.Context, svc *service.Container, k string) ([]service.ExternalMediaResult, error) {
+func discoverSearchHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		query := strings.TrimSpace(c.Query("q"))
+		if query == "" {
+			c.JSON(http.StatusOK, gin.H{"items": []service.ExternalMediaResult{}})
+			return
+		}
+		source := strings.ToLower(strings.TrimSpace(c.DefaultQuery("source", "all")))
+		mediaType := strings.ToLower(strings.TrimSpace(c.Query("type")))
+		page := parsePositiveQueryInt(c, "page", 1, 50)
+		limit := parsePositiveQueryInt(c, "limit", 40, 100)
+		items, err := service.SearchSubscriptionCatalog(c.Request.Context(), query, mediaType, source, page, limit, svc.Discover, svc.Douban, svc.Bangumi)
+		if err != nil {
+			svc.Log.Debug("discover search failed")
+			c.JSON(http.StatusOK, gin.H{"items": []service.ExternalMediaResult{}, "error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"items": items})
+	}
+}
+
+func discoverSectionItems(ctx context.Context, svc *service.Container, k string, page, limit int) ([]service.ExternalMediaResult, error) {
 	switch k {
 	case "tmdb_trending_day", "tmdb_trending_week", "tmdb_popular_movie", "tmdb_popular_tv", "tmdb_top_rated_movie",
 		"trending_day", "trending_week", "popular_movie", "popular_tv", "top_rated_movie", "upcoming_movie":
-		return svc.Discover.TMDbSection(ctx, k)
+		return svc.Discover.TMDbSectionPage(ctx, k, page, limit)
 	case "douban_hot_movie", "douban_hot_tv", "douban_top_movie":
 		if svc.Douban == nil {
 			return []service.ExternalMediaResult{}, nil
 		}
-		return svc.Douban.Discover(ctx, k)
+		return svc.Douban.DiscoverPage(ctx, k, page, limit)
 	case "bangumi_calendar":
 		if svc.Bangumi == nil {
 			return []service.ExternalMediaResult{}, nil
 		}
-		return svc.Bangumi.Calendar(ctx)
+		return svc.Bangumi.CalendarPage(ctx, page, limit)
 	default:
 		return []service.ExternalMediaResult{}, nil
 	}
+}
+
+func parsePositiveQueryInt(c *gin.Context, key string, fallback, maxValue int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(c.Query(key)))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	if maxValue > 0 && value > maxValue {
+		return maxValue
+	}
+	return value
 }

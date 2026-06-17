@@ -51,4 +51,16 @@ export const discoverAPI = {
         params: { sections: sectionKeys.join(',') },
       })
       .then((r) => r.data),
+  feedPage: (sectionKeys: string[], page = 1, limit = 40) =>
+    api
+      .get<Record<string, DiscoverItem[] | null>>('/discover/feed', {
+        params: { sections: sectionKeys.join(','), page, limit },
+      })
+      .then((r) => r.data),
+  search: (q: string, source = 'all', mediaType = '', page = 1, limit = 40) =>
+    api
+      .get<{ items: DiscoverItem[]; error?: string }>('/discover/search', {
+        params: { q, source, type: mediaType, page, limit },
+      })
+      .then((r) => ({ items: r.data.items ?? [], error: r.data.error })),
 }

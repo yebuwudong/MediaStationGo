@@ -158,9 +158,9 @@ export function SitesPage() {
             badge: "必需",
           },
           {
-            to: "/site-search",
-            title: "站点检索",
-            description: "跨 PT 站点搜索资源并创建下载任务",
+            to: "/pt-resources",
+            title: "PT 资源中心",
+            description: "浏览全部站点分类资源并创建订阅下载",
           },
           {
             to: "/subscriptions",

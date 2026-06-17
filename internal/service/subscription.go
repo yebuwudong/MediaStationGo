@@ -285,9 +285,15 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 		return 0, errors.New("site-search subscription keyword required")
 	}
 
-	results, err := s.site.Search(ctx, keyword)
+	params := siteSearchParamsFromURL(sub.FeedURL)
+	params.Keyword = keyword
+	resultsEnvelope, err := s.site.Browse(ctx, params)
 	if err != nil {
 		return 0, err
+	}
+	results := []SearchResult{}
+	if resultsEnvelope != nil {
+		results = resultsEnvelope.Items
 	}
 	if len(results) == 0 {
 		now := time.Now()
@@ -320,7 +326,16 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 			seenSet[candidate.GUID] = struct{}{}
 			continue
 		}
-		realURL := s.site.ResolveDownloadURL(ctx, candidate.Download)
+		realURL, err := s.site.DownloadURL(ctx, item.SiteID, item.ID, candidate.Download)
+		if err != nil {
+			s.log.Warn("site-search subscription resolve download url failed",
+				zap.String("subscription", sub.Name),
+				zap.String("title", item.Title),
+				zap.String("site_id", item.SiteID),
+				zap.String("torrent_id", item.ID),
+				zap.Error(err))
+			realURL = s.site.ResolveDownloadURL(ctx, candidate.Download)
+		}
 		savePath := s.resolveSubscriptionSavePath(ctx, sub, mediaType, mediaCategory)
 		if s.downloadPathHasCandidate(ctx, sub, candidate.Item.Title, savePath) {
 			addAvailabilityTitle(item.Title, availabilityQuery(subscriptionName(sub), subscriptionFilter(sub)), &availability)

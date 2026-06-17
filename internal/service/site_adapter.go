@@ -45,6 +45,8 @@ type TorrentItem struct {
 	Title       string     `json:"title"`
 	Subtitle    string     `json:"subtitle"`
 	Category    string     `json:"category"`
+	PosterURL   string     `json:"poster_url,omitempty"`
+	BackdropURL string     `json:"backdrop_url,omitempty"`
 	Size        int64      `json:"size"`
 	Seeders     int        `json:"seeders"`
 	Leechers    int        `json:"leechers"`
@@ -62,6 +64,8 @@ type TorrentDetail struct {
 	Title       string     `json:"title"`
 	Subtitle    string     `json:"subtitle"`
 	Category    string     `json:"category"`
+	PosterURL   string     `json:"poster_url,omitempty"`
+	BackdropURL string     `json:"backdrop_url,omitempty"`
 	Size        int64      `json:"size"`
 	Seeders     int        `json:"seeders"`
 	Leechers    int        `json:"leechers"`
@@ -265,6 +269,21 @@ func parseSizeString(value string, unit string) int64 {
 func stripHTML(s string) string {
 	re := regexp.MustCompile(`<[^>]*>`)
 	return re.ReplaceAllString(s, "")
+}
+
+func firstImageURLFromHTML(baseURL, body string) string {
+	for _, match := range regexp.MustCompile(`(?is)<img[^>]+(?:src|data-src|data-original)=["']([^"']+)["']`).FindAllStringSubmatch(body, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		u := absolutizeURL(baseURL, match[1])
+		lower := strings.ToLower(u)
+		if strings.Contains(lower, "cat") || strings.Contains(lower, "icon") || strings.Contains(lower, "spacer") {
+			continue
+		}
+		return u
+	}
+	return ""
 }
 
 // GetAdapterForType 根据站点类型返回对应的适配器实例。

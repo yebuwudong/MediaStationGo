@@ -57,11 +57,18 @@ func (a *NexusPHPAdapter) Authenticate(ctx context.Context, cfg SiteConfig) erro
 }
 
 func (a *NexusPHPAdapter) Search(ctx context.Context, cfg SiteConfig, keyword string, page int) (*SiteSearchResult, error) {
+	return a.SearchWithCategory(ctx, cfg, keyword, "", page)
+}
+
+func (a *NexusPHPAdapter) SearchWithCategory(ctx context.Context, cfg SiteConfig, keyword, category string, page int) (*SiteSearchResult, error) {
 	params := url.Values{}
 	params.Set("search", keyword)
 	params.Set("page", strconv.Itoa(page))
 	params.Set("inclbookmarked", "0")
 	params.Set("incldead", "0")
+	if category != "" {
+		params.Set("cat", category)
+	}
 
 	u := cfg.URL + "/torrents.php?" + params.Encode()
 	data, status, err := doRequest(ctx, a.client, "GET", u, cfg, nil)
@@ -92,6 +99,17 @@ func (a *NexusPHPAdapter) Browse(ctx context.Context, cfg SiteConfig, category s
 	}
 
 	return parseNexusPHPHTML(string(data), cfg.Name, cfg.URL)
+}
+
+func (a *NexusPHPAdapter) Categories(ctx context.Context, cfg SiteConfig) ([]SiteCategory, error) {
+	data, status, err := doRequest(ctx, a.client, "GET", cfg.URL+"/torrents.php", cfg, nil)
+	if err != nil {
+		return nil, fmt.Errorf("categories request: %w", err)
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("categories failed: status %d", status)
+	}
+	return parseNexusPHPCategoriesHTML(string(data), cfg.Type), nil
 }
 
 func (a *NexusPHPAdapter) GetDetail(ctx context.Context, cfg SiteConfig, id string) (*TorrentDetail, error) {
@@ -132,6 +150,41 @@ func parseNexusPHPHTML(html, siteName, baseURL string) (*SiteSearchResult, error
 
 	result.Total = len(result.Items)
 	return result, nil
+}
+
+func parseNexusPHPCategoriesHTML(body, siteType string) []SiteCategory {
+	out := []SiteCategory{}
+	seen := map[string]struct{}{}
+	add := func(id, name string) {
+		id = strings.TrimSpace(id)
+		name = strings.TrimSpace(stripHTML(name))
+		if id == "" || name == "" {
+			return
+		}
+		key := id + "\x00" + name
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, SiteCategory{
+			ID:       id,
+			Name:     name,
+			Group:    inferSiteCategoryGroup(name, id),
+			SiteType: siteType,
+			Adult:    looksAdultPTResource(name + " " + id),
+		})
+	}
+	for _, m := range regexp.MustCompile(`(?is)cat=(\d+)[^>]*(?:title|alt)=["']([^"']+)["']`).FindAllStringSubmatch(body, -1) {
+		if len(m) >= 3 {
+			add(m[1], m[2])
+		}
+	}
+	for _, m := range regexp.MustCompile(`(?is)name=["']cat(\d+)["'][^>]*>\s*(?:<[^>]+>)*\s*([^<\r\n]+)`).FindAllStringSubmatch(body, -1) {
+		if len(m) >= 3 {
+			add(m[1], m[2])
+		}
+	}
+	return out
 }
 
 // parseNexusPHPRow 解析单行种子条目。
@@ -214,6 +267,7 @@ func parseNexusPHPDetailHTML(html, id, baseURL string) (*TorrentDetail, error) {
 	if m := subRegex.FindStringSubmatch(html); len(m) >= 2 {
 		detail.Subtitle = strings.TrimSpace(m[1])
 	}
+	detail.PosterURL = firstImageURLFromHTML(baseURL, html)
 
 	// Info hash
 	hashRegex := regexp.MustCompile(`(?i)info_hash[^<]*</td>\s*<td[^>]*>([^<]+)</td>`)

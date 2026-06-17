@@ -820,7 +820,7 @@ func TestEmbyItemImageServesWithoutAPIAuth(t *testing.T) {
 	}
 }
 
-func TestEmbyMissingItemImageReturnsTransparentPlaceholder(t *testing.T) {
+func TestEmbyMissingItemImageReturnsNotFound(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
@@ -842,14 +842,8 @@ func TestEmbyMissingItemImageReturnsTransparentPlaceholder(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected placeholder status 200, got %d body=%s", w.Code, w.Body.String())
-	}
-	if contentType := w.Header().Get("Content-Type"); !strings.Contains(contentType, "image/png") {
-		t.Fatalf("expected png content type, got %q", contentType)
-	}
-	if length := w.Header().Get("Content-Length"); length == "" || length == "0" {
-		t.Fatalf("expected placeholder content length, got %q", length)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected missing image status 404, got %d body=%s", w.Code, w.Body.String())
 	}
 }
 
