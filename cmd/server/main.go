@@ -86,6 +86,12 @@ func main() {
 	applyCPUThreadLimit(cfg, logger)
 	services := service.New(cfg, logger, repos)
 
+	if repaired, err := services.RepairCloudPathMetadata(context.Background()); err != nil {
+		logger.Warn("cloud path metadata repair failed", zap.Error(err))
+	} else if repaired > 0 {
+		logger.Info("cloud path metadata repair completed", zap.Int("media_count", repaired))
+	}
+
 	if err := services.Auth.SeedAdmin(context.Background()); err != nil {
 		logger.Warn("seed admin failed", zap.Error(err))
 	}

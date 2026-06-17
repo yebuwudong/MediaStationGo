@@ -484,6 +484,16 @@ func groupMediaVersions(items []model.Media) []MediaItem {
 
 func mediaVersionGroupKey(m model.Media) string {
 	if m.SeasonNum > 0 || m.EpisodeNum > 0 {
+		switch {
+		case m.TMDbID > 0:
+			return fmt.Sprintf("episode:tmdb:%d:%d:%d", m.TMDbID, m.SeasonNum, m.EpisodeNum)
+		case m.BangumiID > 0:
+			return fmt.Sprintf("episode:bangumi:%d:%d:%d", m.BangumiID, m.SeasonNum, m.EpisodeNum)
+		case strings.TrimSpace(m.DoubanID) != "":
+			return fmt.Sprintf("episode:douban:%s:%d:%d", strings.ToLower(strings.TrimSpace(m.DoubanID)), m.SeasonNum, m.EpisodeNum)
+		case strings.TrimSpace(m.TheTVDBID) != "":
+			return fmt.Sprintf("episode:thetvdb:%s:%d:%d", strings.ToLower(strings.TrimSpace(m.TheTVDBID)), m.SeasonNum, m.EpisodeNum)
+		}
 		title := firstNonEmpty(m.OriginalName, m.Title)
 		if title == "" {
 			title, _ = CleanQuery(m.Path)

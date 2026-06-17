@@ -22,6 +22,10 @@ export function getSeriesKey(media: Media): string {
   if (media.series_id) return `series:${media.series_id}`
   const fromPath = seriesTitleFromPath(media.path)
   if (isEpisodeLike(media)) {
+    if (media.tmdb_id && media.tmdb_id > 0) return `tmdb:${media.tmdb_id}`
+    if (media.bangumi_id && media.bangumi_id > 0) return `bgm:${media.bangumi_id}`
+    if (media.douban_id) return `douban:${media.douban_id}`
+    if (media.thetvdb_id) return `thetvdb:${media.thetvdb_id}`
     return `lib:${media.library_id}|show:${normalizeTitle(fromPath || seriesTitle(media))}`
   }
   if (media.tmdb_id && media.tmdb_id > 0) return `tmdb:${media.tmdb_id}`
@@ -44,6 +48,7 @@ function normalizeTitle(value?: string): string {
     .toLowerCase()
     .replace(/\s*\((?:19|20)\d{2}\)\s*/g, ' ')
     .replace(/\s*\[(?:tmdb|tmdbid)[=-]\d+\]\s*/g, ' ')
+    .replace(/\s*\{(?:tmdb|tmdbid|douban|bangumi|bgm|thetvdb|tvdb)[\s:=#-]*[a-z0-9_-]+\}\s*/g, ' ')
     .replace(/[\s._-]+/g, ' ')
     .trim()
 }

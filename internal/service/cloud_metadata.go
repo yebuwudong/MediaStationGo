@@ -49,6 +49,9 @@ func newCloudSidecarSet(typ string, entries []cloud.FileEntry) cloudSidecarSet {
 
 func (s *ScannerService) cloudDirectoryMetadata(ctx context.Context, typ, displayDir string, sidecars cloudSidecarSet, inherited *LocalMetadata) *LocalMetadata {
 	meta := cloneLocalMetadata(inherited)
+	if hinted, _ := pathHintMetadata(displayDir, true); hinted != nil {
+		meta = mergeCloudMetadata(meta, hinted)
+	}
 	for _, name := range cloudShowNFOCandidates(displayDir) {
 		ref := sidecars.nfoByName[strings.ToLower(name)]
 		if ref == "" {
@@ -73,6 +76,9 @@ func (s *ScannerService) cloudFileMetadata(ctx context.Context, typ, displayPath
 	season, episode := ParseEpisode(displayPath)
 	seriesLike = seriesLike || season > 0 || episode > 0
 	meta := cloneLocalMetadata(inherited)
+	if hinted, _ := pathHintMetadata(displayPath, seriesLike); hinted != nil {
+		meta = mergeCloudMetadata(meta, hinted)
+	}
 	base := strings.ToLower(strings.TrimSpace(strings.TrimSuffix(fileName, filepath.Ext(fileName))))
 	if ref := sidecars.nfoByBase[base]; ref != "" {
 		if local, doc, err := s.readCloudNFO(ctx, typ, ref, seriesLike); err == nil && local != nil {
@@ -206,6 +212,9 @@ func mergeCloudMetadata(dst, src *LocalMetadata) *LocalMetadata {
 	if src.TMDbID > 0 {
 		dst.TMDbID = src.TMDbID
 	}
+	if src.BangumiID > 0 {
+		dst.BangumiID = src.BangumiID
+	}
 	if src.DoubanID != "" {
 		dst.DoubanID = src.DoubanID
 	}
@@ -230,6 +239,7 @@ func mergeCloudMetadata(dst, src *LocalMetadata) *LocalMetadata {
 	dst.NSFW = dst.NSFW || src.NSFW
 	dst.HasNFO = dst.HasNFO || src.HasNFO
 	dst.HasArtwork = dst.HasArtwork || src.HasArtwork
+	dst.PathHint = dst.PathHint || src.PathHint
 	return dst
 }
 

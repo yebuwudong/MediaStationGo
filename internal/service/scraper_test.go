@@ -45,6 +45,29 @@ func TestCleanQuery(t *testing.T) {
 	}
 }
 
+func TestExternalIDHintsFromText(t *testing.T) {
+	hints := externalIDHintsFromText("国漫/折腰 (2025) {tmdb 220269}/Season 1/折腰.S01E01.mkv")
+	if hints.TMDbID != 220269 {
+		t.Fatalf("tmdb hint = %d, want 220269", hints.TMDbID)
+	}
+	hints = externalIDHintsFromText("Movie (2026) {tmdb-1630433} [douban=3622222] {bgm 456789} {tvdb:12345}")
+	if hints.TMDbID != 1630433 || hints.DoubanID != "3622222" || hints.BangumiID != 456789 || hints.TheTVDBID != "12345" {
+		t.Fatalf("external hints not parsed: %+v", hints)
+	}
+}
+
+func TestPathHintMetadataDoesNotMarkMediaMatched(t *testing.T) {
+	meta, hints := pathHintMetadata("cloud://openlist/国漫/折腰 (2025) {tmdb 220269}/Season 1/折腰.S01E01.mkv", true)
+	if meta == nil || hints.TMDbID != 220269 || meta.TMDbID != 220269 || meta.Title != "折腰" || meta.Year != 2025 {
+		t.Fatalf("path hint metadata = %+v hints=%+v", meta, hints)
+	}
+	media := &model.Media{Title: "折腰", ScrapeStatus: "pending"}
+	applyLocalMetadata(media, meta)
+	if media.ScrapeStatus != "pending" {
+		t.Fatalf("path hints alone must not mark media matched, got %q", media.ScrapeStatus)
+	}
+}
+
 func TestManualRequestMatchFallsBackToCandidatePayload(t *testing.T) {
 	scraper := &ScraperService{}
 	match, err := scraper.manualRequestMatch(t.Context(), ManualScrapeRequest{
@@ -131,6 +154,39 @@ func TestApplyManualMatchSavesSelectedCloudMatchWhenDetailsSlow(t *testing.T) {
 	}
 	if got.Title != "Correct Cloud Movie" || got.ScrapeStatus != "matched" || got.TMDbID != 77 {
 		t.Fatalf("manual cloud match was not saved: title=%q status=%q tmdb=%d", got.Title, got.ScrapeStatus, got.TMDbID)
+	}
+}
+
+func TestEnrichOneUsesExistingTMDbIDForCloudMedia(t *testing.T) {
+	scraper, repos, closeServer := newTestScraper(t)
+	defer closeServer()
+
+	lib := model.Library{Name: "OpenList · 国漫", Path: "cloud://openlist/国漫", Type: "anime", Enabled: true}
+	if err := repos.DB.Create(&lib).Error; err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "dirty release title",
+		Path:         "cloud://openlist/国漫/间谍过家家 (2022) {tmdb-12345}/Season 1/间谍过家家.S01E01.2160p.mkv",
+		SeasonNum:    1,
+		EpisodeNum:   1,
+		TMDbID:       12345,
+		ScrapeStatus: "pending",
+	}
+	if err := repos.DB.Create(&media).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := scraper.EnrichOne(t.Context(), &media); err != nil {
+		t.Fatal(err)
+	}
+	var got model.Media
+	if err := repos.DB.First(&got, "id = ?", media.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.ScrapeStatus != "matched" || got.Title != "间谍过家家" || got.TMDbID != 12345 || got.PosterURL == "" {
+		t.Fatalf("tmdb id scrape did not apply match: title=%q status=%q tmdb=%d poster=%q", got.Title, got.ScrapeStatus, got.TMDbID, got.PosterURL)
 	}
 }
 
@@ -431,6 +487,13 @@ func newTestScraper(t *testing.T) (*ScraperService, *repository.Container, func(
 			})
 		case strings.HasPrefix(r.URL.Path, "/tv/12345"):
 			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":             12345,
+				"name":           "间谍过家家",
+				"overview":       "测试简介",
+				"poster_path":    "/poster.jpg",
+				"backdrop_path":  "/backdrop.jpg",
+				"first_air_date": "2022-04-09",
+				"vote_average":   8.6,
 				"origin_country": []string{"JP"},
 				"spoken_languages": []map[string]any{{
 					"iso_639_1": "ja",

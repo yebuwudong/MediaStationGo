@@ -239,6 +239,12 @@ func (s *ScraperService) EnrichOne(ctx context.Context, m *model.Media) error {
 		}
 	}
 
+	if match := s.matchFromMediaExternalIDs(ctx, m, lib); match != nil {
+		s.applyFanartArtwork(ctx, match)
+		mergeLocalMetadataIntoMatch(match, local)
+		return s.applyProviderMatch(ctx, m, lib, match)
+	}
+
 	candidates := scrapeQueryCandidates(m, lib)
 	var query string
 	match := (*Match)(nil)
@@ -282,6 +288,43 @@ func (s *ScraperService) EnrichOne(ctx context.Context, m *model.Media) error {
 	mergeLocalMetadataIntoMatch(match, local)
 
 	return s.applyProviderMatch(ctx, m, lib, match)
+}
+
+func (s *ScraperService) matchFromMediaExternalIDs(ctx context.Context, m *model.Media, lib *model.Library) *Match {
+	if s == nil || m == nil {
+		return nil
+	}
+	mediaType := ""
+	if lib != nil {
+		mediaType = lib.Type
+	}
+	if m.TMDbID > 0 {
+		if match := s.manualTMDbMatchByID(ctx, m.TMDbID, normalizeMediaType(mediaType, m.Title, "")); match != nil {
+			return match
+		}
+	}
+	if strings.TrimSpace(m.DoubanID) != "" && s.douban != nil && s.douban.Enabled() {
+		if match, err := s.douban.GetMatchByID(ctx, strings.TrimSpace(m.DoubanID)); err == nil && match != nil {
+			return match
+		} else if err != nil {
+			s.log.Debug("douban id lookup failed", zap.String("media_id", m.ID), zap.String("douban_id", m.DoubanID), zap.Error(err))
+		}
+	}
+	if m.BangumiID > 0 && s.bangumi != nil && s.bangumi.Enabled() {
+		if match, err := s.bangumi.GetSubject(ctx, m.BangumiID); err == nil && match != nil {
+			return match
+		} else if err != nil {
+			s.log.Debug("bangumi id lookup failed", zap.String("media_id", m.ID), zap.Int("bangumi_id", m.BangumiID), zap.Error(err))
+		}
+	}
+	if strings.TrimSpace(m.TheTVDBID) != "" && s.thetvdb != nil && s.thetvdb.Enabled() {
+		if match, err := s.thetvdb.GetSeriesMatchByID(ctx, strings.TrimSpace(m.TheTVDBID)); err == nil && match != nil {
+			return match
+		} else if err != nil {
+			s.log.Debug("thetvdb id lookup failed", zap.String("media_id", m.ID), zap.String("thetvdb_id", m.TheTVDBID), zap.Error(err))
+		}
+	}
+	return nil
 }
 
 func (s *ScraperService) applyFanartArtwork(ctx context.Context, match *Match) {

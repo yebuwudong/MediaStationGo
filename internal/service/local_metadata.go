@@ -25,6 +25,7 @@ type LocalMetadata struct {
 	PosterURL    string
 	BackdropURL  string
 	TMDbID       int
+	BangumiID    int
 	DoubanID     string
 	TheTVDBID    string
 	SeasonNum    int
@@ -35,6 +36,7 @@ type LocalMetadata struct {
 	NSFW         bool
 	HasNFO       bool
 	HasArtwork   bool
+	PathHint     bool
 }
 
 type nfoUniqueID struct {
@@ -299,6 +301,7 @@ func metadataFromDoc(doc *nfoDocument, baseDir string, seriesLike bool) *LocalMe
 		PosterURL:    firstRemoteURL(baseDir, nfoPosterValues(doc)...),
 		BackdropURL:  firstRemoteURL(baseDir, nfoBackdropValues(doc)...),
 		TMDbID:       int(doc.TMDbID),
+		BangumiID:    mustAtoi(externalIDFromUniqueIDs(doc.UniqueIDs, "bangumi", "bgm")),
 		DoubanID:     externalIDFromUniqueIDs(doc.UniqueIDs, "douban"),
 		TheTVDBID:    externalIDFromUniqueIDs(doc.UniqueIDs, "thetvdb", "tvdb"),
 		SeasonNum:    int(doc.Season),
@@ -434,6 +437,9 @@ func mergeEpisodeMetadata(dst, episode *LocalMetadata, doc *nfoDocument) {
 	}
 	if episode.TMDbID > 0 {
 		dst.TMDbID = episode.TMDbID
+	}
+	if episode.BangumiID > 0 {
+		dst.BangumiID = episode.BangumiID
 	}
 	if episode.DoubanID != "" {
 		dst.DoubanID = episode.DoubanID

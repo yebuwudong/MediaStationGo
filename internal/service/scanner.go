@@ -375,6 +375,11 @@ type existingCloudMedia struct {
 	PosterURL   string
 	BackdropURL string
 	STRMURL     string
+	Year        int
+	TMDbID      int
+	BangumiID   int
+	DoubanID    string
+	TheTVDBID   string
 }
 
 type existingLocalMedia struct {
@@ -1456,10 +1461,15 @@ func (s *ScannerService) existingCloudMediaSnapshot(ctx context.Context, library
 		PosterURL   string
 		BackdropURL string
 		STRMURL     string
+		Year        int
+		TMDbID      int
+		BangumiID   int
+		DoubanID    string
+		TheTVDBID   string
 	}
 	if err := s.repo.DB.WithContext(ctx).
 		Model(&model.Media{}).
-		Select("path, size_bytes, duration_sec, width, height, video_codec, audio_codec, container, poster_url, backdrop_url, strm_url").
+		Select("path, size_bytes, duration_sec, width, height, video_codec, audio_codec, container, poster_url, backdrop_url, strm_url, year, tm_db_id, bangumi_id, douban_id, thetvdb_id").
 		Where("library_id = ? AND path LIKE ?", libraryID, "cloud://%").
 		Find(&rows).Error; err != nil {
 		return nil, err
@@ -1478,6 +1488,11 @@ func (s *ScannerService) existingCloudMediaSnapshot(ctx context.Context, library
 				PosterURL:   row.PosterURL,
 				BackdropURL: row.BackdropURL,
 				STRMURL:     row.STRMURL,
+				Year:        row.Year,
+				TMDbID:      row.TMDbID,
+				BangumiID:   row.BangumiID,
+				DoubanID:    row.DoubanID,
+				TheTVDBID:   row.TheTVDBID,
 			}
 		}
 	}
@@ -1616,6 +1631,20 @@ func (s *ScannerService) ingestCloudFile(ctx context.Context, lib *model.Library
 		res.LocalMetadata++
 		s.queueCloudArtworkPrefetch(localMeta.PosterURL)
 		s.queueCloudArtworkPrefetch(localMeta.BackdropURL)
+	}
+	if _, hints := pathHintMetadata(path, librarySupportsSeasons(lib) || parsedSeason > 0 || parsedEpisode > 0); hints.useful() {
+		if hints.TMDbID > 0 && m.TMDbID <= 0 {
+			m.TMDbID = hints.TMDbID
+		}
+		if hints.BangumiID > 0 && m.BangumiID <= 0 {
+			m.BangumiID = hints.BangumiID
+		}
+		if strings.TrimSpace(hints.DoubanID) != "" && strings.TrimSpace(m.DoubanID) == "" {
+			m.DoubanID = strings.TrimSpace(hints.DoubanID)
+		}
+		if strings.TrimSpace(hints.TheTVDBID) != "" && strings.TrimSpace(m.TheTVDBID) == "" {
+			m.TheTVDBID = strings.TrimSpace(hints.TheTVDBID)
+		}
 	}
 	if isNewMedia && writeBatch != nil {
 		var after func()
@@ -1807,6 +1836,21 @@ func probeResultUpdates(probe *ProbeResult) map[string]any {
 func cloudMetadataNeedsRefresh(existing existingCloudMedia, localMeta *LocalMetadata) bool {
 	if localMeta == nil {
 		return false
+	}
+	if localMeta.Year > 0 && existing.Year <= 0 {
+		return true
+	}
+	if localMeta.TMDbID > 0 && existing.TMDbID <= 0 {
+		return true
+	}
+	if localMeta.BangumiID > 0 && existing.BangumiID <= 0 {
+		return true
+	}
+	if strings.TrimSpace(localMeta.DoubanID) != "" && strings.TrimSpace(existing.DoubanID) == "" {
+		return true
+	}
+	if strings.TrimSpace(localMeta.TheTVDBID) != "" && strings.TrimSpace(existing.TheTVDBID) == "" {
+		return true
 	}
 	if strings.TrimSpace(localMeta.PosterURL) != "" && strings.TrimSpace(existing.PosterURL) == "" {
 		return true
@@ -2334,6 +2378,9 @@ func applyLocalMetadata(m *model.Media, local *LocalMetadata) {
 	if local.TMDbID > 0 {
 		m.TMDbID = local.TMDbID
 	}
+	if local.BangumiID > 0 {
+		m.BangumiID = local.BangumiID
+	}
 	if local.DoubanID != "" {
 		m.DoubanID = local.DoubanID
 	}
@@ -2358,7 +2405,7 @@ func applyLocalMetadata(m *model.Media, local *LocalMetadata) {
 	if local.NSFW {
 		m.NSFW = true
 	}
-	if local.HasNFO || localHasDescriptiveMetadata(local) {
+	if local.HasNFO || (!local.PathHint && localHasDescriptiveMetadata(local)) {
 		m.ScrapeStatus = "matched"
 	}
 }
@@ -2374,6 +2421,7 @@ func localHasDescriptiveMetadata(local *LocalMetadata) bool {
 		local.Overview != "" ||
 		local.Rating > 0 ||
 		local.TMDbID > 0 ||
+		local.BangumiID > 0 ||
 		local.DoubanID != "" ||
 		local.TheTVDBID != "" ||
 		local.Genres != "" ||
