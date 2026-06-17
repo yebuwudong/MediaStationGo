@@ -72,9 +72,11 @@ func qbitLoginOnce(ctx context.Context, client *http.Client, baseURL, username, 
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 	text := strings.TrimSpace(string(raw))
 	switch {
-	case resp.StatusCode == http.StatusNoContent:
-		return nil
 	case resp.StatusCode == http.StatusOK && text == "Ok.":
+		return nil
+	case resp.StatusCode == http.StatusOK && text == "Ok":
+		return nil
+	case resp.StatusCode == http.StatusNoContent:
 		return nil
 	case resp.StatusCode == http.StatusOK && text == "Fails.":
 		return errQbitBadCredentials

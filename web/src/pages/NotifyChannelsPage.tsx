@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react'
-import { Bell, Loader2, Pencil, Plus, Send, Trash2 } from 'lucide-react'
+import { Bell, Loader2, Pencil, Play, Plus, Send, Square, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 import {
@@ -17,6 +17,8 @@ export function NotifyChannelsPage() {
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<NotifyChannel | null>(null)
   const [showForm, setShowForm] = useState(false)
+  const [testingID, setTestingID] = useState<string | null>(null)
+  const [pollingBusy, setPollingBusy] = useState<'start' | 'stop' | null>(null)
 
   const refresh = async () => {
     setLoading(true)
@@ -32,6 +34,7 @@ export function NotifyChannelsPage() {
   }, [])
 
   const onTest = async (id: string) => {
+    setTestingID(id)
     try {
       await notifyChannelsAPI.test(id)
       toast.success('测试消息已发送')
@@ -39,6 +42,42 @@ export function NotifyChannelsPage() {
       const msg =
         (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? '发送失败'
       toast.error(msg)
+    } finally {
+      setTestingID(null)
+    }
+  }
+
+  const onStartPolling = async () => {
+    setPollingBusy('start')
+    try {
+      const res = await notifyChannelsAPI.startTelegramPolling()
+      if ((res.started ?? 0) > 0) {
+        toast.success(`已启动 ${res.started} 个 Telegram Bot 轮询`)
+      } else if ((res.already_running ?? 0) > 0) {
+        toast.success('Telegram Bot 轮询已在运行')
+      } else {
+        toast.error(res.errors?.[0] ?? '没有可启动的 Telegram Bot 渠道')
+      }
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? '启动轮询失败'
+      toast.error(msg)
+    } finally {
+      setPollingBusy(null)
+    }
+  }
+
+  const onStopPolling = async () => {
+    setPollingBusy('stop')
+    try {
+      const res = await notifyChannelsAPI.stopTelegramPolling()
+      toast.success(res.stopped > 0 ? `已停止 ${res.stopped} 个 Telegram Bot 轮询` : '当前没有运行中的轮询')
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? '停止轮询失败'
+      toast.error(msg)
+    } finally {
+      setPollingBusy(null)
     }
   }
 
@@ -69,15 +108,35 @@ export function NotifyChannelsPage() {
             </p>
           </div>
         </div>
-        <button
-          onClick={() => {
-            setEditing(null)
-            setShowForm(true)
-          }}
-          className="neon-button"
-        >
-          <Plus size={16} /> 添加渠道
-        </button>
+        <div className="flex flex-wrap justify-end gap-2">
+          <button
+            onClick={onStartPolling}
+            disabled={pollingBusy !== null}
+            className="rounded-xl border border-gray-200 px-3 py-2 text-sm text-ink-100 hover:border-primary-400/40 hover:text-brand-500 disabled:opacity-50"
+            title="启动 Telegram Bot 长轮询"
+          >
+            {pollingBusy === 'start' ? <Loader2 size={16} className="inline animate-spin" /> : <Play size={16} className="inline" />}
+            {' '}启动 Bot 轮询
+          </button>
+          <button
+            onClick={onStopPolling}
+            disabled={pollingBusy !== null}
+            className="rounded-xl border border-gray-200 px-3 py-2 text-sm text-ink-100 hover:border-primary-400/40 hover:text-brand-500 disabled:opacity-50"
+            title="停止本地长轮询。"
+          >
+            {pollingBusy === 'stop' ? <Loader2 size={16} className="inline animate-spin" /> : <Square size={16} className="inline" />}
+            {' '}停止轮询
+          </button>
+          <button
+            onClick={() => {
+              setEditing(null)
+              setShowForm(true)
+            }}
+            className="neon-button"
+          >
+            <Plus size={16} /> 添加渠道
+          </button>
+        </div>
       </div>
 
       {loading && (
@@ -97,6 +156,7 @@ export function NotifyChannelsPage() {
               key={ch.id}
               channel={ch}
               onTest={() => onTest(ch.id)}
+              testing={testingID === ch.id}
               onEdit={() => {
                 setEditing(ch)
                 setShowForm(true)
@@ -129,14 +189,34 @@ const TYPE_LABELS: Record<NotifyChannel['type'], string> = {
   email: 'Email',
 }
 
+const EVENT_OPTIONS = [
+  { value: 'subscription_hit', label: '订阅命中新资源' },
+  { value: 'download_complete', label: '下载任务完成' },
+  { value: 'library_ingest', label: '入库完成' },
+  { value: 'scrape_failed', label: '刮削失败告警' },
+  { value: 'system_alert', label: '系统异常通知' },
+]
+
+const EVENT_ALL = '__all__'
+const EVENT_NONE = '__none__'
+type EventMode = 'all' | 'custom' | 'none'
+
+function initialEventMode(events: string[] | undefined): EventMode {
+  if (events?.includes(EVENT_NONE)) return 'none'
+  if (events?.includes(EVENT_ALL) || !events || events.length === 0) return 'all'
+  return 'custom'
+}
+
 function ChannelCard({
   channel,
   onTest,
+  testing,
   onEdit,
   onDelete,
 }: {
   channel: NotifyChannel
   onTest: () => void
+  testing?: boolean
   onEdit: () => void
   onDelete: () => void
 }) {
@@ -154,13 +234,15 @@ function ChannelCard({
           )}
         </div>
         <div className="mt-1 truncate text-xs text-ink-50">{summary}</div>
+        <div className="mt-1 truncate text-xs text-sand-500">{eventSummary(channel.events)}</div>
       </div>
       <div className="flex shrink-0 gap-2">
         <button
           onClick={onTest}
+          disabled={testing}
           className="rounded-lg border border-gray-200 px-2 py-1 text-xs text-ink-100 hover:border-primary-400/40 hover:text-brand-500"
         >
-          <Send size={12} className="inline" /> 测试
+          {testing ? <Loader2 size={12} className="inline animate-spin" /> : <Send size={12} className="inline" />} 测试
         </button>
         <button
           onClick={onEdit}
@@ -177,6 +259,14 @@ function ChannelCard({
       </div>
     </div>
   )
+}
+
+function eventSummary(events: string[] | undefined): string {
+  if (events?.includes(EVENT_NONE)) return '事件：不推送'
+  if (events?.includes(EVENT_ALL)) return '事件：全部'
+  if (!events || events.length === 0) return '事件：全部'
+  const labels = events.map((event) => EVENT_OPTIONS.find((item) => item.value === event)?.label ?? event)
+  return `事件：${labels.join('、')}`
 }
 
 function channelSummary(ch: NotifyChannel): string {
@@ -245,6 +335,8 @@ function ChannelFormModal({
   const [config, setConfig] = useState<Record<string, string>>(
     normalizeInitialConfig(editing?.type ?? 'telegram', editing?.config ?? {}),
   )
+  const [events, setEvents] = useState<string[]>(editing?.events ?? [])
+  const [eventMode, setEventMode] = useState<EventMode>(initialEventMode(editing?.events))
   const [enabled, setEnabled] = useState(editing?.enabled ?? true)
   const [saving, setSaving] = useState(false)
 
@@ -265,6 +357,11 @@ function ChannelFormModal({
         return
       }
     }
+    const selectedEvents = events.filter((event) => EVENT_OPTIONS.some((item) => item.value === event))
+    if (eventMode === 'custom' && selectedEvents.length === 0) {
+      toast.error('请至少选择一个推送事件，或选择关闭全部推送事件')
+      return
+    }
     setSaving(true)
     try {
       const cleanedConfig = Object.fromEntries(
@@ -275,6 +372,7 @@ function ChannelFormModal({
         name: name.trim(),
         type: type,
         config: cleanedConfig,
+        events: eventMode === 'all' ? [EVENT_ALL] : eventMode === 'none' ? [EVENT_NONE] : selectedEvents,
         enabled,
       }
       if (editing) {
@@ -295,6 +393,14 @@ function ChannelFormModal({
 
   const updateConfig = (k: string, v: string) =>
     setConfig((c) => ({ ...c, [k]: v }))
+
+  const toggleEvent = (event: string) => {
+    setEvents((current) =>
+      current.includes(event)
+        ? current.filter((item) => item !== event)
+        : [...current.filter((item) => item !== EVENT_ALL && item !== EVENT_NONE), event],
+    )
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
@@ -531,6 +637,55 @@ function ChannelFormModal({
               </Field>
             </>
           )}
+
+          <Field label="推送事件">
+            <div className="space-y-2 rounded-lg border border-gray-200 bg-gray-50/60 p-3">
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-ink-100">
+                <input
+                  type="radio"
+                  name="notify-event-mode"
+                  className="h-4 w-4 accent-primary-400"
+                  checked={eventMode === 'all'}
+                  onChange={() => setEventMode('all')}
+                />
+                全部事件
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-ink-100">
+                <input
+                  type="radio"
+                  name="notify-event-mode"
+                  className="h-4 w-4 accent-primary-400"
+                  checked={eventMode === 'none'}
+                  onChange={() => setEventMode('none')}
+                />
+                关闭全部推送事件
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-ink-100">
+                <input
+                  type="radio"
+                  name="notify-event-mode"
+                  className="h-4 w-4 accent-primary-400"
+                  checked={eventMode === 'custom'}
+                  onChange={() => setEventMode('custom')}
+                />
+                仅推送勾选事件
+              </label>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {EVENT_OPTIONS.map((event) => (
+                  <label key={event.value} className="flex cursor-pointer items-center gap-2 text-sm text-ink-100">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-primary-400"
+                      disabled={eventMode !== 'custom'}
+                      checked={events.includes(event.value)}
+                      onChange={() => toggleEvent(event.value)}
+                    />
+                    {event.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+          </Field>
 
           <label className="flex cursor-pointer items-center gap-2 text-sm text-ink-100">
             <input

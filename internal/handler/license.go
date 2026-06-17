@@ -113,13 +113,28 @@ func licenseStatusHandler(svc *service.Container) gin.HandlerFunc {
 		if err == nil {
 			deviceID, idErr := ensureLicenseDeviceID(c.Request.Context(), svc, "")
 			if idErr == nil {
-				var upstream licenseServerStatusResp
-				if getErr := client.get(c.Request.Context(), "/api/v1/status/"+url.PathEscape(deviceID), &upstream); getErr == nil && upstream.Valid {
-					applyLicenseStatus(&state, upstream, deviceID)
+				deviceName, _ := svc.Repo.Setting.Get(c.Request.Context(), licenseDeviceNameSetting)
+				if strings.TrimSpace(deviceName) == "" {
+					deviceName = defaultLicenseDeviceName()
+					_ = svc.Repo.Setting.Set(c.Request.Context(), licenseDeviceNameSetting, deviceName)
+				}
+				var signed licenseServerSignedResp
+				if heartbeatErr := client.post(c.Request.Context(), "/api/v1/heartbeat", map[string]any{
+					"fingerprint": deviceID,
+					"instance_id": deviceID,
+					"device_name": deviceName,
+				}, &signed); heartbeatErr == nil && client.verifySigned(&signed) == nil {
+					state = licenseStateFromSigned(signed, deviceID, deviceName)
 					_ = persistLicenseState(c.Request.Context(), svc, state)
-				} else if getErr == nil && !upstream.Valid {
-					state.Valid = false
-					_ = persistLicenseState(c.Request.Context(), svc, state)
+				} else {
+					var upstream licenseServerStatusResp
+					if getErr := client.get(c.Request.Context(), "/api/v1/status/"+url.PathEscape(deviceID), &upstream); getErr == nil && upstream.Valid {
+						applyLicenseStatus(&state, upstream, deviceID)
+						_ = persistLicenseState(c.Request.Context(), svc, state)
+					} else if getErr == nil && !upstream.Valid {
+						state.Valid = false
+						_ = persistLicenseState(c.Request.Context(), svc, state)
+					}
 				}
 			}
 		}
@@ -146,10 +161,16 @@ func licenseHeartbeatHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		deviceName, _ := svc.Repo.Setting.Get(c.Request.Context(), licenseDeviceNameSetting)
+		if strings.TrimSpace(deviceName) == "" {
+			deviceName = defaultLicenseDeviceName()
+			_ = svc.Repo.Setting.Set(c.Request.Context(), licenseDeviceNameSetting, deviceName)
+		}
 		var upstream licenseServerSignedResp
 		if err := client.post(c.Request.Context(), "/api/v1/heartbeat", map[string]any{
 			"fingerprint": deviceID,
 			"instance_id": deviceID,
+			"device_name": deviceName,
 		}, &upstream); err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 			return
@@ -158,7 +179,6 @@ func licenseHeartbeatHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 			return
 		}
-		deviceName, _ := svc.Repo.Setting.Get(c.Request.Context(), licenseDeviceNameSetting)
 		state := licenseStateFromSigned(upstream, deviceID, deviceName)
 		if err := persistLicenseState(c.Request.Context(), svc, state); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

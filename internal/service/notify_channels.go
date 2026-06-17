@@ -182,9 +182,15 @@ func (s *NotifyChannelService) Test(ctx context.Context, id string) error {
 	return s.dispatchOne(ctx, *row, "MediaStationGo 测试通知", "如果你看到这条消息,说明该通道工作正常。")
 }
 
+const (
+	NotifyEventAll  = "__all__"
+	NotifyEventNone = "__none__"
+)
+
 // Broadcast sends a message to every enabled channel that subscribes to
-// `event` (an empty Events slice means "all events"). Failures are
-// logged and never abort the loop.
+// `event`. Legacy empty Events values mean "all events"; the explicit
+// NotifyEventNone sentinel means the channel stays enabled but receives no
+// event push.
 func (s *NotifyChannelService) Broadcast(ctx context.Context, title, body, event string) {
 	rows, err := s.repo.NotifyChannel.ListEnabled(ctx)
 	if err != nil {
@@ -201,10 +207,10 @@ func (s *NotifyChannelService) Broadcast(ctx context.Context, title, body, event
 	}
 }
 
-// channelSubscribes returns true when the channel's Events list is
-// empty (= all events) or contains `event`.
+// channelSubscribes returns true when the channel's Events list contains the
+// event, or when the list is the legacy empty/"all events" value.
 func channelSubscribes(n model.NotifyChannel, event string) bool {
-	if event == "" || n.Events == "" || n.Events == "[]" {
+	if event == "" || n.Events == "" {
 		return true
 	}
 	var ev []string
@@ -215,6 +221,12 @@ func channelSubscribes(n model.NotifyChannel, event string) bool {
 		return true
 	}
 	for _, e := range ev {
+		switch e {
+		case NotifyEventNone:
+			return false
+		case NotifyEventAll:
+			return true
+		}
 		if e == event {
 			return true
 		}

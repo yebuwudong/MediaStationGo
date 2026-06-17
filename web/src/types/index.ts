@@ -127,6 +127,8 @@ export interface Media {
   scrape_status: string
   tmdb_id: number
   bangumi_id: number
+  douban_id?: string
+  thetvdb_id?: string
   languages?: string
   countries?: string
   genres?: string
@@ -312,7 +314,7 @@ export interface NotifyChannel {
   name: string
   type: 'telegram' | 'wechat' | 'bark' | 'webhook' | 'email'
   enabled: boolean
-  events: string
+  events: string[]
   config: Record<string, string>
   created_at: string
   updated_at: string

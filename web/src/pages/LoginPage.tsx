@@ -2,7 +2,7 @@
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import toast from 'react-hot-toast'
-import { Eye, EyeOff, Film, ArrowRight, ShieldCheck, Lock, User } from 'lucide-react'
+import { Eye, EyeOff, ArrowRight, Lock, User } from 'lucide-react'
 import { AppFooter } from '../components/AppFooter'
 import { authAPI } from '../api/auth'
 import { useAuthStore } from '../stores/auth'
@@ -50,14 +50,14 @@ export function LoginPage() {
           
           {/* Logo & Headline */}
           <div className="flex flex-col items-center text-center pb-8">
-            <motion.div
+            <motion.img
               initial={{ scale: 0.8, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               transition={{ delay: 0.15, type: 'spring', stiffness: 200 }}
-              className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#111827] shadow-sm"
-            >
-              <Film className="h-7 w-7 text-[#c9954a]" />
-            </motion.div>
+              src="/brand/mgo-emby-icon.svg"
+              alt="MediaStationGo"
+              className="mb-4 h-14 w-14 rounded-2xl object-contain shadow-sm"
+            />
             
             <motion.h1
               initial={{ opacity: 0, y: 10 }}
@@ -65,7 +65,7 @@ export function LoginPage() {
               transition={{ delay: 0.25 }}
               className="font-display text-2xl font-extrabold tracking-tight text-gray-900"
             >
-              MediaStation
+              MediaStationGo
             </motion.h1>
             
             <motion.p
@@ -74,7 +74,7 @@ export function LoginPage() {
               transition={{ delay: 0.35 }}
               className="mt-2 text-xs font-bold uppercase tracking-widest text-[#c9954a]"
             >
-              家庭媒体私有站舱
+              一站式媒体管理中心
             </motion.p>
           </div>
 
@@ -165,20 +165,6 @@ export function LoginPage() {
                   </span>
                 )}
               </button>
-            </motion.div>
-
-            {/* Quick Helper Credentials */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.55 }}
-              className="flex items-center justify-center gap-1.5 rounded-xl bg-gray-50 border border-gray-100 px-4 py-2.5 text-xs text-gray-500"
-            >
-              <ShieldCheck size={14} className="text-brand-500" />
-              <span>默认访问凭证: </span>
-              <code className="rounded-lg bg-gray-200/50 px-1.5 py-0.5 font-mono text-[#111827] font-semibold">
-                admin / admin123
-              </code>
             </motion.div>
           </form>
         </div>
