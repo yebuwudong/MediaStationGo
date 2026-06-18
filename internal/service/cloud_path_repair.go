@@ -53,8 +53,8 @@ func (c *Container) RepairCloudPathMetadata(ctx context.Context) (int, error) {
 				updates["bangumi_id"] = meta.BangumiID
 				backfilledExternalID = true
 			}
-			if strings.TrimSpace(meta.DoubanID) != "" && strings.TrimSpace(row.DoubanID) == "" {
-				updates["douban_id"] = strings.TrimSpace(meta.DoubanID)
+			if doubanID := NormalizeDoubanID(meta.DoubanID); doubanID != "" && strings.TrimSpace(row.DoubanID) == "" {
+				updates["douban_id"] = doubanID
 				backfilledExternalID = true
 			}
 			if strings.TrimSpace(meta.TheTVDBID) != "" && strings.TrimSpace(row.TheTVDBID) == "" {

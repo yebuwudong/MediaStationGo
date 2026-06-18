@@ -113,6 +113,62 @@ func TestSiteSearchKeywordCanUseIMDB(t *testing.T) {
 	}
 }
 
+func TestSiteSearchKeywordsFallBackFromReleaseTitle(t *testing.T) {
+	sub := &model.Subscription{
+		Name:    "The Last of Us S02E01 1080p WEB-DL x265-Group",
+		FeedURL: SiteSearchURL("The Last of Us S02E01 1080p WEB-DL x265-Group", "mteam", "401", false),
+	}
+	got := siteSearchKeywords(sub)
+	if len(got) < 2 || got[0] != "the last of us" {
+		t.Fatalf("keywords = %#v, want cleaned title first", got)
+	}
+}
+
+func TestSiteSearchAttemptsRetryWithoutCategory(t *testing.T) {
+	attempts := siteSearchAttempts(SiteBrowseParams{SiteID: "mteam", Category: "401"}, []string{"Clean Title", "Original Release Title"})
+	if len(attempts) < 4 {
+		t.Fatalf("attempts = %#v, want category and fallback attempts", attempts)
+	}
+	if attempts[0].Keyword != "Clean Title" || attempts[0].Category != "401" {
+		t.Fatalf("first attempt = %#v", attempts[0])
+	}
+	if attempts[1].Keyword != "Clean Title" || attempts[1].Category != "" {
+		t.Fatalf("category fallback = %#v", attempts[1])
+	}
+}
+
+func TestSiteSearchKeywordsIncludeOriginalTitleForSubscriptionCenter(t *testing.T) {
+	sub := &model.Subscription{
+		Name:          "请求救援",
+		OriginalTitle: "Request Rescue",
+		Year:          2026,
+		FeedURL:       `site-search://search?keyword=%E8%AF%B7%E6%B1%82%E6%95%91%E6%8F%B4%202026&source=tmdb`,
+		Filter:        "请求救援",
+	}
+	keywords := siteSearchKeywords(sub)
+	foundOriginal := false
+	for _, keyword := range keywords {
+		if strings.EqualFold(keyword, "Request Rescue") || strings.EqualFold(keyword, "Request Rescue 2026") {
+			foundOriginal = true
+			break
+		}
+	}
+	if !foundOriginal {
+		t.Fatalf("keywords = %#v, want original title fallback", keywords)
+	}
+	attempts := siteSearchAttempts(SiteBrowseParams{}, keywords)
+	foundAttempt := false
+	for _, attempt := range attempts {
+		if strings.Contains(strings.ToLower(attempt.Keyword), "request rescue") {
+			foundAttempt = true
+			break
+		}
+	}
+	if !foundAttempt {
+		t.Fatalf("attempts = %#v, want original title within capped attempts", attempts)
+	}
+}
+
 func TestStableSiteSearchGUIDIgnoresPrivateTokenChanges(t *testing.T) {
 	item := SearchResult{
 		SiteID:   "mteam",

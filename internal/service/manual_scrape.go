@@ -158,9 +158,9 @@ func (s *ScraperService) manualRequestMatch(ctx context.Context, req ManualScrap
 				return mergeManualRequestIntoMatch(match, req), nil
 			}
 		}
-	case strings.TrimSpace(req.DoubanID) != "" && (source == "" || source == "douban"):
+	case NormalizeDoubanID(req.DoubanID) != "" && (source == "" || source == "douban"):
 		if s.douban != nil {
-			match, err := s.douban.GetMatchByID(ctx, req.DoubanID)
+			match, err := s.douban.GetMatchByID(ctx, NormalizeDoubanID(req.DoubanID))
 			if err == nil && match != nil {
 				return mergeManualRequestIntoMatch(match, req), nil
 			}
@@ -289,8 +289,8 @@ func mergeManualRequestIntoMatch(match *Match, req ManualScrapeRequest) *Match {
 	if req.BangumiID > 0 {
 		match.BangumiID = req.BangumiID
 	}
-	if req.DoubanID != "" {
-		match.DoubanID = req.DoubanID
+	if doubanID := NormalizeDoubanID(req.DoubanID); doubanID != "" {
+		match.DoubanID = doubanID
 	}
 	if req.TheTVDBID != "" {
 		match.TheTVDBID = req.TheTVDBID

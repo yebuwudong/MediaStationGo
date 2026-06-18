@@ -455,8 +455,8 @@ func (s *ScraperService) applyProviderMatch(ctx context.Context, m *model.Media,
 	if match.BangumiID > 0 {
 		updates["bangumi_id"] = match.BangumiID
 	}
-	if match.DoubanID != "" {
-		updates["douban_id"] = match.DoubanID
+	if doubanID := NormalizeDoubanID(match.DoubanID); doubanID != "" {
+		updates["douban_id"] = doubanID
 	}
 	if match.TheTVDBID != "" {
 		updates["thetvdb_id"] = match.TheTVDBID
@@ -576,8 +576,8 @@ func (s *ScraperService) applyLocalMetadataMatch(ctx context.Context, m *model.M
 	if next.BangumiID > 0 {
 		updates["bangumi_id"] = next.BangumiID
 	}
-	if next.DoubanID != "" {
-		updates["douban_id"] = next.DoubanID
+	if doubanID := NormalizeDoubanID(next.DoubanID); doubanID != "" {
+		updates["douban_id"] = doubanID
 	}
 	if next.TheTVDBID != "" {
 		updates["thetvdb_id"] = next.TheTVDBID

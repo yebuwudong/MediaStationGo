@@ -635,7 +635,7 @@ func TestAddDownloadWithMetaSkipsExistingTaskBeforeQBAdd(t *testing.T) {
 		case "/api/v2/auth/login":
 			_, _ = w.Write([]byte("Ok."))
 		case "/api/v2/torrents/info":
-			_, _ = w.Write([]byte(`[]`))
+			_, _ = w.Write([]byte(`[{"hash":"live123","name":"Some Show S01E01 1080p","state":"downloading","progress":0.5}]`))
 		case "/api/v2/torrents/add":
 			atomic.AddInt32(&addCalls, 1)
 			_, _ = w.Write([]byte("Ok."))
@@ -682,16 +682,22 @@ func TestAddDownloadWithMetaSkipsExistingTaskBeforeQBAdd(t *testing.T) {
 	}
 }
 
-func TestAddDownloadWithMetaSkipsUserDeletedTaskBeforeQBAdd(t *testing.T) {
+func TestAddDownloadWithMetaIgnoresDeletedHistoryWhenQBTaskMissing(t *testing.T) {
 	var addCalls int32
+	var added atomic.Bool
 	qb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v2/auth/login":
 			_, _ = w.Write([]byte("Ok."))
 		case "/api/v2/torrents/info":
+			if added.Load() {
+				_, _ = w.Write([]byte(`[{"hash":"new123","name":"User Deleted Show S01E01 1080p WEB-DL","state":"downloading","progress":0}]`))
+				return
+			}
 			_, _ = w.Write([]byte(`[]`))
 		case "/api/v2/torrents/add":
 			atomic.AddInt32(&addCalls, 1)
+			added.Store(true)
 			_, _ = w.Write([]byte("Ok."))
 		default:
 			http.NotFound(w, r)
@@ -732,14 +738,14 @@ func TestAddDownloadWithMetaSkipsUserDeletedTaskBeforeQBAdd(t *testing.T) {
 	task, err := svc.AddDownloadWithMeta(t.Context(), "u1", "https://pt.example/download?id=new&passkey=new", "/downloads/tv", DownloadTaskMeta{
 		Title: "User Deleted Show S01E01 1080p WEB-DL",
 	})
-	if !errors.Is(err, ErrDownloadAlreadyExists) {
-		t.Fatalf("err = %v, want ErrDownloadAlreadyExists", err)
+	if err != nil {
+		t.Fatalf("add download: %v", err)
 	}
-	if task == nil || task.ID != existing.ID {
-		t.Fatalf("task = %#v, want existing task %#v", task, existing)
+	if task == nil || task.ID == existing.ID {
+		t.Fatalf("task = %#v, should be a new task instead of existing %#v", task, existing)
 	}
-	if got := atomic.LoadInt32(&addCalls); got != 0 {
-		t.Fatalf("qb add calls = %d, want 0", got)
+	if got := atomic.LoadInt32(&addCalls); got != 1 {
+		t.Fatalf("qb add calls = %d, want 1", got)
 	}
 }
 

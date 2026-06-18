@@ -951,14 +951,14 @@ var embyPlaceholderPNG = []byte{
 // /api/img 会变成 401，所以这里复用 ImageProxy 但不再走 /api 路由。
 func embyItemImageHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
 		defer cancel()
 		req := c.Request.WithContext(ctx)
 		id := c.Param("id")
 		imgType := strings.ToLower(c.Param("type"))
 		raw, err := svc.Emby.ImageURL(ctx, id, imgType)
 		if err != nil || raw == "" {
-			c.Status(http.StatusNotFound)
+			embyServePlaceholderImage(c)
 			return
 		}
 		if typ, ref, ok := parseCloudPlayImageURL(raw); ok {

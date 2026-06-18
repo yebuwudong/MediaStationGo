@@ -248,7 +248,17 @@ func (a *MTeamAdapter) GetDetail(ctx context.Context, cfg SiteConfig, id string)
 			lastErr = nil
 			break
 		}
-		lastErr = fmt.Errorf("detail failed: status %d", status)
+		if status == http.StatusOK {
+			lastErr = mteamResponseError(data)
+			if isSitePortalRateLimitError(lastErr) {
+				break
+			}
+		} else {
+			lastErr = fmt.Errorf("detail failed: status %d", status)
+			if status == http.StatusTooManyRequests {
+				break
+			}
+		}
 	}
 	if lastErr != nil {
 		return nil, lastErr
@@ -284,12 +294,14 @@ func (a *MTeamAdapter) GetDetail(ctx context.Context, cfg SiteConfig, id string)
 		cfg.URL+"/api/torrent/genDlToken?id="+id,
 	)
 	detail.InfoHash = mteamStringField(dataField, "infoHash", "info_hash", "hash")
-	detail.ImdbID = mteamStringField(dataField, "imdb", "imdbId", "imdbID", "imdb_id")
-	detail.DoubanID = mteamStringField(dataField, "douban", "doubanId", "doubanID", "douban_id")
-	detail.TMDbID = firstNonEmpty(
+	detail.ImdbID = NormalizeIMDBID(mteamStringField(dataField, "imdb", "imdbId", "imdbID", "imdb_id"))
+	detail.DoubanID = NormalizeDoubanID(mteamStringField(dataField, "douban", "doubanId", "doubanID", "douban_id"))
+	if tmdbID := NormalizeTMDbID(firstNonEmpty(
 		mteamStringField(dataField, "tmdb", "tmdbId", "tmdbID", "tmdb_id"),
 		mteamNestedStringField(dataField, "movieInfo", "tmdb", "tmdbId", "tmdbID", "id"),
-	)
+	)); tmdbID > 0 {
+		detail.TMDbID = strconv.Itoa(tmdbID)
+	}
 	detail.Year = mteamYear(dataField)
 	detail.Rating = mteamRating(dataField)
 	detail.Genres = mteamStringList(dataField, "genres", "genre")
@@ -432,8 +444,28 @@ func parseMTeamJSON(data []byte, siteName, baseURL string) (*SiteSearchResult, e
 		releaseTitle := mteamStringField(t, "name", "title")
 		item.Title = mteamDisplayTitle(t, releaseTitle)
 		item.Subtitle = mteamSubtitle(t, item.Title, releaseTitle)
-		item.PosterURL = mteamPosterURL(t, baseURL)
-		item.BackdropURL = mteamBackdropURL(t, baseURL)
+		listImages := mteamImageList(t, baseURL)
+		if len(listImages) > 0 {
+			item.PosterURL = listImages[0]
+		}
+		if len(listImages) > 1 {
+			item.BackdropURL = listImages[1]
+		}
+		if item.PosterURL == "" {
+			item.PosterURL = mteamPosterURL(t, baseURL)
+		}
+		if item.BackdropURL == "" {
+			item.BackdropURL = mteamBackdropURL(t, baseURL)
+		}
+		if item.PosterURL == "" || item.BackdropURL == "" {
+			images := mteamImages(t, baseURL)
+			if item.PosterURL == "" && len(images) > 0 {
+				item.PosterURL = images[0]
+			}
+			if item.BackdropURL == "" && len(images) > 1 {
+				item.BackdropURL = images[1]
+			}
+		}
 		item.Category = mteamCategoryName(t)
 		item.Size = mteamSize(t)
 		item.Seeders, item.Leechers, item.Snatched = mteamStatus(t)
@@ -458,6 +490,19 @@ func mteamResponseCodeOK(data []byte) bool {
 	}
 	code := mteamCodeString(raw["code"])
 	return code == "" || code == "0" || code == "200"
+}
+
+func mteamResponseError(data []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("mteam detail failed: parse response: %w", err)
+	}
+	code := mteamCodeString(raw["code"])
+	msg := mteamStringField(raw, "message", "msg", "error")
+	if msg == "" {
+		msg = fmt.Sprintf("code=%s", firstNonEmpty(code, "unknown"))
+	}
+	return fmt.Errorf("mteam: %s", msg)
 }
 
 func parseMTeamCategoriesJSON(data []byte, siteType string) ([]SiteCategory, error) {
@@ -740,52 +785,44 @@ func mteamCategoryName(obj map[string]interface{}) string {
 }
 
 func mteamPosterURL(obj map[string]interface{}, baseURL string) string {
-	if movie, ok := obj["movieInfo"].(map[string]interface{}); ok {
+	for _, parent := range []string{"movieInfo", "movie_info", "movie", "mediaInfo", "media_info", "media", "video", "tmdb"} {
+		movie, ok := obj[parent].(map[string]interface{})
+		if !ok {
+			continue
+		}
 		if path := mteamStringField(movie, "posterPath", "poster_path"); path != "" {
 			return tmdbImageURL(path, "w500")
 		}
-		if value := mteamStringField(movie, "poster", "posterUrl", "posterURL", "cover", "coverUrl", "image", "imageUrl", "smallCover"); value != "" {
-			return mteamAbsolutizeImageURL(baseURL, value)
-		}
-	}
-	if movie, ok := obj["movie"].(map[string]interface{}); ok {
-		if path := mteamStringField(movie, "posterPath", "poster_path"); path != "" {
-			return tmdbImageURL(path, "w500")
-		}
-		if value := mteamStringField(movie, "poster", "posterUrl", "posterURL", "cover", "coverUrl", "image", "imageUrl", "smallCover"); value != "" {
+		if value := mteamStringField(movie, "poster", "posterUrl", "posterURL", "cover", "coverUrl", "image", "imageUrl", "smallCover", "thumbnail", "thumbnailUrl", "thumb", "thumbUrl", "pic", "picUrl", "img", "imgUrl"); value != "" {
 			return mteamAbsolutizeImageURL(baseURL, value)
 		}
 	}
 	if path := mteamStringField(obj, "posterPath", "poster_path"); path != "" {
 		return tmdbImageURL(path, "w500")
 	}
-	if value := mteamStringField(obj, "poster", "posterUrl", "posterURL", "cover", "coverUrl", "image", "imageUrl", "smallCover", "coverImage", "coverImageUrl"); value != "" {
+	if value := mteamStringField(obj, "poster", "posterUrl", "posterURL", "cover", "coverUrl", "image", "imageUrl", "smallCover", "coverImage", "coverImageUrl", "thumbnail", "thumbnailUrl", "thumb", "thumbUrl", "pic", "picUrl", "img", "imgUrl"); value != "" {
 		return mteamAbsolutizeImageURL(baseURL, value)
 	}
 	return ""
 }
 
 func mteamBackdropURL(obj map[string]interface{}, baseURL string) string {
-	if movie, ok := obj["movieInfo"].(map[string]interface{}); ok {
+	for _, parent := range []string{"movieInfo", "movie_info", "movie", "mediaInfo", "media_info", "media", "video", "tmdb"} {
+		movie, ok := obj[parent].(map[string]interface{})
+		if !ok {
+			continue
+		}
 		if path := mteamStringField(movie, "backdropPath", "backdrop_path"); path != "" {
 			return tmdbImageURL(path, "w1280")
 		}
-		if value := mteamStringField(movie, "backdrop", "backdropUrl", "backdropURL", "background", "banner", "backgroundUrl"); value != "" {
-			return mteamAbsolutizeImageURL(baseURL, value)
-		}
-	}
-	if movie, ok := obj["movie"].(map[string]interface{}); ok {
-		if path := mteamStringField(movie, "backdropPath", "backdrop_path"); path != "" {
-			return tmdbImageURL(path, "w1280")
-		}
-		if value := mteamStringField(movie, "backdrop", "backdropUrl", "backdropURL", "background", "banner", "backgroundUrl"); value != "" {
+		if value := mteamStringField(movie, "backdrop", "backdropUrl", "backdropURL", "background", "banner", "backgroundUrl", "backgroundImage", "backgroundImageUrl", "screenshot", "screenshotUrl"); value != "" {
 			return mteamAbsolutizeImageURL(baseURL, value)
 		}
 	}
 	if path := mteamStringField(obj, "backdropPath", "backdrop_path"); path != "" {
 		return tmdbImageURL(path, "w1280")
 	}
-	if value := mteamStringField(obj, "backdrop", "backdropUrl", "backdropURL", "background", "banner", "backgroundUrl", "backgroundImage", "backgroundImageUrl"); value != "" {
+	if value := mteamStringField(obj, "backdrop", "backdropUrl", "backdropURL", "background", "banner", "backgroundUrl", "backgroundImage", "backgroundImageUrl", "screenshot", "screenshotUrl"); value != "" {
 		return mteamAbsolutizeImageURL(baseURL, value)
 	}
 	return ""
@@ -906,6 +943,7 @@ func mteamDescription(obj map[string]interface{}, baseURL string) string {
 
 func mteamImages(obj map[string]interface{}, baseURL string) []string {
 	images := []string{}
+	images = append(images, mteamImageList(obj, baseURL)...)
 	for _, value := range []string{
 		mteamPosterURL(obj, baseURL),
 		mteamBackdropURL(obj, baseURL),
@@ -920,7 +958,115 @@ func mteamImages(obj map[string]interface{}, baseURL string) []string {
 	for _, key := range []string{"description", "descr", "body", "intro"} {
 		images = append(images, mteamImageURLsFromMarkup(baseURL, mteamStringField(obj, key))...)
 	}
+	images = append(images, mteamImageURLsFromAny(baseURL, obj, "", 0)...)
 	return mteamDedupeStrings(images)
+}
+
+func mteamImageList(obj map[string]interface{}, baseURL string) []string {
+	if obj == nil {
+		return nil
+	}
+	images := []string{}
+	for _, key := range []string{
+		"imageList", "images", "imageUrls", "imageURLs", "imageURLList",
+		"coverImages", "screenshots", "screenshotList", "photoList", "picList",
+	} {
+		if value, ok := obj[key]; ok {
+			images = append(images, mteamImageURLsFromImageListValue(baseURL, value)...)
+		}
+	}
+	for _, parent := range []string{"movieInfo", "movie_info", "movie", "mediaInfo", "media_info", "media", "video"} {
+		if child, ok := obj[parent].(map[string]interface{}); ok {
+			images = append(images, mteamImageList(child, baseURL)...)
+		}
+	}
+	return mteamDedupeStrings(images)
+}
+
+func mteamImageURLsFromImageListValue(baseURL string, value interface{}) []string {
+	if value == nil {
+		return nil
+	}
+	out := []string{}
+	switch v := value.(type) {
+	case []interface{}:
+		for _, child := range v {
+			out = append(out, mteamImageURLsFromImageListValue(baseURL, child)...)
+		}
+	case []string:
+		for _, child := range v {
+			out = append(out, mteamImageURLsFromImageListValue(baseURL, child)...)
+		}
+	case map[string]interface{}:
+		for _, key := range []string{"url", "src", "href", "image", "imageUrl", "imageURL", "cover", "coverUrl", "thumb", "thumbUrl"} {
+			if raw := mteamStringField(v, key); raw != "" {
+				if u := mteamCleanImageURL(baseURL, raw); u != "" {
+					out = append(out, u)
+				}
+			}
+		}
+		out = append(out, mteamImageURLsFromAny(baseURL, v, "imageList", 0)...)
+	case string:
+		out = append(out, mteamImageURLsFromMarkup(baseURL, v)...)
+		if u := mteamCleanImageURL(baseURL, v); u != "" {
+			out = append(out, u)
+		}
+	}
+	return mteamDedupeStrings(out)
+}
+
+func mteamImageURLsFromAny(baseURL string, value interface{}, keyHint string, depth int) []string {
+	if depth > 6 || value == nil {
+		return nil
+	}
+	out := []string{}
+	switch v := value.(type) {
+	case map[string]interface{}:
+		for key, child := range v {
+			out = append(out, mteamImageURLsFromAny(baseURL, child, key, depth+1)...)
+		}
+	case []interface{}:
+		for _, child := range v {
+			out = append(out, mteamImageURLsFromAny(baseURL, child, keyHint, depth+1)...)
+		}
+	case []string:
+		for _, child := range v {
+			out = append(out, mteamImageURLsFromAny(baseURL, child, keyHint, depth+1)...)
+		}
+	case string:
+		out = append(out, mteamImageURLsFromMarkup(baseURL, v)...)
+		if mteamLooksImageField(keyHint) || mteamLooksImageURL(v) {
+			if u := mteamCleanImageURL(baseURL, v); u != "" {
+				out = append(out, u)
+			}
+		}
+	}
+	return mteamDedupeStrings(out)
+}
+
+func mteamLooksImageField(key string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	if key == "" {
+		return false
+	}
+	for _, part := range []string{"poster", "cover", "image", "img", "thumb", "thumbnail", "backdrop", "background", "banner", "screenshot", "photo", "pic"} {
+		if strings.Contains(key, part) {
+			return true
+		}
+	}
+	return false
+}
+
+func mteamLooksImageURL(raw string) bool {
+	raw = strings.TrimSpace(strings.Trim(raw, `"'`))
+	if raw == "" {
+		return false
+	}
+	lower := strings.ToLower(raw)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "//") || strings.HasPrefix(lower, "/") {
+		return strings.Contains(lower, ".jpg") || strings.Contains(lower, ".jpeg") || strings.Contains(lower, ".png") || strings.Contains(lower, ".webp") || strings.Contains(lower, ".gif") || strings.Contains(lower, "/images/")
+	}
+	return false
 }
 
 func mteamImageURLsFromMarkup(baseURL, body string) []string {

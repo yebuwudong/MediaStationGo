@@ -877,9 +877,9 @@ func TestEmbyPlaybackInfoUsesVideoStreamWhenSTRMDisabled(t *testing.T) {
 		Base:      model.Base{ID: "cloud-302"},
 		LibraryID: lib.ID,
 		Title:     "Cloud 302 Movie",
-		Path:      `cloud://openlist/Movies/Movie.mkv`,
+		Path:      `cloud://openlist/Movies/Movie`,
 		STRMURL:   `/api/cloud/play/openlist?ref=%2FMovies%2FMovie.mkv`,
-		Container: "mkv",
+		Container: "matroska,webm",
 	}
 	if err := svc.repo.DB.Create(&media).Error; err != nil {
 		t.Fatalf("create media: %v", err)

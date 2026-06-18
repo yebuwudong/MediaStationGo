@@ -52,6 +52,34 @@ export interface SiteBrowseResponse {
   keyword?: string
 }
 
+export interface QBitTorrentFile {
+  index: number
+  name: string
+  size: number
+  priority: number
+}
+
+export interface SiteDownloadPrepareResponse {
+  hash: string
+  files: QBitTorrentFile[]
+}
+
+export interface SiteDownloadInput {
+  site_id?: string
+  id?: string
+  title: string
+  download_url?: string
+  torrent_url?: string
+  poster_url?: string
+  backdrop_url?: string
+  overview?: string
+  save_path?: string
+  media_type?: string
+  media_category?: string
+  source_category?: string
+  selected_files?: string[]
+}
+
 export interface CreateSiteInput {
   name: string
   url: string
@@ -123,20 +151,16 @@ export const sitesAPI = {
       .get('/sites/detail', { params: { site_id: siteID, id } })
       .then((r) => r.data),
 
-  download: (input: {
-    site_id?: string
-    id?: string
-    title: string
-    download_url?: string
-    torrent_url?: string
-    poster_url?: string
-    backdrop_url?: string
-    overview?: string
-    save_path?: string
-    media_type?: string
-    media_category?: string
-    source_category?: string
-  }) => api.post('/sites/download', input).then((r) => r.data),
+  download: (input: SiteDownloadInput) => api.post('/sites/download', input).then((r) => r.data),
+
+  prepareDownload: (input: SiteDownloadInput) =>
+    api.post<SiteDownloadPrepareResponse>('/sites/download/prepare', input).then((r) => r.data),
+
+  confirmDownload: (input: SiteDownloadInput & { hash: string; selected_file_indexes?: number[] }) =>
+    api.post('/sites/download/confirm', input).then((r) => r.data),
+
+  cancelPreparedDownload: (hash: string) =>
+    api.post('/sites/download/cancel', { hash }).then((r) => r.data),
 
   subscribe: (input: {
     site_id?: string

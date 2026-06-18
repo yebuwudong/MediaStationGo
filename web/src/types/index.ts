@@ -263,6 +263,7 @@ export interface QBitTorrent {
   size: number
   downloaded: number
   save_path: string
+  added_on?: number
 }
 
 export interface Hardware {

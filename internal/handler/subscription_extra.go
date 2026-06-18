@@ -90,13 +90,13 @@ func subscriptionPatchUpdates(patch subscriptionPatchReq) map[string]any {
 		updates["search_mode"] = *patch.SearchMode
 	}
 	if patch.IMDBID != nil {
-		updates["imdb_id"] = *patch.IMDBID
+		updates["imdb_id"] = service.NormalizeIMDBID(*patch.IMDBID)
 	}
 	if patch.TMDbID != nil {
 		updates["tmdb_id"] = *patch.TMDbID
 	}
 	if patch.DoubanID != nil {
-		updates["douban_id"] = *patch.DoubanID
+		updates["douban_id"] = service.NormalizeDoubanID(*patch.DoubanID)
 	}
 	if patch.Source != nil {
 		updates["source"] = *patch.Source

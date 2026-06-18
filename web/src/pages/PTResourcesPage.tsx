@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import {
   AlertTriangle,
@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Download,
   Eye,
+  Film,
   Filter,
   Loader2,
   RefreshCw,
@@ -13,7 +14,7 @@ import {
   Search,
 } from 'lucide-react'
 
-import { sitesAPI, type SiteCategory, type SiteSearchResult } from '../api/sites'
+import { sitesAPI, type QBitTorrentFile, type SiteCategory, type SiteDownloadInput, type SiteSearchResult } from '../api/sites'
 import { imageURL } from '../api/client'
 import type { Site } from '../types'
 
@@ -45,6 +46,10 @@ function itemKey(item: SiteSearchResult, idx: number): string {
   return `${item.site_id}:${item.id || item.torrent_url || item.download_url || idx}`
 }
 
+function itemVisualKey(item: SiteSearchResult): string {
+  return `${item.site_id}:${item.id || item.torrent_url || item.download_url || item.title}`
+}
+
 function cleanTitle(title: string): string {
   return title.length > 110 ? `${title.slice(0, 110)}...` : title
 }
@@ -73,6 +78,8 @@ function detailFromItem(item: SiteSearchResult): Record<string, unknown> {
     upload_time: item.upload_time,
     detail_url: item.torrent_url,
     download_url: item.download_url,
+    torrent_url: item.torrent_url,
+    site_id: item.site_id,
     site_name: item.site_name,
   }
 }
@@ -102,6 +109,47 @@ function stringList(value: unknown): string[] {
   return []
 }
 
+function detailVisual(detail: Record<string, unknown>): string {
+  const visual = resourceVisual(detail)
+  if (visual) return visual
+  return stringList(detail.images)[0] || ''
+}
+
+function ptImageURL(remote?: string): string {
+  const raw = (remote || '').trim()
+  if (!raw) return ''
+  if (raw.startsWith('//')) return `https:${raw}`
+  if (/^https?:\/\//i.test(raw)) return raw
+  return imageURL(raw)
+}
+
+const listVisualStorageKey = 'mediastation.pt.listVisuals.v1'
+const maxStoredListVisuals = 600
+
+function loadStoredListVisuals(): Record<string, string> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(listVisualStorageKey) || '{}') as Record<string, unknown>
+    const out: Record<string, string> = {}
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === 'string' && value) out[key] = value
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+function saveStoredListVisuals(values: Record<string, string>) {
+  if (typeof window === 'undefined') return
+  try {
+    const entries = Object.entries(values).slice(-maxStoredListVisuals)
+    window.localStorage.setItem(listVisualStorageKey, JSON.stringify(Object.fromEntries(entries)))
+  } catch {
+    // Ignore storage quota / private mode errors.
+  }
+}
+
 function uniqueStrings(values: string[]): string[] {
   const seen = new Set<string>()
   const out: string[] = []
@@ -112,6 +160,93 @@ function uniqueStrings(values: string[]): string[] {
     out.push(trimmed)
   }
   return out
+}
+
+function detailToSearchResult(detail: Record<string, unknown>, fallbackSiteID = ''): SiteSearchResult {
+  return {
+    site_name: String(detail.site_name || ''),
+    site_id: String(detail.site_id || fallbackSiteID || ''),
+    id: String(detail.id || ''),
+    title: String(detail.title || ''),
+    subtitle: typeof detail.subtitle === 'string' ? detail.subtitle : undefined,
+    poster_url: typeof detail.poster_url === 'string' ? detail.poster_url : undefined,
+    backdrop_url: typeof detail.backdrop_url === 'string' ? detail.backdrop_url : undefined,
+    overview: typeof detail.description === 'string' ? detail.description : undefined,
+    torrent_url: String(detail.torrent_url || detail.detail_url || ''),
+    download_url: String(detail.download_url || ''),
+    category: typeof detail.category === 'string' ? detail.category : undefined,
+    size: Number(detail.size || 0),
+    seeders: Number(detail.seeders || 0),
+    leechers: Number(detail.leechers || 0),
+    snatched: Number(detail.snatched || 0),
+    free: Boolean(detail.free),
+    adult: Boolean(detail.adult),
+    upload_time: typeof detail.upload_time === 'string' ? detail.upload_time : undefined,
+  }
+}
+
+function ResourceThumb({
+  item,
+  visual,
+  className,
+  iconSize,
+  onClick,
+}: {
+  item: SiteSearchResult
+  visual: string
+  className: string
+  iconSize: number
+  onClick?: () => void
+}) {
+  const content = (
+    <>
+      {visual ? (
+        <img
+          src={ptImageURL(visual)}
+          alt={item.title}
+          loading="eager"
+          decoding="async"
+          referrerPolicy="no-referrer"
+          className="h-full w-full object-cover"
+        />
+      ) : (
+        <Film size={iconSize} />
+      )}
+    </>
+  )
+  if (!onClick) {
+    return <div className={className}>{content}</div>
+  }
+  return (
+    <button
+      className={className}
+      onClick={onClick}
+      type="button"
+    >
+      {content}
+    </button>
+  )
+}
+
+interface PreparedDownloadChoice {
+  item: SiteSearchResult
+  hash: string
+  files: QBitTorrentFile[]
+}
+
+function siteDownloadInput(item: SiteSearchResult): SiteDownloadInput {
+  return {
+    site_id: item.site_id,
+    id: item.id,
+    title: item.title,
+    download_url: item.download_url,
+    torrent_url: item.torrent_url,
+    poster_url: item.poster_url,
+    backdrop_url: item.backdrop_url,
+    overview: item.overview || item.subtitle,
+    source_category: item.category,
+    media_category: item.adult ? '成人' : undefined,
+  }
 }
 
 export function PTResourcesPage() {
@@ -130,7 +265,12 @@ export function PTResourcesPage() {
   const [loading, setLoading] = useState(false)
   const [actingKey, setActingKey] = useState('')
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [downloadChoice, setDownloadChoice] = useState<PreparedDownloadChoice | null>(null)
+  const [selectedDownloadFiles, setSelectedDownloadFiles] = useState<Set<number>>(new Set())
   const [categoryGroup, setCategoryGroup] = useState('')
+  const listVisualsRef = useRef<Record<string, string>>(loadStoredListVisuals())
+  const [listVisuals, setListVisuals] = useState<Record<string, string>>(() => listVisualsRef.current)
 
   const loadSites = async () => {
     const payload = await sitesAPI.list()
@@ -194,6 +334,25 @@ export function PTResourcesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [siteID, category])
 
+  const cacheListVisual = useCallback((item: SiteSearchResult, visual: string) => {
+    const key = itemVisualKey(item)
+    if (!key || !visual) return
+    setListVisuals((prev) => {
+      if (prev[key]) return prev
+      const next = { ...prev, [key]: visual }
+      listVisualsRef.current = next
+      saveStoredListVisuals(next)
+      return next
+    })
+  }, [])
+
+  useEffect(() => {
+    for (const item of items) {
+      const visual = resourceVisual(item)
+      if (visual) cacheListVisual(item, visual)
+    }
+  }, [cacheListVisual, items])
+
   const groupedCategories = useMemo(() => {
     const byKey = new Map<string, SiteCategory>()
     for (const item of categories) {
@@ -236,27 +395,61 @@ export function PTResourcesPage() {
     loadResources(next)
   }
 
+  const visualForItem = (item: SiteSearchResult): string => resourceVisual(item) || listVisuals[itemVisualKey(item)] || ''
+
   const onDownload = async (item: SiteSearchResult) => {
     const key = `download:${itemKey(item, 0)}`
     setActingKey(key)
-    const toastID = toast.loading('正在加入下载...')
+    const toastID = toast.loading('正在提交到 qB 并读取文件列表...')
     try {
-      await sitesAPI.download({
-        site_id: item.site_id,
-        id: item.id,
-        title: item.title,
-        download_url: item.download_url,
-        torrent_url: item.torrent_url,
-        poster_url: item.poster_url,
-        backdrop_url: item.backdrop_url,
-        overview: item.overview || item.subtitle,
-        source_category: item.category,
-        media_category: item.adult ? '成人' : undefined,
-      })
-      toast.success('已加入下载', { id: toastID })
+      const prepared = await sitesAPI.prepareDownload(siteDownloadInput(item))
+      const files = prepared.files || []
+      setDownloadChoice({ item, hash: prepared.hash, files })
+      setSelectedDownloadFiles(new Set(files.map((file) => file.index)))
+      toast.success(files.length > 0 ? '已读取 qB 文件列表，请选择下载内容' : '已加入 qB 暂停任务，可确认后开始下载', { id: toastID })
     } catch (err: unknown) {
       const message =
         (err as { response?: { data?: { error?: string } } })?.response?.data?.error || '加入下载失败'
+      toast.error(message, { id: toastID })
+    } finally {
+      setActingKey('')
+    }
+  }
+
+  const closeDownloadChoice = async () => {
+    const current = downloadChoice
+    setDownloadChoice(null)
+    setSelectedDownloadFiles(new Set())
+    if (!current?.hash) return
+    try {
+      await sitesAPI.cancelPreparedDownload(current.hash)
+    } catch (err: unknown) {
+      const message =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error || '取消 qB 暂停任务失败'
+      toast.error(message)
+    }
+  }
+
+  const confirmDownloadChoice = async () => {
+    if (!downloadChoice) return
+    const { item, hash, files } = downloadChoice
+    const key = `download:${itemKey(item, 0)}`
+    setActingKey(key)
+    const toastID = toast.loading('正在应用文件选择并开始下载...')
+    try {
+      const selectedIndexes =
+        files.length > 0 && selectedDownloadFiles.size < files.length ? Array.from(selectedDownloadFiles) : undefined
+      await sitesAPI.confirmDownload({
+        ...siteDownloadInput(item),
+        hash,
+        selected_file_indexes: selectedIndexes,
+      })
+      toast.success('已开始下载', { id: toastID })
+      setDownloadChoice(null)
+      setSelectedDownloadFiles(new Set())
+    } catch (err: unknown) {
+      const message =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error || '开始下载失败'
       toast.error(message, { id: toastID })
     } finally {
       setActingKey('')
@@ -294,20 +487,26 @@ export function PTResourcesPage() {
 
   const onDetail = async (item: SiteSearchResult) => {
     setDetail(detailFromItem(item))
+    setDetailLoading(true)
     if (!item.id) {
+      setDetailLoading(false)
       return
     }
     const key = `detail:${itemKey(item, 0)}`
     setActingKey(key)
     try {
       const data = await sitesAPI.detail(item.site_id, item.id)
-      setDetail(mergeDetail(item, data as Record<string, unknown>))
+      const merged = mergeDetail(item, data as Record<string, unknown>)
+      setDetail(merged)
+      const visual = detailVisual(merged)
+      if (visual) cacheListVisual(item, visual)
     } catch (err: unknown) {
       const message =
         (err as { response?: { data?: { error?: string } } })?.response?.data?.error || '站点详情接口不可用，已显示列表信息'
       toast.error(message)
     } finally {
       setActingKey('')
+      setDetailLoading(false)
     }
   }
 
@@ -319,6 +518,10 @@ export function PTResourcesPage() {
   const detailBackdrop = typeof detail?.backdrop_url === 'string' ? detail.backdrop_url : ''
   const detailSubtitle = typeof detail?.subtitle === 'string' ? detail.subtitle : ''
   const detailImages = uniqueStrings(stringList(detail?.images)).filter((url) => url !== detailPoster && url !== detailBackdrop)
+  const detailDownloadItem: SiteSearchResult | null = detail ? detailToSearchResult(detail, siteID) : null
+  const downloadChoiceFiles = downloadChoice?.files || []
+  const downloadChoiceItem = downloadChoice?.item || null
+  const selectedDownloadFileList = downloadChoiceFiles.filter((file) => selectedDownloadFiles.has(file.index))
 
   return (
     <div className="space-y-6">
@@ -330,7 +533,7 @@ export function PTResourcesPage() {
             <p className="text-sm text-ink-50">站点资源、分类、成人资源、订阅下载</p>
           </div>
         </div>
-        <button className="neon-button flex items-center gap-2" onClick={() => loadResources(1)} disabled={loading}>
+        <button className="neon-button flex items-center gap-2" onClick={() => loadResources(page)} disabled={loading}>
           <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
           刷新
         </button>
@@ -494,6 +697,7 @@ export function PTResourcesPage() {
                 item={item}
                 itemKeyValue={key}
                 actingKey={actingKey}
+                visual={visualForItem(item)}
                 onDetail={onDetail}
                 onDownload={onDownload}
                 onSubscribe={onSubscribe}
@@ -520,23 +724,16 @@ export function PTResourcesPage() {
           <tbody>
             {items.map((item, idx) => {
               const key = itemKey(item, idx)
+              const visual = visualForItem(item)
               return (
                 <tr key={key} className="border-t border-gray-200 align-top">
                   <td className="py-3">
-                    {resourceVisual(item) && (
-                      <button
-                        className="h-16 w-11 overflow-hidden rounded border border-gray-200 bg-gray-100"
-                        onClick={() => onDetail(item)}
-                      >
-                        <img
-                          src={imageURL(resourceVisual(item))}
-                          alt={item.title}
-                          loading="lazy"
-                          referrerPolicy="no-referrer"
-                          className="h-full w-full object-cover"
-                        />
-                      </button>
-                    )}
+                    <ResourceThumb
+                      item={item}
+                      visual={visual}
+                      className="flex h-16 w-11 items-center justify-center overflow-hidden rounded border border-gray-200 bg-gray-100 text-sand-500"
+                      iconSize={16}
+                    />
                   </td>
                   <td className="py-3 text-brand-500">{item.site_name}</td>
                   <td className="max-w-xl py-3">
@@ -544,9 +741,9 @@ export function PTResourcesPage() {
                       {item.free && <span className="rounded border border-emerald-400/40 px-1.5 py-0.5 text-xs text-emerald-500">Free</span>}
                       {item.adult && <span className="rounded border border-red-400/40 px-1.5 py-0.5 text-xs text-red-500">成人</span>}
                     </div>
-                    <button className="mt-1 text-left text-ink-600 hover:text-brand-500" onClick={() => onDetail(item)}>
+                    <p className="mt-1 text-left text-ink-600">
                       {cleanTitle(item.title)}
-                    </button>
+                    </p>
                     {item.subtitle && <p className="mt-1 text-xs text-ink-50">{cleanTitle(item.subtitle)}</p>}
                     {item.upload_time && <p className="mt-1 text-xs text-sand-500">{new Date(item.upload_time).toLocaleString()}</p>}
                   </td>
@@ -595,21 +792,108 @@ export function PTResourcesPage() {
         )}
       </section>
 
+      {downloadChoice && downloadChoiceItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4" onClick={() => void closeDownloadChoice()}>
+          <div className="glass-panel max-h-[82vh] w-full max-w-3xl overflow-y-auto" onClick={(event) => event.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="truncate font-display text-xl font-bold text-ink-600">{downloadChoiceItem.title || '选择下载内容'}</h2>
+                <p className="mt-1 text-xs text-sand-500">
+                  {downloadChoiceFiles.length > 0 ? `已选择 ${selectedDownloadFileList.length}/${downloadChoiceFiles.length} 个文件` : 'qB 暂未返回文件列表，确认后会开始完整任务'}
+                </p>
+              </div>
+              <button className="rounded border border-gray-200 px-3 py-1 text-sm text-ink-100" onClick={() => void closeDownloadChoice()}>
+                关闭
+              </button>
+            </div>
+
+            {downloadChoiceFiles.length > 0 ? (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button className="rounded border border-gray-200 px-2 py-1 text-xs" onClick={() => setSelectedDownloadFiles(new Set(downloadChoiceFiles.map((file) => file.index)))}>
+                    全选
+                  </button>
+                  <button className="rounded border border-gray-200 px-2 py-1 text-xs" onClick={() => setSelectedDownloadFiles(new Set())}>
+                    清空
+                  </button>
+                </div>
+                <div className="max-h-[46vh] space-y-1 overflow-y-auto pr-1 text-xs text-ink-100">
+                  {downloadChoiceFiles.map((file) => (
+                    <label key={`${file.index}:${file.name}`} className="flex cursor-pointer items-start gap-2 rounded bg-white/50 px-2 py-1">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={selectedDownloadFiles.has(file.index)}
+                        onChange={(event) => {
+                          setSelectedDownloadFiles((prev) => {
+                            const next = new Set(prev)
+                            if (event.target.checked) next.add(file.index)
+                            else next.delete(file.index)
+                            return next
+                          })
+                        }}
+                      />
+                      <span className="min-w-0 flex-1 break-all">{file.name}</span>
+                      <span className="shrink-0 text-sand-500">{fmtBytes(file.size)}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="rounded border border-gray-200 bg-white/60 p-4 text-sm text-ink-100">
+                qB 暂未返回文件列表。确认后会恢复完整任务；不想下载请关闭或取消。
+              </div>
+            )}
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button className="rounded border border-gray-200 px-3 py-2 text-sm text-ink-100" onClick={() => void closeDownloadChoice()}>
+                取消
+              </button>
+              <button
+                className="btn-primary px-4 py-2 text-sm"
+                disabled={(downloadChoiceFiles.length > 0 && selectedDownloadFileList.length === 0) || actingKey === `download:${itemKey(downloadChoiceItem, 0)}`}
+                onClick={() => void confirmDownloadChoice()}
+              >
+                {actingKey === `download:${itemKey(downloadChoiceItem, 0)}` ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                确认下载
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {detail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4" onClick={() => setDetail(null)}>
           <div className="glass-panel max-h-[86vh] w-full max-w-5xl overflow-y-auto" onClick={(event) => event.stopPropagation()}>
             <div className="mb-4 flex items-center justify-between gap-3">
-              <h2 className="font-display text-xl font-bold text-ink-600">{String(detail.title || detail.id || '详情')}</h2>
-              <button className="rounded border border-gray-200 px-3 py-1 text-sm text-ink-100" onClick={() => setDetail(null)}>
-                关闭
-              </button>
+              <div className="min-w-0">
+                <h2 className="truncate font-display text-xl font-bold text-ink-600">{String(detail.title || detail.id || '详情')}</h2>
+                {detailLoading && <p className="mt-1 text-xs text-sand-500">正在加载详情...</p>}
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {detailDownloadItem && (
+                  <button
+                    className="btn-primary px-3 py-1.5 text-sm"
+                    onClick={() => onDownload(detailDownloadItem)}
+                    disabled={actingKey === `download:${itemKey(detailDownloadItem, 0)}`}
+                  >
+                    {actingKey === `download:${itemKey(detailDownloadItem, 0)}` ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                    下载
+                  </button>
+                )}
+                <button className="rounded border border-gray-200 px-3 py-1 text-sm text-ink-100" onClick={() => setDetail(null)}>
+                  关闭
+                </button>
+              </div>
             </div>
 
             {detailBackdrop && (
               <div className="mb-4 overflow-hidden rounded border border-gray-200 bg-gray-100">
                 <img
-                  src={imageURL(detailBackdrop)}
+                  src={ptImageURL(detailBackdrop)}
                   alt=""
+                  loading="eager"
+                  decoding="async"
                   className="h-44 w-full object-cover"
                   referrerPolicy="no-referrer"
                 />
@@ -620,8 +904,10 @@ export function PTResourcesPage() {
               <div className="space-y-3">
                 {detailPoster ? (
                   <img
-                    src={imageURL(detailPoster)}
+                    src={ptImageURL(detailPoster)}
                     alt={String(detail.title || '')}
+                    loading="eager"
+                    decoding="async"
                     className="aspect-[2/3] w-full rounded border border-gray-200 bg-gray-100 object-cover"
                     referrerPolicy="no-referrer"
                   />
@@ -663,14 +949,15 @@ export function PTResourcesPage() {
                       <a
                         key={url}
                         className="overflow-hidden rounded border border-gray-200 bg-gray-100"
-                        href={imageURL(url)}
+                        href={ptImageURL(url)}
                         target="_blank"
                         rel="noopener noreferrer"
                       >
                         <img
-                          src={imageURL(url)}
+                          src={ptImageURL(url)}
                           alt=""
-                          loading="lazy"
+                          loading="eager"
+                          decoding="async"
                           referrerPolicy="no-referrer"
                           className="max-h-80 w-full object-contain"
                         />
@@ -680,9 +967,14 @@ export function PTResourcesPage() {
                 )}
                 {detailFiles.length > 0 && (
                   <div className="space-y-1 text-xs text-ink-100">
-                    <p className="font-semibold text-ink-600">文件列表</p>
-                    {detailFiles.slice(0, 80).map((file) => (
-                      <p key={file} className="rounded bg-white/50 px-2 py-1">{file}</p>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="font-semibold text-ink-600">文件列表</p>
+                      <span className="text-[11px] text-sand-500">{detailFiles.length} 个文件</span>
+                    </div>
+                    {detailFiles.slice(0, 120).map((file) => (
+                      <div key={file} className="rounded bg-white/50 px-2 py-1">
+                        <span className="break-all">{file}</span>
+                      </div>
                     ))}
                   </div>
                 )}
@@ -699,6 +991,7 @@ function ResourceCard({
   item,
   itemKeyValue,
   actingKey,
+  visual,
   onDetail,
   onDownload,
   onSubscribe,
@@ -706,29 +999,20 @@ function ResourceCard({
   item: SiteSearchResult
   itemKeyValue: string
   actingKey: string
+  visual: string
   onDetail: (item: SiteSearchResult) => void
   onDownload: (item: SiteSearchResult) => void
   onSubscribe: (item: SiteSearchResult) => void
 }) {
-  const visual = resourceVisual(item)
   return (
     <article className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
       <div className="flex gap-3">
-        {visual && (
-          <button
-            type="button"
-            onClick={() => onDetail(item)}
-            className="h-28 w-20 shrink-0 overflow-hidden rounded border border-gray-200 bg-gray-100"
-          >
-            <img
-              src={imageURL(visual)}
-              alt={item.title}
-              loading="lazy"
-              referrerPolicy="no-referrer"
-              className="h-full w-full object-cover"
-            />
-          </button>
-        )}
+        <ResourceThumb
+          item={item}
+          visual={visual}
+          className="flex h-28 w-20 shrink-0 items-center justify-center overflow-hidden rounded border border-gray-200 bg-gray-100 text-sand-500"
+          iconSize={22}
+        />
         <div className="min-w-0 flex-1">
           <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[11px]">
             <span className="rounded border border-gray-200 px-1.5 py-0.5 text-brand-500">{item.site_name}</span>
@@ -736,13 +1020,9 @@ function ResourceCard({
             {item.free && <span className="rounded border border-emerald-400/40 px-1.5 py-0.5 text-emerald-500">Free</span>}
             {item.adult && <span className="rounded border border-red-400/40 px-1.5 py-0.5 text-red-500">成人</span>}
           </div>
-          <button
-            type="button"
-            className="line-clamp-2 text-left text-sm font-semibold leading-5 text-ink-600 hover:text-brand-500"
-            onClick={() => onDetail(item)}
-          >
+          <p className="line-clamp-2 text-left text-sm font-semibold leading-5 text-ink-600">
             {item.title}
-          </button>
+          </p>
           {item.subtitle && <p className="mt-1 line-clamp-2 text-xs text-ink-50">{item.subtitle}</p>}
           <div className="mt-2 grid grid-cols-4 gap-2 text-xs">
             <InfoPill label="大小" value={fmtBytes(item.size)} />

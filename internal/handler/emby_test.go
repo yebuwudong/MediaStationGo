@@ -909,6 +909,15 @@ func TestEmbyUserItemByIDRouteReturnsJSON(t *testing.T) {
 	if item["Id"] != "episode-1" || item["Type"] != "Episode" {
 		t.Fatalf("unexpected item payload: %#v", item)
 	}
+	if pathURL, _ := item["Path"].(string); !strings.HasPrefix(pathURL, "/Videos/episode-1/stream.mkv") {
+		t.Fatalf("item Path should be stream URL for compatibility clients, got %#v", item)
+	}
+	sources := item["MediaSources"].([]any)
+	source := sources[0].(map[string]any)
+	directURL, _ := source["DirectStreamUrl"].(string)
+	if !strings.HasPrefix(directURL, "/Videos/episode-1/stream.mkv") {
+		t.Fatalf("item MediaSources should include DirectStreamUrl for detail clients, got %#v", source)
+	}
 }
 
 func TestEmbyUserItemByIDRouteReturnsLibraryView(t *testing.T) {
@@ -1027,6 +1036,13 @@ func TestEmbyLowercasePlaybackInfoRouteReturnsJSON(t *testing.T) {
 	directURL, _ := source["DirectStreamUrl"].(string)
 	if !strings.Contains(directURL, "api_key=") {
 		t.Fatalf("DirectStreamUrl should carry api_key for clients that do not repeat auth headers: %#v", source)
+	}
+	pathURL, _ := source["Path"].(string)
+	if !strings.HasPrefix(pathURL, "/Videos/media-1/stream.mp4") || !strings.Contains(pathURL, "api_key=") {
+		t.Fatalf("Path should be tokenized Emby stream URL instead of local filesystem path: %#v", source)
+	}
+	if strings.Contains(pathURL, lib.Path) {
+		t.Fatalf("Path should not expose local filesystem path: %#v", source)
 	}
 	transcodeURL, _ := source["TranscodingUrl"].(string)
 	if transcodeURL != "" && !strings.Contains(transcodeURL, "api_key=") {

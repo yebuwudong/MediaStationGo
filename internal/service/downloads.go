@@ -26,6 +26,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -104,6 +105,7 @@ func IsDownloadDedupError(err error) bool {
 type DownloadTaskMeta struct {
 	SubscriptionID       string
 	Title                string
+	IdentityTitle        string
 	PosterURL            string
 	BackdropURL          string
 	Overview             string
@@ -113,7 +115,13 @@ type DownloadTaskMeta struct {
 	MediaType            string
 	MediaCategory        string
 	SourceCategory       string
+	SelectedFiles        []string
 	AllowExistingLibrary bool
+}
+
+type PreparedDownload struct {
+	Hash  string            `json:"hash"`
+	Files []QBitTorrentFile `json:"files"`
 }
 
 type DownloadTaskView struct {
@@ -157,6 +165,7 @@ type DownloadTorrentView struct {
 	Size          int64   `json:"size"`
 	Downloaded    int64   `json:"downloaded"`
 	SavePath      string  `json:"save_path"`
+	AddedOn       int64   `json:"added_on,omitempty"`
 }
 
 // NewDownloadService is the constructor.
@@ -273,14 +282,18 @@ func (d *DownloadService) AddDownload(ctx context.Context, userID, urlStr, saveP
 	return d.AddDownloadWithMeta(ctx, userID, urlStr, savePath, DownloadTaskMeta{})
 }
 
-func (d *DownloadService) AddDownloadWithMeta(ctx context.Context, userID, urlStr, savePath string, meta DownloadTaskMeta) (*model.DownloadTask, error) {
+func (d *DownloadService) normalizeDownloadRequest(ctx context.Context, urlStr, savePath string, meta DownloadTaskMeta) (string, string, string, DownloadTaskMeta, error) {
 	if urlStr == "" {
-		return nil, errors.New("empty url")
+		return "", "", "", meta, errors.New("empty url")
 	}
 	title := strings.TrimSpace(meta.Title)
 	if title == "" {
 		title = publicDownloadTitle(urlStr)
 		meta.Title = title
+	}
+	identityTitle := strings.TrimSpace(meta.IdentityTitle)
+	if identityTitle == "" {
+		identityTitle = title
 	}
 	autoClassify := downloadSmartClassifyEnabled(ctx, d.repo, d.organizer)
 	savePath, resolvedCategory := d.resolveDownloadSavePath(ctx, savePath, meta, autoClassify)
@@ -289,17 +302,28 @@ func (d *DownloadService) AddDownloadWithMeta(ctx context.Context, userID, urlSt
 	} else if strings.TrimSpace(meta.MediaCategory) == "" {
 		meta.MediaCategory = resolvedCategory
 	}
+	return title, identityTitle, savePath, meta, nil
+}
+
+func (d *DownloadService) AddDownloadWithMeta(ctx context.Context, userID, urlStr, savePath string, meta DownloadTaskMeta) (*model.DownloadTask, error) {
+	title, identityTitle, savePath, meta, err := d.normalizeDownloadRequest(ctx, urlStr, savePath, meta)
+	if err != nil {
+		return nil, err
+	}
 	if !meta.AllowExistingLibrary && d.localMediaAlreadyExists(ctx, title) {
 		return nil, ErrMediaAlreadyInLibrary
-	}
-	if existing, ok := d.findExistingDownloadTask(ctx, title, strings.TrimSpace(meta.SubscriptionID) != ""); ok {
-		return existing, ErrDownloadAlreadyExists
 	}
 	_ = d.ReloadConfig(ctx)
 	if !d.qb.IsConfigured() {
 		return nil, errors.New("no default downloader configured")
 	}
-	if d.torrentExistsByIdentity(ctx, title) {
+	live, liveErr := d.qb.List(ctx, "")
+	if existing, ok := d.findExistingDownloadTask(ctx, identityTitle, strings.TrimSpace(meta.SubscriptionID) != ""); ok {
+		if liveErr != nil || torrentExistsInListByIdentity(live, identityTitle) {
+			return existing, ErrDownloadAlreadyExists
+		}
+	}
+	if liveErr == nil && torrentExistsInListByIdentity(live, identityTitle) {
 		task, err := d.createTask(ctx, userID, urlStr, savePath, meta)
 		if err != nil {
 			return nil, err
@@ -310,7 +334,7 @@ func (d *DownloadService) AddDownloadWithMeta(ctx context.Context, userID, urlSt
 	qbitCategory := strings.TrimSpace(meta.MediaCategory)
 	if d.site != nil {
 		if data, name, err := d.site.FetchTorrentFile(ctx, urlStr); err == nil {
-			if err := d.qb.AddTorrentFileWithCategory(ctx, data, name, savePath, qbitCategory); err != nil {
+			if err := d.qb.AddTorrentFileWithCategoryAndName(ctx, data, name, savePath, qbitCategory, title, meta.SelectedFiles); err != nil {
 				return nil, err
 			}
 			if strings.TrimSpace(meta.Title) == "" {
@@ -321,13 +345,94 @@ func (d *DownloadService) AddDownloadWithMeta(ctx context.Context, userID, urlSt
 			siteFetchErr = err
 		}
 	}
-	if err := d.qb.AddTorrentWithCategory(ctx, urlStr, savePath, qbitCategory); err != nil {
+	if err := d.qb.AddTorrentWithCategoryAndName(ctx, urlStr, savePath, qbitCategory, title, meta.SelectedFiles); err != nil {
 		if siteFetchErr != nil && !strings.Contains(siteFetchErr.Error(), "no matching PT site") {
 			return nil, errors.Join(err, siteFetchErr)
 		}
 		return nil, err
 	}
 	return d.createTask(ctx, userID, urlStr, savePath, meta)
+}
+
+func (d *DownloadService) PrepareDownloadWithMeta(ctx context.Context, userID, urlStr, savePath string, meta DownloadTaskMeta) (*PreparedDownload, error) {
+	_ = userID
+	title, identityTitle, savePath, meta, err := d.normalizeDownloadRequest(ctx, urlStr, savePath, meta)
+	if err != nil {
+		return nil, err
+	}
+	if !meta.AllowExistingLibrary && d.localMediaAlreadyExists(ctx, title) {
+		return nil, ErrMediaAlreadyInLibrary
+	}
+	_ = d.ReloadConfig(ctx)
+	if !d.qb.IsConfigured() {
+		return nil, errors.New("no default downloader configured")
+	}
+	live, liveErr := d.qb.List(ctx, "")
+	if existing, ok := d.findExistingDownloadTask(ctx, identityTitle, strings.TrimSpace(meta.SubscriptionID) != ""); ok {
+		_ = existing
+		if liveErr != nil || torrentExistsInListByIdentity(live, identityTitle) {
+			return nil, ErrDownloadAlreadyExists
+		}
+	}
+	if liveErr == nil && torrentExistsInListByIdentity(live, identityTitle) {
+		return nil, ErrDownloadAlreadyExists
+	}
+	var siteFetchErr error
+	qbitCategory := strings.TrimSpace(meta.MediaCategory)
+	if d.site != nil {
+		if data, name, err := d.site.FetchTorrentFile(ctx, urlStr); err == nil {
+			hash, files, err := d.qb.PrepareTorrentFileWithCategoryAndName(ctx, data, name, savePath, qbitCategory, title)
+			if err != nil {
+				return nil, err
+			}
+			return &PreparedDownload{Hash: hash, Files: files}, nil
+		} else {
+			siteFetchErr = err
+		}
+	}
+	hash, files, err := d.qb.PrepareTorrentWithCategoryAndName(ctx, urlStr, savePath, qbitCategory, title)
+	if err != nil {
+		if siteFetchErr != nil && !strings.Contains(siteFetchErr.Error(), "no matching PT site") {
+			return nil, errors.Join(err, siteFetchErr)
+		}
+		return nil, err
+	}
+	return &PreparedDownload{Hash: hash, Files: files}, nil
+}
+
+func (d *DownloadService) ConfirmPreparedDownload(ctx context.Context, userID, hash, urlStr, savePath string, meta DownloadTaskMeta, selectedFileIndexes []int) (*model.DownloadTask, error) {
+	hash = strings.TrimSpace(hash)
+	if hash == "" {
+		return nil, errors.New("hash is required")
+	}
+	_, _, savePath, meta, err := d.normalizeDownloadRequest(ctx, urlStr, savePath, meta)
+	if err != nil {
+		return nil, err
+	}
+	_ = d.ReloadConfig(ctx)
+	if !d.qb.IsConfigured() {
+		return nil, errors.New("no default downloader configured")
+	}
+	if len(selectedFileIndexes) > 0 {
+		if err := d.qb.ApplySelectedFileIndexes(ctx, hash, selectedFileIndexes); err != nil {
+			return nil, err
+		}
+	} else if err := d.qb.Resume(ctx, hash); err != nil {
+		return nil, err
+	}
+	return d.createTask(ctx, userID, urlStr, savePath, meta)
+}
+
+func (d *DownloadService) CancelPreparedDownload(ctx context.Context, hash string) error {
+	hash = strings.TrimSpace(hash)
+	if hash == "" {
+		return errors.New("hash is required")
+	}
+	_ = d.ReloadConfig(ctx)
+	if !d.qb.IsConfigured() {
+		return errors.New("no default downloader configured")
+	}
+	return d.qb.Delete(ctx, hash, false)
 }
 
 func (d *DownloadService) resolveDownloadSavePath(ctx context.Context, explicitSavePath string, meta DownloadTaskMeta, autoClassify bool) (string, string) {
@@ -474,7 +579,7 @@ func (d *DownloadService) findExistingDownloadTask(ctx context.Context, title st
 
 func downloadTaskBlocksDuplicate(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "failed", "error", "removed", "cancelled", "canceled":
+	case "failed", "error", "deleted", "removed", "cancelled", "canceled":
 		return false
 	default:
 		return true
@@ -497,6 +602,23 @@ func (d *DownloadService) torrentExistsByIdentity(ctx context.Context, title str
 	}
 	live, err := d.qb.List(ctx, "")
 	if err != nil {
+		return false
+	}
+	for _, torrent := range live {
+		current := downloadTaskIdentityKey(torrent.Name)
+		if current == "" {
+			continue
+		}
+		if current == query || strings.Contains(current, query) || strings.Contains(query, current) {
+			return true
+		}
+	}
+	return false
+}
+
+func torrentExistsInListByIdentity(live []QBitTorrent, title string) bool {
+	query := downloadTaskIdentityKey(title)
+	if query == "" {
 		return false
 	}
 	for _, torrent := range live {
@@ -570,9 +692,9 @@ func (d *DownloadService) createTask(ctx context.Context, userID, urlStr, savePa
 		PosterURL:            meta.PosterURL,
 		BackdropURL:          meta.BackdropURL,
 		Overview:             meta.Overview,
-		IMDBID:               meta.IMDBID,
+		IMDBID:               NormalizeIMDBID(meta.IMDBID),
 		TMDbID:               meta.TMDbID,
-		DoubanID:             meta.DoubanID,
+		DoubanID:             NormalizeDoubanID(meta.DoubanID),
 		SavePath:             savePath,
 		MediaType:            meta.MediaType,
 		MediaCategory:        meta.MediaCategory,
@@ -696,6 +818,9 @@ func DownloadViews(rows []model.DownloadTask, live []QBitTorrent) ([]DownloadTas
 		}
 		torrentViews = append(torrentViews, downloadTorrentView(torrent, row))
 	}
+	sort.SliceStable(torrentViews, func(i, j int) bool {
+		return torrentViews[i].AddedOn > torrentViews[j].AddedOn
+	})
 	return taskViews, torrentViews
 }
 
@@ -754,6 +879,7 @@ func downloadTorrentView(torrent QBitTorrent, row model.DownloadTask) DownloadTo
 		Size:          torrent.Size,
 		Downloaded:    downloadedBytes(torrent.Size, torrent.Progress),
 		SavePath:      torrent.SavePath,
+		AddedOn:       torrent.AddedOn,
 	}
 }
 

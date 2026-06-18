@@ -1283,6 +1283,11 @@ func (e *EmbyService) itemPayload(ctx context.Context, m *model.Media, fav bool,
 	if m.BackdropURL != "" {
 		backdropTags = append(backdropTags, m.ID+"-bd")
 	}
+	container := embyPlaybackContainer(m.Container, m.Path)
+	itemPath := m.Path
+	if playURL := e.mediaPlayURL(ctx, m, container); playURL != "" {
+		itemPath = playURL
+	}
 
 	runTimeTicks := int64(m.DurationSec) * 10_000_000
 	durationMs := int64(m.DurationSec) * 1000
@@ -1306,11 +1311,11 @@ func (e *EmbyService) itemPayload(ctx context.Context, m *model.Media, fav bool,
 		"Overview":          m.Overview,
 		"RunTimeTicks":      runTimeTicks,
 		"CommunityRating":   m.Rating,
-		"Container":         m.Container,
+		"Container":         container,
 		"Width":             m.Width,
 		"Height":            m.Height,
 		"DateCreated":       m.CreatedAt,
-		"Path":              m.Path,
+		"Path":              itemPath,
 		"ParentId":          parentID,
 		"SeasonId":          seasonID,
 		"SeasonName":        seasonName(m.SeasonNum),
@@ -2589,29 +2594,15 @@ func (e *EmbyService) playableMedia(ctx context.Context, id, userID string) (*mo
 
 // mediaSource 是 /Items 与 /PlaybackInfo 共享的 MediaSource 结构。
 //
-// asEmbedded=true：嵌在 /Items 列表里，不包含完整 stream URL（避免暴露
-// 直链给搜索接口）。/PlaybackInfo 走 false 路径，URL 指向 Emby 兼容
-// /Videos/{id}/stream（客户端会继续携带 X-Emby-Token 或 append api_key）。
+// /Items 与 /PlaybackInfo 都下发 Emby 兼容 /Videos/{id}/stream。
+// 避免 Yamby/SenPlayer/iOS 这类客户端把容器内文件路径当成 HTTP URL 请求。
 func (e *EmbyService) mediaSource(ctx context.Context, m *model.Media, asEmbedded, directOnly bool) map[string]any {
-	container := strings.Trim(strings.ToLower(m.Container), ". ")
-	if container == "" {
-		container = strings.TrimPrefix(strings.ToLower(filepath.Ext(m.Path)), ".")
-	}
+	container := embyPlaybackContainer(m.Container, m.Path)
 	if container == "" && strings.TrimSpace(m.STRMURL) != "" {
 		container = "strm"
 	}
 	isCloud := strings.TrimSpace(m.STRMURL) != ""
-	playURL := embyDirectStreamURL(m.ID, container)
-	if isCloud {
-		switch CloudPlaybackMode(ctx, e.repo) {
-		case CloudPlaybackModeSTRM:
-			playURL = embySTRMStreamURL(m.ID)
-		case CloudPlaybackModeRedirectProxy:
-			playURL = embyDirectStreamURL(m.ID, container)
-		default:
-			playURL = ""
-		}
-	}
+	playURL := e.mediaPlayURL(ctx, m, container)
 	if isCloud {
 		// Cloud/WebDAV media is already a direct/proxy stream. Advertising HLS
 		// transcoding makes some Emby clients pick /master.m3u8, forcing this
@@ -2619,10 +2610,14 @@ func (e *EmbyService) mediaSource(ctx context.Context, m *model.Media, asEmbedde
 		// surfacing as "network/playback failed". Keep cloud media direct-only.
 		directOnly = true
 	}
+	sourcePath := m.Path
+	if playURL != "" {
+		sourcePath = playURL
+	}
 	src := map[string]any{
 		"Id":                    m.ID,
 		"Name":                  m.Title,
-		"Path":                  m.Path,
+		"Path":                  sourcePath,
 		"Container":             container,
 		"Size":                  m.SizeBytes,
 		"Protocol":              "Http",
@@ -2642,11 +2637,11 @@ func (e *EmbyService) mediaSource(ctx context.Context, m *model.Media, asEmbedde
 		"RunTimeTicks":         int64(m.DurationSec) * 10_000_000,
 		"MediaStreams":         e.mediaStreams(m),
 	}
-	if !asEmbedded && playURL != "" {
+	if playURL != "" {
 		src["DirectStreamUrl"] = playURL
 		// 直连解码模式下不下发 TranscodingUrl，迫使客户端本地解码直连，
 		// 宿主机不参与转码。
-		if !directOnly {
+		if !asEmbedded && !directOnly {
 			src["TranscodingUrl"] = "/Videos/" + m.ID + "/master.m3u8"
 		}
 	}
@@ -2656,7 +2651,6 @@ func (e *EmbyService) mediaSource(ctx context.Context, m *model.Media, asEmbedde
 		// follow the same STRM entry as generated .strm files; when disabled we
 		// expose /Videos/{id}/stream so playback uses the Emby 302/proxy path.
 		src["IsRemote"] = true
-		src["Path"] = playURL
 	}
 	return src
 }
@@ -2672,6 +2666,24 @@ func (e *EmbyService) mediaSourcesForItem(ctx context.Context, m *model.Media, a
 		sources = append(sources, e.mediaSource(ctx, &media, asEmbedded, directOnly))
 	}
 	return sources
+}
+
+func (e *EmbyService) mediaPlayURL(ctx context.Context, m *model.Media, container string) string {
+	if m == nil {
+		return ""
+	}
+	playURL := embyDirectStreamURL(m.ID, container)
+	if strings.TrimSpace(m.STRMURL) == "" {
+		return playURL
+	}
+	switch CloudPlaybackMode(ctx, e.repo) {
+	case CloudPlaybackModeSTRM:
+		return embySTRMStreamURL(m.ID)
+	case CloudPlaybackModeRedirectProxy:
+		return playURL
+	default:
+		return ""
+	}
 }
 
 func (e *EmbyService) mediaVersionSiblings(ctx context.Context, m *model.Media) []model.Media {
@@ -2783,9 +2795,63 @@ func embySTRMStreamURL(mediaID string) string {
 	return "/api/stream/" + url.PathEscape(strings.TrimSpace(mediaID))
 }
 
+func embyPlaybackContainer(raw, mediaPath string) string {
+	pathExt := embyNormalizeStreamContainer(strings.TrimPrefix(strings.ToLower(filepath.Ext(mediaPath)), "."))
+	if pathExt != "" && pathExt != "strm" {
+		return pathExt
+	}
+	raw = strings.Trim(strings.ToLower(raw), ". ")
+	if raw == "" {
+		return pathExt
+	}
+	tokens := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' ' || r == '\t' || r == '/'
+	})
+	if len(tokens) == 0 {
+		return embyNormalizeStreamContainer(raw)
+	}
+	normalized := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		if value := embyNormalizeStreamContainer(token); value != "" {
+			normalized = append(normalized, value)
+		}
+	}
+	for _, preferred := range []string{"mkv", "mp4", "mov", "webm", "avi", "ts", "m2ts", "wmv", "flv", "rmvb", "mpg"} {
+		for _, value := range normalized {
+			if value == preferred {
+				return value
+			}
+		}
+	}
+	if len(normalized) > 0 {
+		return normalized[0]
+	}
+	return ""
+}
+
+func embyNormalizeStreamContainer(container string) string {
+	container = strings.Trim(strings.ToLower(container), ". ")
+	switch container {
+	case "", "unknown":
+		return ""
+	case "matroska":
+		return "mkv"
+	case "quicktime":
+		return "mov"
+	case "mpegts":
+		return "ts"
+	case "mpeg":
+		return "mpg"
+	case "asf":
+		return "wmv"
+	default:
+		return container
+	}
+}
+
 func embyDirectStreamURL(mediaID, container string) string {
 	mediaID = strings.TrimSpace(mediaID)
-	container = strings.Trim(strings.ToLower(container), ". ")
+	container = embyNormalizeStreamContainer(container)
 	if container == "" || container == "strm" {
 		return "/Videos/" + mediaID + "/stream"
 	}

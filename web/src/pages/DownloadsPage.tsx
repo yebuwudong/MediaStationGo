@@ -7,7 +7,7 @@ import { imageURL } from '../api/client'
 import { downloadsAPI } from '../api/downloads'
 import { useAuthStore } from '../stores/auth'
 import { confirmAction } from '../components/ConfirmDialog'
-import type { DownloadTask, QBitTorrent } from '../types'
+import type { QBitTorrent } from '../types'
 
 type DownloadCardItem = {
   id?: string
@@ -85,27 +85,7 @@ function toLiveCard(t: QBitTorrent): DownloadCardItem {
     num_leechs: t.num_leechs,
     size: t.size,
     downloaded: t.downloaded,
-  }
-}
-
-function toTaskCard(t: DownloadTask): DownloadCardItem {
-  return {
-    id: t.id,
-    title: t.title || '下载任务',
-    poster_url: t.poster_url,
-    backdrop_url: t.backdrop_url,
-    overview: t.overview,
-    save_path: t.save_path,
-    status: t.status,
-    state: t.state,
-    progress: t.progress,
-    dlspeed: t.dlspeed,
-    upspeed: t.upspeed,
-    num_seeds: t.num_seeds,
-    num_leechs: t.num_leechs,
-    size: t.size,
-    downloaded: t.downloaded,
-    created_at: t.created_at,
+    created_at: t.added_on ? new Date(t.added_on * 1000).toISOString() : undefined,
   }
 }
 
@@ -212,15 +192,13 @@ function DownloadCard({
 
 export function DownloadsPage() {
   const role = useAuthStore((s) => s.user?.role)
-  const [tasks, setTasks] = useState<DownloadTask[]>([])
   const [torrents, setTorrents] = useState<QBitTorrent[] | null>(null)
   const [url, setURL] = useState('')
   const [savePath, setSavePath] = useState('')
 
   const refresh = () =>
     downloadsAPI.list().then((d) => {
-      setTasks(d.tasks)
-      setTorrents(d.torrents)
+      setTorrents(d.torrents ? [...d.torrents].sort((a, b) => (b.added_on || 0) - (a.added_on || 0)) : null)
     })
 
   useEffect(() => {
@@ -251,7 +229,7 @@ export function DownloadsPage() {
         <h1 className="font-display text-3xl font-bold text-ink-600">下载管理</h1>
         <p className="flex items-center gap-2 text-sm text-ink-50">
           <ShieldCheck size={16} className="text-brand-500" />
-          页面仅展示安全标题、海报和进度信息，不再暴露种子原始 URL 或私有 Token。
+          页面仅展示下载器当前任务，不再显示本地历史记录或种子原始 URL。
         </p>
       </header>
 
@@ -312,19 +290,6 @@ export function DownloadsPage() {
                   await refresh()
                 }}
               />
-            ))}
-          </div>
-        )}
-      </section>
-
-      <section className="space-y-3">
-        <h2 className="font-display text-xl font-semibold text-ink-600">下载历史</h2>
-        {tasks.length === 0 ? (
-          <div className="glass-panel text-sand-500">暂无历史下载。</div>
-        ) : (
-          <div className="grid gap-5 lg:grid-cols-2 2xl:grid-cols-3">
-            {tasks.map((task) => (
-              <DownloadCard key={task.id} item={toTaskCard(task)} />
             ))}
           </div>
         )}

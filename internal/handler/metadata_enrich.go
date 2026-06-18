@@ -54,7 +54,7 @@ func enrichSubscriptionArtwork(ctx context.Context, svc *service.Container, sub 
 		sub.TMDbID = meta.TMDbID
 	}
 	if strings.TrimSpace(sub.DoubanID) == "" {
-		sub.DoubanID = meta.DoubanID
+		sub.DoubanID = service.NormalizeDoubanID(meta.DoubanID)
 	}
 }
 
@@ -270,7 +270,7 @@ func lookupDisplayMetadata(ctx context.Context, svc *service.Container, title, f
 		BackdropURL: best.BackdropURL,
 		Overview:    best.Overview,
 		TMDbID:      best.TMDbID,
-		DoubanID:    best.DoubanID,
+		DoubanID:    service.NormalizeDoubanID(best.DoubanID),
 	}
 	displayMetadataCache.Store(cacheKey, cachedDisplayMetadata{value: meta, expiresAt: time.Now().Add(12 * time.Hour)})
 	return meta

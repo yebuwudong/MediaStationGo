@@ -106,6 +106,8 @@ func (s *SubscriptionService) Create(ctx context.Context, sub *model.Subscriptio
 }
 
 func normalizeSubscriptionDefaults(sub *model.Subscription) {
+	sub.IMDBID = NormalizeIMDBID(sub.IMDBID)
+	sub.DoubanID = NormalizeDoubanID(sub.DoubanID)
 	if strings.TrimSpace(sub.SearchMode) == "" {
 		sub.SearchMode = "keyword"
 	}
@@ -277,7 +279,8 @@ func (s *SubscriptionService) runOne(ctx context.Context, sub *model.Subscriptio
 		}
 		if _, err := s.downloads.AddDownloadWithMeta(ctx, sub.UserID, download, savePath, DownloadTaskMeta{
 			SubscriptionID:       sub.ID,
-			Title:                firstNonEmpty(item.Title, sub.Name),
+			Title:                subscriptionDownloadTitle(sub, candidate),
+			IdentityTitle:        item.Title,
 			PosterURL:            sub.PosterURL,
 			BackdropURL:          sub.BackdropURL,
 			Overview:             sub.Overview,
@@ -373,27 +376,10 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 	if s.site == nil {
 		return 0, errors.New("site search service unavailable")
 	}
-	keyword := siteSearchKeyword(sub)
-	if keyword == "" {
+	keywords := siteSearchKeywords(sub)
+	if len(keywords) == 0 {
 		return 0, errors.New("site-search subscription keyword required")
 	}
-
-	params := siteSearchParamsFromURL(sub.FeedURL)
-	params.Keyword = keyword
-	resultsEnvelope, err := s.site.Browse(ctx, params)
-	if err != nil {
-		return 0, err
-	}
-	results := []SearchResult{}
-	if resultsEnvelope != nil {
-		results = resultsEnvelope.Items
-	}
-	if len(results) == 0 {
-		now := time.Now()
-		_ = s.repo.DB.Model(sub).Updates(map[string]any{"last_run_at": &now}).Error
-		return 0, nil
-	}
-	s.updateSubscriptionTotalEpisodes(ctx, sub, s.resolveSubscriptionTotalEpisodes(ctx, sub, inferSearchTotalEpisodes(results, sub)))
 
 	guidKey := fmt.Sprintf("subscription.%s.seen", sub.ID)
 	seenRaw, _ := s.repo.Setting.Get(ctx, guidKey)
@@ -407,7 +393,18 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 		SubscriptionLocalAvailability(ctx, s.repo, sub),
 		s.pendingDownloadAvailability(ctx, sub),
 	)
-	candidates := selectSiteSearchCandidates(results, sub, seenSet, availability)
+	params := siteSearchParamsFromURL(sub.FeedURL)
+	results, candidates, err := s.searchSiteSubscriptionCandidates(ctx, sub, params, keywords, seenSet, availability)
+	if err != nil {
+		return 0, err
+	}
+	if len(results) == 0 {
+		now := time.Now()
+		_ = s.repo.DB.Model(sub).Updates(map[string]any{"last_run_at": &now}).Error
+		return 0, nil
+	}
+	s.updateSubscriptionTotalEpisodes(ctx, sub, s.resolveSubscriptionTotalEpisodes(ctx, sub, inferSearchTotalEpisodes(results, sub)))
+
 	var lastEnqueueErr error
 	queued := 0
 	var resources []subscriptionNotifyResource
@@ -439,7 +436,8 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 		}
 		if _, err := s.downloads.AddDownloadWithMeta(ctx, sub.UserID, realURL, savePath, DownloadTaskMeta{
 			SubscriptionID:       sub.ID,
-			Title:                firstNonEmpty(item.Title, sub.Name),
+			Title:                subscriptionDownloadTitle(sub, candidate),
+			IdentityTitle:        item.Title,
 			PosterURL:            sub.PosterURL,
 			BackdropURL:          sub.BackdropURL,
 			Overview:             sub.Overview,
@@ -494,7 +492,7 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 			"id":        sub.ID,
 			"name":      sub.Name,
 			"queued":    queued,
-			"keyword":   keyword,
+			"keyword":   keywords[0],
 			"resources": subscriptionNotifyResourceTitles(resources),
 		})
 		s.notifySubscriptionHit(sub, queued, resources)
@@ -504,6 +502,70 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 		return 0, fmt.Errorf("找到 PT 资源但加入下载器失败: %w", lastEnqueueErr)
 	}
 	return 0, nil
+}
+
+func (s *SubscriptionService) searchSiteSubscriptionCandidates(ctx context.Context, sub *model.Subscription, base SiteBrowseParams, keywords []string, seenSet map[string]struct{}, availability LocalAvailability) ([]SearchResult, []siteSearchCandidate, error) {
+	var (
+		firstErr     error
+		firstResults []SearchResult
+		success      bool
+	)
+	for _, params := range siteSearchAttempts(base, keywords) {
+		resultsEnvelope, err := s.site.Browse(ctx, params)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		success = true
+		results := []SearchResult{}
+		if resultsEnvelope != nil {
+			results = resultsEnvelope.Items
+		}
+		if len(results) == 0 {
+			continue
+		}
+		if firstResults == nil {
+			firstResults = results
+		}
+		candidates := selectSiteSearchCandidates(results, sub, seenSet, availability)
+		if len(candidates) > 0 {
+			return results, candidates, nil
+		}
+	}
+	if firstResults != nil {
+		return firstResults, nil, nil
+	}
+	if success {
+		return nil, nil, nil
+	}
+	return nil, nil, firstErr
+}
+
+func subscriptionDownloadTitle(sub *model.Subscription, candidate siteSearchCandidate) string {
+	base := ""
+	if sub != nil {
+		base = strings.TrimSpace(sub.Name)
+	}
+	if base == "" {
+		base = strings.TrimSpace(candidate.Item.Title)
+	}
+	base = strings.TrimSpace(strings.ReplaceAll(base, "自动订阅", ""))
+	if base == "" {
+		base = strings.TrimSpace(candidate.Item.Title)
+	}
+	if candidate.Episode <= 0 {
+		return base
+	}
+	if _, episode := ParseEpisode(base); episode > 0 {
+		return base
+	}
+	season := candidate.Season
+	if season <= 0 {
+		season = 1
+	}
+	return strings.TrimSpace(fmt.Sprintf("%s S%02dE%02d", base, season, candidate.Episode))
 }
 
 type subscriptionNotifyResource struct {
@@ -666,12 +728,9 @@ func truncateTelegramText(text string, limit int) string {
 }
 
 func imdbExternalURL(id string) string {
-	id = strings.TrimSpace(id)
+	id = NormalizeIMDBID(id)
 	if id == "" {
 		return ""
-	}
-	if !strings.HasPrefix(strings.ToLower(id), "tt") {
-		id = "tt" + id
 	}
 	return "https://www.imdb.com/title/" + url.PathEscape(id) + "/"
 }
@@ -688,7 +747,7 @@ func tmdbExternalURL(id int, mediaType string) string {
 }
 
 func doubanExternalURL(id string) string {
-	id = strings.TrimSpace(id)
+	id = NormalizeDoubanID(id)
 	if id == "" {
 		return ""
 	}
@@ -1067,21 +1126,95 @@ func (s *SubscriptionService) shouldSkipExistingTorrent(ctx context.Context, med
 }
 
 func siteSearchKeyword(sub *model.Subscription) string {
-	if sub == nil {
-		return ""
+	keywords := siteSearchKeywords(sub)
+	if len(keywords) > 0 {
+		return keywords[0]
 	}
-	if strings.EqualFold(strings.TrimSpace(sub.SearchMode), "imdb") && strings.TrimSpace(sub.IMDBID) != "" {
-		return strings.TrimSpace(sub.IMDBID)
+	return ""
+}
+
+func siteSearchKeywords(sub *model.Subscription) []string {
+	if sub == nil {
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(sub.SearchMode), "imdb") {
+		if imdbID := NormalizeIMDBID(sub.IMDBID); imdbID != "" {
+			return []string{imdbID}
+		}
+	}
+	values := []string{
+		sub.OriginalTitle,
+		buildSubscribeKeyword(sub.OriginalTitle, sub.Year),
 	}
 	if u, err := url.Parse(sub.FeedURL); err == nil {
 		if keyword := strings.TrimSpace(u.Query().Get("keyword")); keyword != "" {
-			return keyword
+			values = append(values, keyword)
 		}
 	}
-	if keyword := strings.TrimSpace(sub.Filter); keyword != "" {
-		return keyword
+	values = append(values,
+		buildSubscribeKeyword(sub.Name, sub.Year),
+		sub.Filter,
+		sub.Name,
+	)
+	return siteSearchKeywordCandidates(values...)
+}
+
+func BuildSiteSubscriptionKeyword(values ...string) string {
+	keywords := siteSearchKeywordCandidates(values...)
+	if len(keywords) == 0 {
+		return ""
 	}
-	return strings.TrimSpace(sub.Name)
+	return keywords[0]
+}
+
+func siteSearchKeywordCandidates(values ...string) []string {
+	candidates := []string{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if title, year := CleanQuery(value); title != "" {
+			candidates = append(candidates, buildSubscribeKeyword(title, year), title)
+		}
+		if cleaned := cleanAvailabilityTitle(value); cleaned != "" {
+			candidates = append(candidates, cleaned)
+		}
+		candidates = append(candidates, value)
+	}
+	return compactUniqueStrings(candidates...)
+}
+
+func siteSearchAttempts(base SiteBrowseParams, keywords []string) []SiteBrowseParams {
+	const maxAttempts = 6
+	out := make([]SiteBrowseParams, 0, maxAttempts)
+	seen := map[string]struct{}{}
+	for _, keyword := range keywords {
+		keyword = strings.TrimSpace(keyword)
+		if keyword == "" {
+			continue
+		}
+		categories := []string{base.Category}
+		if strings.TrimSpace(base.Category) != "" {
+			categories = append(categories, "")
+		}
+		for _, category := range categories {
+			next := base
+			next.Page = 1
+			next.Keyword = keyword
+			next.Category = category
+			key := strings.ToLower(strings.TrimSpace(next.Keyword)) + "\x00" + strings.ToLower(strings.TrimSpace(next.Category))
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, next)
+			if len(out) >= maxAttempts {
+				return out
+			}
+		}
+	}
+	return out
 }
 
 func (s *SubscriptionService) fetch(ctx context.Context, feedURL string) (*rssFeed, error) {
