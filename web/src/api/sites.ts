@@ -12,6 +12,7 @@ export interface SiteSearchResult {
   subtitle?: string
   poster_url?: string
   backdrop_url?: string
+  overview?: string
   torrent_url: string
   download_url: string
   category?: string
@@ -24,10 +25,16 @@ export interface SiteSearchResult {
   upload_time?: string
 }
 
+export interface SiteSubscribeResponse {
+  subscription?: unknown
+  queued?: number
+}
+
 export interface SiteCategory {
   id: string
   name: string
   group: string
+  parent_id?: string
   site_id?: string
   site_name?: string
   site_type?: string
@@ -122,6 +129,9 @@ export const sitesAPI = {
     title: string
     download_url?: string
     torrent_url?: string
+    poster_url?: string
+    backdrop_url?: string
+    overview?: string
     save_path?: string
     media_type?: string
     media_category?: string
@@ -130,6 +140,7 @@ export const sitesAPI = {
 
   subscribe: (input: {
     site_id?: string
+    id?: string
     category?: string
     include_adult?: boolean
     name: string
@@ -137,7 +148,10 @@ export const sitesAPI = {
     filter?: string
     media_type?: string
     media_category?: string
+    poster_url?: string
+    backdrop_url?: string
+    overview?: string
     save_path?: string
     enabled?: boolean
-  }) => api.post('/sites/subscribe', input).then((r) => r.data),
+  }) => api.post<SiteSubscribeResponse>('/sites/subscribe', input).then((r) => r.data),
 }

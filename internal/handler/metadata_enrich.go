@@ -27,7 +27,11 @@ type cachedDisplayMetadata struct {
 }
 
 func enrichSubscriptionArtwork(ctx context.Context, svc *service.Container, sub *model.Subscription) {
-	if svc == nil || sub == nil || (strings.TrimSpace(sub.PosterURL) != "" && strings.TrimSpace(sub.BackdropURL) != "") {
+	if svc == nil || sub == nil {
+		return
+	}
+	if strings.TrimSpace(sub.PosterURL) != "" && strings.TrimSpace(sub.BackdropURL) != "" &&
+		(sub.TMDbID > 0 || strings.TrimSpace(sub.DoubanID) != "" || strings.TrimSpace(sub.IMDBID) != "") {
 		return
 	}
 	meta := lookupDisplayMetadata(ctx, svc, sub.Name, sub.Filter, sub.MediaType)
@@ -37,14 +41,20 @@ func enrichSubscriptionArtwork(ctx context.Context, svc *service.Container, sub 
 	if strings.TrimSpace(sub.Source) == "" {
 		sub.Source = meta.Source
 	}
-	if strings.TrimSpace(sub.PosterURL) == "" {
+	if strings.TrimSpace(meta.PosterURL) != "" {
 		sub.PosterURL = meta.PosterURL
 	}
-	if strings.TrimSpace(sub.BackdropURL) == "" {
+	if strings.TrimSpace(meta.BackdropURL) != "" {
 		sub.BackdropURL = meta.BackdropURL
 	}
 	if strings.TrimSpace(sub.Overview) == "" {
 		sub.Overview = meta.Overview
+	}
+	if sub.TMDbID <= 0 {
+		sub.TMDbID = meta.TMDbID
+	}
+	if strings.TrimSpace(sub.DoubanID) == "" {
+		sub.DoubanID = meta.DoubanID
 	}
 }
 
@@ -160,21 +170,28 @@ func enrichDownloadTaskMeta(ctx context.Context, svc *service.Container, meta se
 	if strings.TrimSpace(meta.Title) == "" {
 		meta.Title = strings.TrimSpace(downloadDisplayTitle(fallbackTitle))
 	}
-	if strings.TrimSpace(meta.PosterURL) != "" && strings.TrimSpace(meta.BackdropURL) != "" {
+	if strings.TrimSpace(meta.PosterURL) != "" && strings.TrimSpace(meta.BackdropURL) != "" &&
+		(meta.TMDbID > 0 || strings.TrimSpace(meta.DoubanID) != "" || strings.TrimSpace(meta.IMDBID) != "") {
 		return meta
 	}
 	found := lookupDisplayMetadata(ctx, svc, meta.Title, fallbackTitle, mediaType)
 	if strings.TrimSpace(meta.Title) == "" {
 		meta.Title = found.Title
 	}
-	if strings.TrimSpace(meta.PosterURL) == "" {
+	if strings.TrimSpace(found.PosterURL) != "" {
 		meta.PosterURL = found.PosterURL
 	}
-	if strings.TrimSpace(meta.BackdropURL) == "" {
+	if strings.TrimSpace(found.BackdropURL) != "" {
 		meta.BackdropURL = found.BackdropURL
 	}
 	if strings.TrimSpace(meta.Overview) == "" {
 		meta.Overview = found.Overview
+	}
+	if meta.TMDbID <= 0 {
+		meta.TMDbID = found.TMDbID
+	}
+	if strings.TrimSpace(meta.DoubanID) == "" {
+		meta.DoubanID = found.DoubanID
 	}
 	return meta
 }
@@ -208,6 +225,8 @@ type displayMetadata struct {
 	PosterURL   string
 	BackdropURL string
 	Overview    string
+	TMDbID      int
+	DoubanID    string
 }
 
 func lookupDisplayMetadata(ctx context.Context, svc *service.Container, title, fallback, mediaType string) displayMetadata {
@@ -250,6 +269,8 @@ func lookupDisplayMetadata(ctx context.Context, svc *service.Container, title, f
 		PosterURL:   best.PosterURL,
 		BackdropURL: best.BackdropURL,
 		Overview:    best.Overview,
+		TMDbID:      best.TMDbID,
+		DoubanID:    best.DoubanID,
 	}
 	displayMetadataCache.Store(cacheKey, cachedDisplayMetadata{value: meta, expiresAt: time.Now().Add(12 * time.Hour)})
 	return meta

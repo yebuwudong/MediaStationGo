@@ -92,11 +92,16 @@ export function SubscriptionCenterPage() {
     setBulkBusy(true)
     try {
       let created = 0
+      let queued = 0
       for (const item of selectedItems) {
-        await subscriptionsAPI.create(subscriptionPayload(item))
+        const sub = await subscriptionsAPI.create(subscriptionPayload(item))
         created += 1
+        if (sub?.id) {
+          const run = await subscriptionsAPI.runNow(sub.id)
+          queued += Number(run?.queued || 0)
+        }
       }
-      toast.success(`已创建 ${created} 个订阅`)
+      toast.success(queued > 0 ? `已创建 ${created} 个订阅，并加入 ${queued} 个下载` : `已创建 ${created} 个订阅，暂未命中资源`)
       setSelectedKeys([])
     } catch (err) {
       const msg =
@@ -296,14 +301,21 @@ function itemKey(item: DiscoverItem, index: number) {
 }
 
 function subscriptionPayload(item: DiscoverItem) {
-  const keyword = item.subscribe_keyword || [item.title, item.year && item.year > 0 ? item.year : ''].filter(Boolean).join(' ')
+  const keyword = item.title || item.subscribe_keyword || [item.title, item.year && item.year > 0 ? item.year : ''].filter(Boolean).join(' ')
   const source = item.source || 'tmdb'
   return {
-    name: `${item.title} 自动订阅`,
+    name: item.title,
     feed_url: `site-search://search?keyword=${encodeURIComponent(keyword)}&source=${encodeURIComponent(source)}`,
     filter: keyword,
     media_type: item.media_type || undefined,
+    tmdb_id: item.tmdb_id || undefined,
+    douban_id: item.douban_id || undefined,
     source,
+    original_title: item.original_title || item.original_name || undefined,
+    original_language: item.original_language || undefined,
+    year: item.year && item.year > 0 ? item.year : undefined,
+    rating: item.rating && item.rating > 0 ? item.rating : undefined,
+    genres: item.genres || undefined,
     poster_url: item.poster_url || undefined,
     backdrop_url: item.backdrop_url || undefined,
     overview: item.overview || undefined,

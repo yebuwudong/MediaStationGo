@@ -14,11 +14,14 @@ type ExternalMediaResult struct {
 	Source             string  `json:"source"`
 	MediaType          string  `json:"media_type,omitempty"`
 	Title              string  `json:"title"`
+	OriginalTitle      string  `json:"original_title,omitempty"`
+	OriginalLanguage   string  `json:"original_language,omitempty"`
 	Overview           string  `json:"overview,omitempty"`
 	PosterURL          string  `json:"poster_url,omitempty"`
 	BackdropURL        string  `json:"backdrop_url,omitempty"`
 	Year               int     `json:"year,omitempty"`
 	Rating             float32 `json:"rating,omitempty"`
+	Genres             string  `json:"genres,omitempty"`
 	TMDbID             int     `json:"tmdb_id,omitempty"`
 	BangumiID          int     `json:"bangumi_id,omitempty"`
 	DoubanID           string  `json:"douban_id,omitempty"`
@@ -53,11 +56,14 @@ func SearchExternalMedia(ctx context.Context, query string, year int, mediaType 
 			Source:           source,
 			MediaType:        typ,
 			Title:            m.Title,
+			OriginalTitle:    m.OriginalName,
+			OriginalLanguage: strings.Join(m.Languages, ","),
 			Overview:         m.Overview,
 			PosterURL:        m.PosterURL,
 			BackdropURL:      m.BackdropURL,
 			Year:             m.Year,
 			Rating:           m.Rating,
+			Genres:           strings.Join(m.Genres, ","),
 			TMDbID:           m.TMDbID,
 			BangumiID:        m.BangumiID,
 			SubscribeKeyword: buildSubscribeKeyword(m.Title, m.Year),

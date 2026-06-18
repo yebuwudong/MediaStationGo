@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
@@ -50,5 +52,34 @@ func TestSiteUpdateKeepsSecretsWhenPatchIsBlank(t *testing.T) {
 	}
 	if got.URL != "https://api.m-team.cc" {
 		t.Fatalf("URL = %q, want trimmed URL", got.URL)
+	}
+}
+
+func TestSitePortalRateLimitProtectsMTeamByDefault(t *testing.T) {
+	mteam := model.Site{Type: "mteam"}
+	if got := sitePortalMinInterval(mteam); got < 3*time.Second {
+		t.Fatalf("mteam min interval = %s, want conservative throttle", got)
+	}
+
+	plain := model.Site{Type: "nexusphp"}
+	if got := sitePortalMinInterval(plain); got != 0 {
+		t.Fatalf("plain site min interval = %s, want no throttle unless enabled", got)
+	}
+
+	limited := model.Site{Type: "nexusphp", RateLimit: true}
+	if got := sitePortalMinInterval(limited); got <= 0 {
+		t.Fatalf("rate-limited site min interval = %s, want throttle", got)
+	}
+}
+
+func TestSitePortalRateLimitErrorMatchesMTeamMessage(t *testing.T) {
+	if !isSitePortalRateLimitError(errors.New("mteam: 請求過於頻繁")) {
+		t.Fatal("traditional Chinese M-Team rate limit message should be detected")
+	}
+	if !isSitePortalRateLimitError(errors.New("browse failed: status 429")) {
+		t.Fatal("HTTP 429 should be detected")
+	}
+	if isSitePortalRateLimitError(errors.New("authentication failed")) {
+		t.Fatal("unrelated errors should not be treated as rate limits")
 	}
 }

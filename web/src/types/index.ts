@@ -189,7 +189,14 @@ export interface Subscription {
   save_path?: string
   search_mode?: string
   imdb_id?: string
+  tmdb_id?: number
+  douban_id?: string
   source?: string
+  original_title?: string
+  original_language?: string
+  year?: number
+  rating?: number
+  genres?: string
   poster_url?: string
   backdrop_url?: string
   overview?: string
@@ -449,6 +456,7 @@ export interface DiscoverSection {
 export interface DiscoverItem {
   TMDbID?: number
   Title?: string
+  OriginalName?: string
   Overview?: string
   Rating?: number
   Year?: number
@@ -458,9 +466,13 @@ export interface DiscoverItem {
   // returns lower-cased aliases below for convenience.
   tmdb_id?: number
   title?: string
+  original_title?: string
+  original_name?: string
+  original_language?: string
   overview?: string
   rating?: number
   year?: number
+  genres?: string
   poster_url?: string
   backdrop_url?: string
 }

@@ -77,7 +77,14 @@ type TorrentDetail struct {
 	DownloadURL string     `json:"download_url"`
 	InfoHash    string     `json:"info_hash,omitempty"`
 	ImdbID      string     `json:"imdb_id,omitempty"`
+	DoubanID    string     `json:"douban_id,omitempty"`
+	TMDbID      string     `json:"tmdb_id,omitempty"`
+	Year        string     `json:"year,omitempty"`
+	Rating      string     `json:"rating,omitempty"`
+	Genres      []string   `json:"genres,omitempty"`
+	Tags        []string   `json:"tags,omitempty"`
 	Description string     `json:"description,omitempty"`
+	Images      []string   `json:"images,omitempty"`
 	Files       []string   `json:"files,omitempty"`
 }
 

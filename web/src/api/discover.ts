@@ -10,11 +10,15 @@ export interface DiscoverItem extends Partial<Media> {
   douban_id?: string
   bangumi_id?: number
   title: string
+  original_title?: string
+  original_name?: string
+  original_language?: string
   poster_url?: string
   backdrop_url?: string
   overview?: string
   year?: number
   rating?: number
+  genres?: string
   subscribe_keyword?: string
 }
 

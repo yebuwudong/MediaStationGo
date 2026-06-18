@@ -33,6 +33,10 @@ type SiteService struct {
 	log             *zap.Logger
 	repo            *repository.Container
 	flareSolverrURL string
+	portalMu        sync.Mutex
+	portalNext      map[string]time.Time
+	portalCache     map[string]sitePortalCacheEntry
+	portalCooldown  map[string]sitePortalCooldownEntry
 }
 
 // ResolveDownloadURL converts tracker-specific search result URLs into a URL
@@ -175,7 +179,14 @@ func torrentFilename(rawURL, disposition string) string {
 
 // NewSiteService is the constructor.
 func NewSiteService(log *zap.Logger, repo *repository.Container, flareSolverrURL string) *SiteService {
-	return &SiteService{log: log, repo: repo, flareSolverrURL: flareSolverrURL}
+	return &SiteService{
+		log:             log,
+		repo:            repo,
+		flareSolverrURL: flareSolverrURL,
+		portalNext:      map[string]time.Time{},
+		portalCache:     map[string]sitePortalCacheEntry{},
+		portalCooldown:  map[string]sitePortalCooldownEntry{},
+	}
 }
 
 // Create persists a new site.
@@ -437,9 +448,11 @@ func (s *SiteService) Search(ctx context.Context, keyword string) ([]SearchResul
 			if items == nil {
 				items = []TorrentItem{}
 			}
+			cats := s.cachedOrFallbackSiteCategories(site)
 			for _, item := range items {
+				item.Category = siteCategoryDisplayName(cats, item.Category)
 				mu.Lock()
-				results = append(results, siteSearchResultFromItem(site, item, false))
+				results = append(results, siteSearchResultFromItemWithCategories(site, item, false, cats))
 				mu.Unlock()
 			}
 		}(sites[i])

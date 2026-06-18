@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -60,10 +61,54 @@ type siteDownloadReq struct {
 	Title          string `json:"title"`
 	DownloadURL    string `json:"download_url"`
 	TorrentURL     string `json:"torrent_url"`
+	PosterURL      string `json:"poster_url"`
+	BackdropURL    string `json:"backdrop_url"`
+	Overview       string `json:"overview"`
 	SavePath       string `json:"save_path"`
 	MediaType      string `json:"media_type"`
 	MediaCategory  string `json:"media_category"`
 	SourceCategory string `json:"source_category"`
+}
+
+func enrichSiteTorrentDetailMeta(ctx context.Context, svc *service.Container, siteID, torrentID string, meta service.DownloadTaskMeta) service.DownloadTaskMeta {
+	if svc == nil || svc.Site == nil || strings.TrimSpace(siteID) == "" || strings.TrimSpace(torrentID) == "" {
+		return meta
+	}
+	detail, err := svc.Site.Detail(ctx, siteID, torrentID)
+	if err != nil || detail == nil {
+		return meta
+	}
+	if strings.TrimSpace(meta.Title) == "" {
+		meta.Title = detail.Title
+	}
+	if strings.TrimSpace(meta.PosterURL) == "" {
+		meta.PosterURL = detail.PosterURL
+	}
+	if strings.TrimSpace(meta.BackdropURL) == "" {
+		meta.BackdropURL = detail.BackdropURL
+	}
+	if strings.TrimSpace(meta.Overview) == "" {
+		meta.Overview = detail.Description
+	}
+	if strings.TrimSpace(meta.IMDBID) == "" {
+		meta.IMDBID = detail.ImdbID
+	}
+	if meta.TMDbID <= 0 {
+		meta.TMDbID = parseSiteTMDbID(detail.TMDbID)
+	}
+	if strings.TrimSpace(meta.DoubanID) == "" {
+		meta.DoubanID = detail.DoubanID
+	}
+	return meta
+}
+
+func parseSiteTMDbID(raw string) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	n, _ := strconv.Atoi(raw)
+	return n
 }
 
 func siteDownloadHandler(svc *service.Container) gin.HandlerFunc {
@@ -83,12 +128,17 @@ func siteDownloadHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		uid, _ := c.Get(middleware.CtxUserID)
-		meta := enrichDownloadTaskMeta(c.Request.Context(), svc, service.DownloadTaskMeta{
+		meta := service.DownloadTaskMeta{
 			Title:          req.Title,
+			PosterURL:      req.PosterURL,
+			BackdropURL:    req.BackdropURL,
+			Overview:       req.Overview,
 			MediaType:      req.MediaType,
 			MediaCategory:  req.MediaCategory,
 			SourceCategory: req.SourceCategory,
-		}, firstNonEmptyString(req.Title, realURL), req.MediaType)
+		}
+		meta = enrichSiteTorrentDetailMeta(c.Request.Context(), svc, req.SiteID, req.ID, meta)
+		meta = enrichDownloadTaskMeta(c.Request.Context(), svc, meta, firstNonEmptyString(req.Title, meta.Title, realURL), req.MediaType)
 		task, err := svc.Downloads.AddDownloadWithMeta(c.Request.Context(), uid.(string), realURL, req.SavePath, meta)
 		if err != nil {
 			if errors.Is(err, service.ErrMediaAlreadyInLibrary) {
@@ -109,6 +159,7 @@ func siteDownloadHandler(svc *service.Container) gin.HandlerFunc {
 
 type siteSubscribeReq struct {
 	SiteID        string `json:"site_id"`
+	ID            string `json:"id"`
 	Category      string `json:"category"`
 	IncludeAdult  bool   `json:"include_adult"`
 	Name          string `json:"name"`
@@ -116,6 +167,9 @@ type siteSubscribeReq struct {
 	Filter        string `json:"filter"`
 	MediaType     string `json:"media_type"`
 	MediaCategory string `json:"media_category"`
+	PosterURL     string `json:"poster_url"`
+	BackdropURL   string `json:"backdrop_url"`
+	Overview      string `json:"overview"`
 	SavePath      string `json:"save_path"`
 	Enabled       *bool  `json:"enabled"`
 }
@@ -148,10 +202,29 @@ func siteSubscribeHandler(svc *service.Container) gin.HandlerFunc {
 			Filter:        firstNonEmptyString(req.Filter, keyword),
 			MediaType:     req.MediaType,
 			MediaCategory: req.MediaCategory,
+			PosterURL:     req.PosterURL,
+			BackdropURL:   req.BackdropURL,
+			Overview:      req.Overview,
 			SavePath:      req.SavePath,
 			SearchMode:    "keyword",
 			Source:        "site_search",
 			Enabled:       enabled,
+		}
+		if detailMeta := enrichSiteTorrentDetailMeta(c.Request.Context(), svc, req.SiteID, req.ID, service.DownloadTaskMeta{
+			Title:       sub.Name,
+			PosterURL:   sub.PosterURL,
+			BackdropURL: sub.BackdropURL,
+			Overview:    sub.Overview,
+		}); detailMeta.Title != "" || detailMeta.PosterURL != "" || detailMeta.BackdropURL != "" || detailMeta.Overview != "" || detailMeta.IMDBID != "" || detailMeta.TMDbID > 0 || detailMeta.DoubanID != "" {
+			sub.Name = firstNonEmptyString(sub.Name, detailMeta.Title)
+			sub.PosterURL = firstNonEmptyString(detailMeta.PosterURL, sub.PosterURL)
+			sub.BackdropURL = firstNonEmptyString(detailMeta.BackdropURL, sub.BackdropURL)
+			sub.Overview = firstNonEmptyString(sub.Overview, detailMeta.Overview)
+			sub.IMDBID = firstNonEmptyString(sub.IMDBID, detailMeta.IMDBID)
+			if sub.TMDbID <= 0 {
+				sub.TMDbID = detailMeta.TMDbID
+			}
+			sub.DoubanID = firstNonEmptyString(sub.DoubanID, detailMeta.DoubanID)
 		}
 		enrichSubscriptionArtwork(c.Request.Context(), svc, sub)
 		if err := svc.Subscription.Create(c.Request.Context(), sub); err != nil {
@@ -161,6 +234,12 @@ func siteSubscribeHandler(svc *service.Container) gin.HandlerFunc {
 		enriched := []model.Subscription{*sub}
 		svc.Subscription.EnrichProgress(c.Request.Context(), enriched)
 		*sub = enriched[0]
-		c.JSON(http.StatusCreated, sub)
+		queued := 0
+		if enabled {
+			if n, err := svc.Subscription.RunNow(c.Request.Context(), sub.ID); err == nil {
+				queued = n
+			}
+		}
+		c.JSON(http.StatusCreated, gin.H{"subscription": sub, "queued": queued})
 	}
 }

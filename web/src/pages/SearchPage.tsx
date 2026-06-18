@@ -221,7 +221,7 @@ export function SearchPage() {
             try {
               const feed = `site-search://search?keyword=${encodeURIComponent(keyword)}&source=${encodeURIComponent(item.source)}`
               const sub = await subscriptionsAPI.create({
-                name: `${item.title} 自动订阅`,
+                name: item.title,
                 feed_url: feed,
                 filter: keyword,
                 media_type: item.media_type,

@@ -201,6 +201,9 @@ type DownloadTask struct {
 	PosterURL      string  `gorm:"size:2048" json:"poster_url,omitempty"`
 	BackdropURL    string  `gorm:"size:2048" json:"backdrop_url,omitempty"`
 	Overview       string  `gorm:"type:text" json:"overview,omitempty"`
+	IMDBID         string  `gorm:"size:32" json:"imdb_id,omitempty"`
+	TMDbID         int     `json:"tmdb_id,omitempty"`
+	DoubanID       string  `gorm:"column:douban_id;size:32" json:"douban_id,omitempty"`
 	SavePath       string  `gorm:"size:1024" json:"save_path"`
 	MediaType      string  `gorm:"size:16" json:"media_type,omitempty"`
 	MediaCategory  string  `gorm:"size:128" json:"media_category,omitempty"`
@@ -224,7 +227,14 @@ type Subscription struct {
 	SavePath      string     `gorm:"size:1024" json:"save_path,omitempty"`
 	SearchMode    string     `gorm:"size:16;default:keyword" json:"search_mode,omitempty"` // keyword / imdb
 	IMDBID        string     `gorm:"size:32" json:"imdb_id,omitempty"`
+	TMDbID        int        `json:"tmdb_id,omitempty"`
+	DoubanID      string     `gorm:"column:douban_id;size:32" json:"douban_id,omitempty"`
 	Source        string     `gorm:"size:32" json:"source,omitempty"`
+	OriginalTitle string     `gorm:"size:512" json:"original_title,omitempty"`
+	OriginalLang  string     `gorm:"column:original_language;size:64" json:"original_language,omitempty"`
+	Year          int        `json:"year,omitempty"`
+	Rating        float32    `json:"rating,omitempty"`
+	Genres        string     `gorm:"type:text" json:"genres,omitempty"`
 	PosterURL     string     `gorm:"size:2048" json:"poster_url,omitempty"`
 	BackdropURL   string     `gorm:"size:2048" json:"backdrop_url,omitempty"`
 	Overview      string     `gorm:"type:text" json:"overview,omitempty"`

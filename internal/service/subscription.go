@@ -202,7 +202,7 @@ func (s *SubscriptionService) runAll(ctx context.Context) {
 }
 
 func (s *SubscriptionService) runOne(ctx context.Context, sub *model.Subscription) (int, error) {
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(sub.FeedURL)), "site-search://") {
+	if isSiteSearchSubscription(sub) {
 		return s.runSiteSearch(ctx, sub)
 	}
 
@@ -232,6 +232,7 @@ func (s *SubscriptionService) runOne(ctx context.Context, sub *model.Subscriptio
 	candidates := selectRSSSubscriptionCandidates(feed.Channel.Items, sub, filter, seenSet, avail)
 
 	queued := 0
+	notifyResources := []subscriptionNotifyResource{}
 	for _, candidate := range candidates {
 		item := candidate.Item
 		guid := candidate.GUID
@@ -250,6 +251,9 @@ func (s *SubscriptionService) runOne(ctx context.Context, sub *model.Subscriptio
 			PosterURL:            sub.PosterURL,
 			BackdropURL:          sub.BackdropURL,
 			Overview:             sub.Overview,
+			IMDBID:               sub.IMDBID,
+			TMDbID:               sub.TMDbID,
+			DoubanID:             sub.DoubanID,
 			MediaType:            mediaType,
 			MediaCategory:        mediaCategory,
 			AllowExistingLibrary: sub.WashEnabled,
@@ -274,6 +278,10 @@ func (s *SubscriptionService) runOne(ctx context.Context, sub *model.Subscriptio
 			addAvailabilityTitle(item.Title, availQuery, &avail)
 		}
 		queued++
+		notifyResources = append(notifyResources, subscriptionNotifyResource{
+			Title:     item.Title,
+			DetailURL: item.TorrentURL,
+		})
 		seen = append(seen, guid)
 		seenSet[guid] = struct{}{}
 	}
@@ -293,9 +301,42 @@ func (s *SubscriptionService) runOne(ctx context.Context, sub *model.Subscriptio
 			"name":   sub.Name,
 			"queued": queued,
 		})
-		s.notifySubscriptionHit(sub, queued, nil)
+		s.notifySubscriptionHit(sub, queued, notifyResources)
 	}
 	return queued, nil
+}
+
+func isSiteSearchSubscription(sub *model.Subscription) bool {
+	return sub != nil && strings.HasPrefix(strings.ToLower(strings.TrimSpace(sub.FeedURL)), "site-search://")
+}
+
+func (s *SubscriptionService) PreviewSearch(ctx context.Context, sub *model.Subscription) ([]SearchResult, error) {
+	if sub == nil {
+		return []SearchResult{}, nil
+	}
+	keyword := siteSearchKeyword(sub)
+	if keyword == "" {
+		return []SearchResult{}, nil
+	}
+	if isSiteSearchSubscription(sub) {
+		if s.site == nil {
+			return nil, errors.New("site search service unavailable")
+		}
+		params := siteSearchParamsFromURL(sub.FeedURL)
+		params.Keyword = keyword
+		result, err := s.site.Browse(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		if result == nil {
+			return []SearchResult{}, nil
+		}
+		return result.Items, nil
+	}
+	if s.site == nil {
+		return nil, errors.New("site search service unavailable")
+	}
+	return s.site.Search(ctx, keyword)
 }
 
 func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subscription) (int, error) {
@@ -339,7 +380,7 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 	candidates := selectSiteSearchCandidates(results, sub, seenSet, availability)
 	var lastEnqueueErr error
 	queued := 0
-	var resources []string
+	var resources []subscriptionNotifyResource
 	for _, candidate := range candidates {
 		item := candidate.Item
 		mediaType, mediaCategory := s.classifySubscriptionItem(ctx, sub, item.Title, item.Category)
@@ -372,6 +413,9 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 			PosterURL:            sub.PosterURL,
 			BackdropURL:          sub.BackdropURL,
 			Overview:             sub.Overview,
+			IMDBID:               sub.IMDBID,
+			TMDbID:               sub.TMDbID,
+			DoubanID:             sub.DoubanID,
 			MediaType:            mediaType,
 			MediaCategory:        mediaCategory,
 			SourceCategory:       item.Category,
@@ -396,7 +440,14 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 		}
 		queued++
 		addAvailabilityTitle(item.Title, availabilityQuery(subscriptionName(sub), subscriptionFilter(sub)), &availability)
-		resources = append(resources, item.Title)
+		resources = append(resources, subscriptionNotifyResource{
+			Title:       item.Title,
+			Category:    item.Category,
+			Size:        item.Size,
+			DetailURL:   item.TorrentURL,
+			PosterURL:   item.PosterURL,
+			BackdropURL: item.BackdropURL,
+		})
 		seen = append(seen, candidate.GUID)
 		seenSet[candidate.GUID] = struct{}{}
 	}
@@ -414,7 +465,7 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 			"name":      sub.Name,
 			"queued":    queued,
 			"keyword":   keyword,
-			"resources": resources,
+			"resources": subscriptionNotifyResourceTitles(resources),
 		})
 		s.notifySubscriptionHit(sub, queued, resources)
 		return queued, nil
@@ -425,29 +476,63 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 	return 0, nil
 }
 
-func (s *SubscriptionService) notifySubscriptionHit(sub *model.Subscription, queued int, resources []string) {
+type subscriptionNotifyResource struct {
+	Title       string
+	Category    string
+	Size        int64
+	DetailURL   string
+	PosterURL   string
+	BackdropURL string
+}
+
+func subscriptionNotifyResourceTitles(resources []subscriptionNotifyResource) []string {
+	out := make([]string, 0, len(resources))
+	for _, resource := range resources {
+		if title := strings.TrimSpace(resource.Title); title != "" {
+			out = append(out, title)
+		}
+	}
+	return out
+}
+
+func (s *SubscriptionService) notifySubscriptionHit(sub *model.Subscription, queued int, resources []subscriptionNotifyResource) {
 	if s == nil || s.notify == nil || sub == nil || queued <= 0 {
 		return
 	}
 	body := fmt.Sprintf("订阅：%s\n新增资源：%d", sub.Name, queued)
 	if len(resources) > 0 {
-		body += "\n资源：\n- " + strings.Join(resources, "\n- ")
+		body += "\n资源：\n- " + strings.Join(subscriptionNotifyResourceTitles(resources), "\n- ")
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		data := map[string]interface{}{}
+		data := subscriptionNotifyData(sub)
 		if strings.TrimSpace(sub.PosterURL) != "" {
 			data["poster_url"] = sub.PosterURL
 		}
 		if strings.TrimSpace(sub.BackdropURL) != "" {
 			data["backdrop_url"] = sub.BackdropURL
 		}
-		if strings.TrimSpace(sub.MediaType) != "" {
-			data["media_type"] = sub.MediaType
-		}
-		if strings.TrimSpace(sub.MediaCategory) != "" {
-			data["media_category"] = sub.MediaCategory
+		if len(resources) > 0 {
+			first := resources[0]
+			if strings.TrimSpace(first.Title) != "" {
+				data["resource_title"] = first.Title
+			}
+			if strings.TrimSpace(first.DetailURL) != "" {
+				data["detail_url"] = first.DetailURL
+			}
+			if strings.TrimSpace(first.Category) != "" && strings.TrimSpace(fmt.Sprint(data["media_category"])) == "" {
+				data["media_category"] = first.Category
+			}
+			if first.Size > 0 {
+				data["size"] = formatSize(first.Size)
+			}
+			if strings.TrimSpace(first.PosterURL) != "" && strings.TrimSpace(telegramDataString(data, "poster_url")) == "" {
+				data["poster_url"] = first.PosterURL
+			}
+			if strings.TrimSpace(first.BackdropURL) != "" && strings.TrimSpace(telegramDataString(data, "backdrop_url")) == "" {
+				data["backdrop_url"] = first.BackdropURL
+			}
 		}
 		s.notify.BroadcastEvent(ctx, NotifyEvent{
 			Type:    EventSubscriptionHit,
@@ -456,6 +541,128 @@ func (s *SubscriptionService) notifySubscriptionHit(sub *model.Subscription, que
 			Data:    data,
 		})
 	}()
+}
+
+func subscriptionNotifyData(sub *model.Subscription) map[string]interface{} {
+	data := map[string]interface{}{}
+	if sub == nil {
+		return data
+	}
+	if strings.TrimSpace(sub.Name) != "" {
+		data["title"] = sub.Name
+	}
+	if strings.TrimSpace(sub.MediaType) != "" {
+		data["media_type"] = sub.MediaType
+	}
+	if strings.TrimSpace(sub.MediaCategory) != "" {
+		data["media_category"] = sub.MediaCategory
+	}
+	if strings.TrimSpace(sub.OriginalTitle) != "" {
+		data["original_title"] = sub.OriginalTitle
+	}
+	if strings.TrimSpace(sub.OriginalLang) != "" {
+		data["original_language"] = sub.OriginalLang
+	}
+	if sub.Year > 0 {
+		data["year"] = sub.Year
+	}
+	if sub.Rating > 0 {
+		data["rating"] = sub.Rating
+	}
+	if strings.TrimSpace(sub.Genres) != "" {
+		data["genres"] = sub.Genres
+	}
+	if strings.TrimSpace(sub.Quality) != "" || strings.TrimSpace(sub.Resolution) != "" {
+		versionParts := []string{}
+		if strings.TrimSpace(sub.Quality) != "" {
+			versionParts = append(versionParts, strings.TrimSpace(sub.Quality))
+		}
+		if strings.TrimSpace(sub.Resolution) != "" && !strings.EqualFold(strings.TrimSpace(sub.Resolution), "best") {
+			versionParts = append(versionParts, strings.TrimSpace(sub.Resolution))
+		}
+		if len(versionParts) > 0 {
+			data["version"] = strings.Join(versionParts, ".")
+		}
+	}
+	if strings.TrimSpace(sub.Overview) != "" {
+		data["overview"] = truncateTelegramText(sub.Overview, 180)
+	}
+	if imdbURL := imdbExternalURL(sub.IMDBID); imdbURL != "" {
+		data["imdb_url"] = imdbURL
+	}
+	tmdbID := sub.TMDbID
+	if tmdbID <= 0 {
+		tmdbID = subscriptionExplicitTMDbID(sub)
+	}
+	if tmdbURL := tmdbExternalURL(tmdbID, sub.MediaType); tmdbURL != "" {
+		data["tmdb_url"] = tmdbURL
+	}
+	if doubanURL := doubanExternalURL(sub.DoubanID); doubanURL != "" {
+		data["douban_url"] = doubanURL
+	}
+	return data
+}
+
+func mergeNotifyData(dst map[string]interface{}, src map[string]interface{}) {
+	if dst == nil || len(src) == 0 {
+		return
+	}
+	for key, value := range src {
+		if !notifyDataHasValue(value) {
+			continue
+		}
+		if notifyDataHasValue(dst[key]) {
+			continue
+		}
+		dst[key] = value
+	}
+}
+
+func notifyDataHasValue(value interface{}) bool {
+	if value == nil {
+		return false
+	}
+	text := strings.TrimSpace(fmt.Sprint(value))
+	return text != "" && text != "<nil>"
+}
+
+func truncateTelegramText(text string, limit int) string {
+	text = strings.TrimSpace(strings.Join(strings.Fields(text), " "))
+	if limit <= 0 || len([]rune(text)) <= limit {
+		return text
+	}
+	runes := []rune(text)
+	return strings.TrimSpace(string(runes[:limit])) + "..."
+}
+
+func imdbExternalURL(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ""
+	}
+	if !strings.HasPrefix(strings.ToLower(id), "tt") {
+		id = "tt" + id
+	}
+	return "https://www.imdb.com/title/" + url.PathEscape(id) + "/"
+}
+
+func tmdbExternalURL(id int, mediaType string) string {
+	if id <= 0 {
+		return ""
+	}
+	typ := "tv"
+	if strings.EqualFold(strings.TrimSpace(mediaType), "movie") || strings.Contains(strings.TrimSpace(mediaType), "电影") {
+		typ = "movie"
+	}
+	return fmt.Sprintf("https://www.themoviedb.org/%s/%d", typ, id)
+}
+
+func doubanExternalURL(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ""
+	}
+	return "https://movie.douban.com/subject/" + url.PathEscape(id) + "/"
 }
 
 func (s *SubscriptionService) archiveCompletedSubscription(ctx context.Context, sub *model.Subscription, availability LocalAvailability) error {

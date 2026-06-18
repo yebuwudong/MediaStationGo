@@ -236,7 +236,7 @@ function DiscoverCard({ item, onSelect }: { item: DiscoverItem; onSelect: (item:
 
 export function DiscoverDetailModal({ item, onClose }: { item: DiscoverItem; onClose: () => void }) {
   const source = item.source || (item.bangumi_id ? 'bangumi' : item.douban_id ? 'douban' : 'tmdb')
-  const keyword = item.subscribe_keyword || buildSubscribeKeyword(item)
+  const keyword = item.title || item.subscribe_keyword || buildSubscribeKeyword(item)
   const [form, setForm] = useState({
     keyword,
     search_mode: 'keyword',
@@ -258,19 +258,27 @@ export function DiscoverDetailModal({ item, onClose }: { item: DiscoverItem; onC
 
   const submit = async () => {
     const finalKeyword = form.keyword.trim() || keyword
+    const finalFilter = item.title || finalKeyword
     const feed = `site-search://search?keyword=${encodeURIComponent(finalKeyword)}&source=${encodeURIComponent(source)}`
     setBusy(true)
     try {
       const sub = await subscriptionsAPI.create({
-        name: `${item.title} 自动订阅`,
+        name: item.title,
         feed_url: feed,
-        filter: finalKeyword,
+        filter: finalFilter,
         media_type: form.media_type || undefined,
         media_category: form.media_category || undefined,
         save_path: form.save_path || undefined,
         search_mode: form.search_mode,
         imdb_id: form.imdb_id || undefined,
+        tmdb_id: item.tmdb_id || undefined,
+        douban_id: item.douban_id || undefined,
         source,
+        original_title: item.original_title || item.original_name || undefined,
+        original_language: item.original_language || undefined,
+        year: item.year && item.year > 0 ? item.year : undefined,
+        rating: item.rating && item.rating > 0 ? item.rating : undefined,
+        genres: item.genres || undefined,
         poster_url: item.poster_url || undefined,
         backdrop_url: item.backdrop_url || undefined,
         overview: item.overview || undefined,

@@ -5,13 +5,12 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
-  ExternalLink,
   Eye,
   Filter,
+  Loader2,
   RefreshCw,
   Rss,
   Search,
-  ShieldAlert,
 } from 'lucide-react'
 
 import { sitesAPI, type SiteCategory, type SiteSearchResult } from '../api/sites'
@@ -48,6 +47,13 @@ function itemKey(item: SiteSearchResult, idx: number): string {
 
 function cleanTitle(title: string): string {
   return title.length > 110 ? `${title.slice(0, 110)}...` : title
+}
+
+function categoryGroupOrder(group: string): number {
+  const normalized = group.trim()
+  const order = ['全部', '影视', '电影', '剧集', '动漫', '综艺', '纪录片', '成人']
+  const idx = order.indexOf(normalized)
+  return idx >= 0 ? idx : order.length
 }
 
 function detailFromItem(item: SiteSearchResult): Record<string, unknown> {
@@ -90,6 +96,24 @@ function resourceVisual(item: SiteSearchResult | Record<string, unknown>): strin
   return poster || backdrop
 }
 
+function stringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((item) => String(item)).filter(Boolean)
+  if (typeof value === 'string' && value.trim()) return value.split(/[,，/|、]/).map((item) => item.trim()).filter(Boolean)
+  return []
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const value of values) {
+    const trimmed = value.trim()
+    if (!trimmed || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    out.push(trimmed)
+  }
+  return out
+}
+
 export function PTResourcesPage() {
   const [sites, setSites] = useState<Site[]>([])
   const [categories, setCategories] = useState<SiteCategory[]>([])
@@ -97,7 +121,6 @@ export function PTResourcesPage() {
   const [category, setCategory] = useState('')
   const [keyword, setKeyword] = useState('')
   const [submittedKeyword, setSubmittedKeyword] = useState('')
-  const [includeAdult, setIncludeAdult] = useState(false)
   const [page, setPage] = useState(1)
   const [pageInput, setPageInput] = useState('1')
   const [items, setItems] = useState<SiteSearchResult[]>([])
@@ -107,6 +130,7 @@ export function PTResourcesPage() {
   const [loading, setLoading] = useState(false)
   const [actingKey, setActingKey] = useState('')
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null)
+  const [categoryGroup, setCategoryGroup] = useState('')
 
   const loadSites = async () => {
     const payload = await sitesAPI.list()
@@ -122,14 +146,22 @@ export function PTResourcesPage() {
   }
 
   const loadResources = async (nextPage = page, nextKeyword = submittedKeyword) => {
+    const selected = categories.find((row) => row.id === category || row.name === category)
     setLoading(true)
+    if (nextPage === 1) {
+      setItems([])
+      setTotal(0)
+      setTotalPages(0)
+      setPage(1)
+      setPageInput('1')
+    }
     try {
       const data = await sitesAPI.browse({
         site_id: siteID || undefined,
         category: category || undefined,
         keyword: nextKeyword || undefined,
         page: nextPage,
-        include_adult: includeAdult,
+        include_adult: Boolean(selected?.adult),
       })
       setItems(data.items || [])
       setTotal(data.total || 0)
@@ -147,49 +179,42 @@ export function PTResourcesPage() {
   }
 
   useEffect(() => {
-    Promise.all([loadSites(), loadCategories('')])
-      .then(() => loadResources(1, ''))
-      .catch(() => toast.error('加载 PT 资源中心失败'))
+    loadSites().catch(() => toast.error('加载 PT 资源中心失败'))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
     loadCategories(siteID).catch(() => toast.error('加载分类失败'))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [siteID])
+
+  useEffect(() => {
     setPage(1)
     loadResources(1).catch(() => undefined)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [siteID, category, includeAdult])
+  }, [siteID, category])
 
   const groupedCategories = useMemo(() => {
-    const fromItems = items
-      .filter((item) => item.category)
-      .map((item) => ({
-        id: item.category || '',
-        name: item.category || '',
-        group: '当前结果',
-        site_id: item.site_id,
-        site_name: item.site_name,
-        site_type: '',
-        adult: Boolean(item.adult),
-      }))
     const byKey = new Map<string, SiteCategory>()
-    for (const item of [...categories, ...fromItems]) {
+    for (const item of categories) {
       byKey.set(categoryKey(item), item)
     }
-    const visible = includeAdult
-      ? Array.from(byKey.values())
-      : Array.from(byKey.values()).filter((item) => !item.adult)
     const groups = new Map<string, SiteCategory[]>()
-    for (const item of visible) {
-      const key = item.site_name || item.group || '其他'
+    for (const item of Array.from(byKey.values())) {
+      const key = item.group || (siteID ? '其他' : item.site_name || '其他')
       groups.set(key, [...(groups.get(key) || []), item])
     }
-    return Array.from(groups.entries())
-  }, [categories, includeAdult, items])
+    return Array.from(groups.entries()).sort(([a], [b]) => categoryGroupOrder(a) - categoryGroupOrder(b) || a.localeCompare(b, 'zh-Hans-CN'))
+  }, [categories, siteID])
 
   const selectedSite = sites.find((site) => site.id === siteID)
+  const selectedCategory = categories.find((row) => (row.id === category || row.name === category) && (!row.site_id || !siteID || row.site_id === siteID))
+  const visibleCategoryGroup = categoryGroup || selectedCategory?.group || groupedCategories[0]?.[0] || ''
+  const visibleCategoryRows = groupedCategories.find(([group]) => group === visibleCategoryGroup)?.[1] || []
+  const selectedCategoryAdult = Boolean(selectedCategory?.adult)
   const canGoNext = totalPages > 0 ? page < totalPages : items.length > 0
-  const resultText = `${selectedSite ? selectedSite.name : '全部站点'} / ${submittedKeyword || '全站'} / ${total || items.length} 条`
+  const resultCountText = loading ? '加载中' : `${total || items.length} 条`
+  const resultText = `${selectedSite ? selectedSite.name : '全部站点'} / ${selectedCategory?.name || '全部'} / ${submittedKeyword || '全站'} / ${resultCountText}`
 
   const onSearch = (event: FormEvent) => {
     event.preventDefault()
@@ -214,6 +239,7 @@ export function PTResourcesPage() {
   const onDownload = async (item: SiteSearchResult) => {
     const key = `download:${itemKey(item, 0)}`
     setActingKey(key)
+    const toastID = toast.loading('正在加入下载...')
     try {
       await sitesAPI.download({
         site_id: item.site_id,
@@ -221,14 +247,17 @@ export function PTResourcesPage() {
         title: item.title,
         download_url: item.download_url,
         torrent_url: item.torrent_url,
+        poster_url: item.poster_url,
+        backdrop_url: item.backdrop_url,
+        overview: item.overview || item.subtitle,
         source_category: item.category,
         media_category: item.adult ? '成人' : undefined,
       })
-      toast.success('已加入下载')
+      toast.success('已加入下载', { id: toastID })
     } catch (err: unknown) {
       const message =
         (err as { response?: { data?: { error?: string } } })?.response?.data?.error || '加入下载失败'
-      toast.error(message)
+      toast.error(message, { id: toastID })
     } finally {
       setActingKey('')
     }
@@ -237,21 +266,27 @@ export function PTResourcesPage() {
   const onSubscribe = async (item: SiteSearchResult) => {
     const key = `subscribe:${itemKey(item, 0)}`
     setActingKey(key)
+    const toastID = toast.loading('正在创建订阅并执行搜索...')
     try {
-      await sitesAPI.subscribe({
+      const data = await sitesAPI.subscribe({
         site_id: item.site_id,
-        category: category || item.category,
-        include_adult: includeAdult || item.adult,
+        id: item.id,
+        category: selectedCategory?.id || undefined,
+        include_adult: selectedCategoryAdult || item.adult,
         name: item.title,
         keyword: item.title,
         filter: item.title,
         media_category: item.adult ? '成人' : undefined,
+        poster_url: item.poster_url,
+        backdrop_url: item.backdrop_url,
+        overview: item.overview || item.subtitle,
       })
-      toast.success('已创建订阅')
+      const queued = Number(data?.queued || 0)
+      toast.success(queued > 0 ? `已创建订阅并加入 ${queued} 个下载` : '已创建订阅，暂未命中资源', { id: toastID })
     } catch (err: unknown) {
       const message =
         (err as { response?: { data?: { error?: string } } })?.response?.data?.error || '创建订阅失败'
-      toast.error(message)
+      toast.error(message, { id: toastID })
     } finally {
       setActingKey('')
     }
@@ -260,7 +295,6 @@ export function PTResourcesPage() {
   const onDetail = async (item: SiteSearchResult) => {
     setDetail(detailFromItem(item))
     if (!item.id) {
-      if (item.torrent_url) window.open(item.torrent_url, '_blank', 'noopener,noreferrer')
       return
     }
     const key = `detail:${itemKey(item, 0)}`
@@ -279,6 +313,12 @@ export function PTResourcesPage() {
 
   const detailDescription = typeof detail?.description === 'string' ? detail.description : ''
   const detailFiles = Array.isArray(detail?.files) ? detail.files.map((file) => String(file)) : []
+  const detailGenres = stringList(detail?.genres)
+  const detailTags = stringList(detail?.tags)
+  const detailPoster = typeof detail?.poster_url === 'string' ? detail.poster_url : ''
+  const detailBackdrop = typeof detail?.backdrop_url === 'string' ? detail.backdrop_url : ''
+  const detailSubtitle = typeof detail?.subtitle === 'string' ? detail.subtitle : ''
+  const detailImages = uniqueStrings(stringList(detail?.images)).filter((url) => url !== detailPoster && url !== detailBackdrop)
 
   return (
     <div className="space-y-6">
@@ -290,7 +330,7 @@ export function PTResourcesPage() {
             <p className="text-sm text-ink-50">站点资源、分类、成人资源、订阅下载</p>
           </div>
         </div>
-        <button className="neon-button flex items-center gap-2" onClick={() => loadResources(1)}>
+        <button className="neon-button flex items-center gap-2" onClick={() => loadResources(1)} disabled={loading}>
           <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
           刷新
         </button>
@@ -360,44 +400,53 @@ export function PTResourcesPage() {
           >
             全部
           </button>
-          <label className="ml-auto flex items-center gap-2 rounded border border-red-300/50 px-3 py-1.5 text-sm text-red-500">
-            <input
-              type="checkbox"
-              checked={includeAdult}
-              onChange={(event) => setIncludeAdult(event.target.checked)}
-            />
-            <ShieldAlert size={14} />
-            成人
-          </label>
+          {groupedCategories.map(([group, rows]) => (
+            <button
+              key={group}
+              type="button"
+              className={`rounded border px-3 py-1.5 text-sm ${
+                visibleCategoryGroup === group
+                  ? 'border-primary-400 bg-primary-400/10 text-brand-500'
+                  : 'border-gray-200 text-ink-100 hover:border-primary-400/40'
+              }`}
+              onClick={() => {
+                setCategoryGroup(group)
+                setCategory('')
+              }}
+            >
+              {group}
+              <span className="ml-1 text-xs text-sand-500">{rows.length}</span>
+            </button>
+          ))}
         </div>
 
-        <div className="space-y-3">
-          {groupedCategories.map(([group, rows]) => (
-            <div key={group} className="flex flex-wrap items-center gap-2">
-              <span className="w-14 text-xs text-sand-500">{group}</span>
-              {rows.map((row) => (
-                <button
-                  key={categoryKey(row)}
-                  className={`rounded border px-2.5 py-1 text-xs ${
-                    category === row.id || category === row.name
-                      ? row.adult
-                        ? 'border-red-400 bg-red-400/10 text-red-500'
-                        : 'border-primary-400 bg-primary-400/10 text-brand-500'
-                      : 'border-gray-200 text-ink-100 hover:border-primary-400/40'
-                  }`}
-                  onClick={() => setCategory(row.id)}
-                >
-                  {row.adult && <AlertTriangle size={12} className="mr-1 inline" />}
-                  {row.name}
-                </button>
-              ))}
-            </div>
+        <div className="flex flex-wrap items-center gap-2 rounded border border-gray-100 bg-white/50 p-3">
+          <span className="text-xs text-sand-500">{visibleCategoryGroup || '分类'}</span>
+          {visibleCategoryRows.map((row) => (
+            <button
+              key={categoryKey(row)}
+              className={`rounded border px-2.5 py-1 text-xs ${
+                (category === row.id || category === row.name) && (!row.site_id || !siteID || row.site_id === siteID)
+                  ? row.adult
+                    ? 'border-red-400 bg-red-400/10 text-red-500'
+                    : 'border-primary-400 bg-primary-400/10 text-brand-500'
+                  : 'border-gray-200 text-ink-100 hover:border-primary-400/40'
+              }`}
+              onClick={() => {
+                if (row.site_id && siteID !== row.site_id) setSiteID(row.site_id)
+                setCategoryGroup(row.group || visibleCategoryGroup)
+                setCategory(row.id)
+              }}
+            >
+              {row.adult && <AlertTriangle size={12} className="mr-1 inline" />}
+              {row.name}
+            </button>
           ))}
         </div>
       </section>
 
       <section className="glass-panel">
-        <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="sticky top-0 z-30 -mx-5 mb-4 flex flex-col gap-3 border-b border-gray-200 bg-white/95 px-5 py-3 backdrop-blur md:flex-row md:items-center md:justify-between">
           <div className="text-sm text-ink-50">
             <p>{resultText}</p>
             <p className="mt-1 text-xs text-sand-500">
@@ -516,24 +565,13 @@ export function PTResourcesPage() {
                       >
                         <Eye size={14} />
                       </button>
-                      {item.torrent_url && (
-                        <a
-                          className="rounded border border-gray-200 p-1.5 text-ink-100 hover:border-primary-400/50"
-                          href={item.torrent_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title="打开"
-                        >
-                          <ExternalLink size={14} />
-                        </a>
-                      )}
                       <button
                         className="rounded border border-primary-400/50 p-1.5 text-brand-500 hover:bg-primary-400/10"
                         onClick={() => onDownload(item)}
                         disabled={actingKey === `download:${key}`}
                         title="下载"
                       >
-                        <Download size={14} />
+                        {actingKey === `download:${key}` ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
                       </button>
                       <button
                         className="rounded border border-emerald-400/50 p-1.5 text-emerald-500 hover:bg-emerald-400/10"
@@ -541,7 +579,7 @@ export function PTResourcesPage() {
                         disabled={actingKey === `subscribe:${key}`}
                         title="订阅"
                       >
-                        <Rss size={14} />
+                        {actingKey === `subscribe:${key}` ? <Loader2 size={14} className="animate-spin" /> : <Rss size={14} />}
                       </button>
                     </div>
                   </td>
@@ -559,55 +597,97 @@ export function PTResourcesPage() {
 
       {detail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4" onClick={() => setDetail(null)}>
-          <div className="glass-panel max-h-[80vh] w-full max-w-2xl overflow-y-auto" onClick={(event) => event.stopPropagation()}>
+          <div className="glass-panel max-h-[86vh] w-full max-w-5xl overflow-y-auto" onClick={(event) => event.stopPropagation()}>
             <div className="mb-4 flex items-center justify-between gap-3">
               <h2 className="font-display text-xl font-bold text-ink-600">{String(detail.title || detail.id || '详情')}</h2>
               <button className="rounded border border-gray-200 px-3 py-1 text-sm text-ink-100" onClick={() => setDetail(null)}>
                 关闭
               </button>
             </div>
-            {resourceVisual(detail) && (
+
+            {detailBackdrop && (
               <div className="mb-4 overflow-hidden rounded border border-gray-200 bg-gray-100">
                 <img
-                  src={imageURL(resourceVisual(detail))}
-                  alt={String(detail.title || '')}
-                  className="max-h-80 w-full object-contain"
+                  src={imageURL(detailBackdrop)}
+                  alt=""
+                  className="h-44 w-full object-cover"
                   referrerPolicy="no-referrer"
                 />
               </div>
             )}
-            <div className="grid gap-3 text-sm md:grid-cols-2">
-              <Info label="站点" value={String(detail.site_name || '-')} />
-              <Info label="分类" value={String(detail.category || '-')} />
-              <Info label="大小" value={fmtBytes(Number(detail.size || 0))} />
-              <Info label="做种" value={String(detail.seeders || '-')} />
-              <Info label="下载" value={String(detail.leechers || '-')} />
-              <Info label="完成" value={String(detail.snatched || '-')} />
-              <Info label="InfoHash" value={String(detail.info_hash || '-')} />
-            </div>
-            {detailDescription && (
-              <pre className="mt-4 whitespace-pre-wrap rounded border border-gray-200 bg-white/60 p-3 text-xs text-ink-100">
-                {detailDescription}
-              </pre>
-            )}
-            {detailFiles.length > 0 && (
-              <div className="mt-4 space-y-1 text-xs text-ink-100">
-                {detailFiles.slice(0, 80).map((file) => (
-                  <p key={file} className="rounded bg-white/50 px-2 py-1">{file}</p>
-                ))}
+
+            <div className="grid gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
+              <div className="space-y-3">
+                {detailPoster ? (
+                  <img
+                    src={imageURL(detailPoster)}
+                    alt={String(detail.title || '')}
+                    className="aspect-[2/3] w-full rounded border border-gray-200 bg-gray-100 object-cover"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div className="flex aspect-[2/3] w-full items-center justify-center rounded border border-gray-200 bg-gray-100 text-sm text-sand-500">无图片</div>
+                )}
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <InfoPill label="S" value={String(detail.seeders || '-')} tone="seed" />
+                  <InfoPill label="L" value={String(detail.leechers || '-')} tone="leech" />
+                  <InfoPill label="完成" value={String(detail.snatched || '-')} />
+                </div>
               </div>
-            )}
-            {typeof detail.detail_url === 'string' && detail.detail_url && (
-              <a
-                className="btn-outline mt-4 inline-flex"
-                href={detail.detail_url}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <ExternalLink size={14} />
-                打开原站详情
-              </a>
-            )}
+
+              <div className="min-w-0 space-y-4">
+                {detailSubtitle && <p className="break-words text-sm leading-6 text-ink-100">{detailSubtitle}</p>}
+                <div className="grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-3">
+                  <Info label="站点" value={String(detail.site_name || '-')} />
+                  <Info label="分类" value={String(detail.category || '-')} />
+                  <Info label="大小" value={fmtBytes(Number(detail.size || 0))} />
+                  <Info label="年份" value={String(detail.year || '-')} />
+                  <Info label="评分" value={String(detail.rating || '-')} />
+                  <Info label="InfoHash" value={String(detail.info_hash || '-')} />
+                </div>
+                {(detailGenres.length > 0 || detailTags.length > 0) && (
+                  <div className="flex flex-wrap gap-2">
+                    {[...detailGenres, ...detailTags].map((tag) => (
+                      <span key={tag} className="rounded border border-gray-200 bg-white/60 px-2 py-1 text-xs text-ink-100">{tag}</span>
+                    ))}
+                  </div>
+                )}
+                {detailDescription && (
+                  <pre className="whitespace-pre-wrap rounded border border-gray-200 bg-white/60 p-3 text-xs leading-5 text-ink-100">
+                    {detailDescription}
+                  </pre>
+                )}
+                {detailImages.length > 0 && (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {detailImages.slice(0, 12).map((url) => (
+                      <a
+                        key={url}
+                        className="overflow-hidden rounded border border-gray-200 bg-gray-100"
+                        href={imageURL(url)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <img
+                          src={imageURL(url)}
+                          alt=""
+                          loading="lazy"
+                          referrerPolicy="no-referrer"
+                          className="max-h-80 w-full object-contain"
+                        />
+                      </a>
+                    ))}
+                  </div>
+                )}
+                {detailFiles.length > 0 && (
+                  <div className="space-y-1 text-xs text-ink-100">
+                    <p className="font-semibold text-ink-600">文件列表</p>
+                    {detailFiles.slice(0, 80).map((file) => (
+                      <p key={file} className="rounded bg-white/50 px-2 py-1">{file}</p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -672,7 +752,7 @@ function ResourceCard({
           </div>
         </div>
       </div>
-      <div className="mt-3 grid grid-cols-4 gap-2">
+      <div className="mt-3 grid grid-cols-3 gap-2">
         <button
           className="btn-outline justify-center px-2 py-2 text-xs"
           onClick={() => onDetail(item)}
@@ -681,34 +761,21 @@ function ResourceCard({
           <Eye size={14} />
           详情
         </button>
-        {item.torrent_url ? (
-          <a
-            className="btn-outline justify-center px-2 py-2 text-xs"
-            href={item.torrent_url}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <ExternalLink size={14} />
-            原站
-          </a>
-        ) : (
-          <span className="btn-outline justify-center px-2 py-2 text-xs opacity-40">原站</span>
-        )}
         <button
           className="btn-outline justify-center px-2 py-2 text-xs text-brand-500"
           onClick={() => onDownload(item)}
           disabled={actingKey === `download:${itemKeyValue}`}
         >
-          <Download size={14} />
-          下载
+          {actingKey === `download:${itemKeyValue}` ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+          {actingKey === `download:${itemKeyValue}` ? '下载中' : '下载'}
         </button>
         <button
           className="btn-outline justify-center px-2 py-2 text-xs text-emerald-500"
           onClick={() => onSubscribe(item)}
           disabled={actingKey === `subscribe:${itemKeyValue}`}
         >
-          <Rss size={14} />
-          订阅
+          {actingKey === `subscribe:${itemKeyValue}` ? <Loader2 size={14} className="animate-spin" /> : <Rss size={14} />}
+          {actingKey === `subscribe:${itemKeyValue}` ? '订阅中' : '订阅'}
         </button>
       </div>
     </article>

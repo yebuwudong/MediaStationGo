@@ -107,6 +107,9 @@ type DownloadTaskMeta struct {
 	PosterURL            string
 	BackdropURL          string
 	Overview             string
+	IMDBID               string
+	TMDbID               int
+	DoubanID             string
 	MediaType            string
 	MediaCategory        string
 	SourceCategory       string
@@ -567,6 +570,9 @@ func (d *DownloadService) createTask(ctx context.Context, userID, urlStr, savePa
 		PosterURL:            meta.PosterURL,
 		BackdropURL:          meta.BackdropURL,
 		Overview:             meta.Overview,
+		IMDBID:               meta.IMDBID,
+		TMDbID:               meta.TMDbID,
+		DoubanID:             meta.DoubanID,
 		SavePath:             savePath,
 		MediaType:            meta.MediaType,
 		MediaCategory:        meta.MediaCategory,
@@ -1370,6 +1376,21 @@ func (d *DownloadService) notifyDownloadComplete(ctx context.Context, torrent QB
 		if strings.TrimSpace(task.MediaCategory) != "" {
 			data["media_category"] = task.MediaCategory
 		}
+		if strings.TrimSpace(task.Overview) != "" {
+			data["overview"] = truncateTelegramText(task.Overview, 180)
+		}
+		if imdbURL := imdbExternalURL(task.IMDBID); imdbURL != "" {
+			data["imdb_url"] = imdbURL
+		}
+		if tmdbURL := tmdbExternalURL(task.TMDbID, task.MediaType); tmdbURL != "" {
+			data["tmdb_url"] = tmdbURL
+		}
+		if doubanURL := doubanExternalURL(task.DoubanID); doubanURL != "" {
+			data["douban_url"] = doubanURL
+		}
+		if sub := d.downloadTaskSubscription(ctx, task); sub != nil {
+			mergeNotifyData(data, subscriptionNotifyData(sub))
+		}
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1381,6 +1402,17 @@ func (d *DownloadService) notifyDownloadComplete(ctx context.Context, torrent QB
 			Data:    data,
 		})
 	}()
+}
+
+func (d *DownloadService) downloadTaskSubscription(ctx context.Context, task *model.DownloadTask) *model.Subscription {
+	if d == nil || d.repo == nil || d.repo.DB == nil || task == nil || strings.TrimSpace(task.SubscriptionID) == "" {
+		return nil
+	}
+	var sub model.Subscription
+	if err := d.repo.DB.WithContext(ctx).First(&sub, "id = ?", task.SubscriptionID).Error; err != nil {
+		return nil
+	}
+	return &sub
 }
 
 func (d *DownloadService) downloadOrganizeTaskName(torrent QBitTorrent, allowReplace bool) string {

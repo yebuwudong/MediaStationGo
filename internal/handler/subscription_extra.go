@@ -11,28 +11,35 @@ import (
 )
 
 type subscriptionPatchReq struct {
-	Name          *string `json:"name"`
-	FeedURL       *string `json:"feed_url"`
-	Filter        *string `json:"filter"`
-	MediaType     *string `json:"media_type"`
-	MediaCategory *string `json:"media_category"`
-	SavePath      *string `json:"save_path"`
-	SearchMode    *string `json:"search_mode"`
-	IMDBID        *string `json:"imdb_id"`
-	Source        *string `json:"source"`
-	PosterURL     *string `json:"poster_url"`
-	BackdropURL   *string `json:"backdrop_url"`
-	Overview      *string `json:"overview"`
-	Resolution    *string `json:"resolution"`
-	Quality       *string `json:"quality"`
-	Effects       *string `json:"effects"`
-	ReleaseGroups *string `json:"release_groups"`
-	ExcludeWords  *string `json:"exclude_words"`
-	WashEnabled   *bool   `json:"wash_enabled"`
-	WashPriority  *string `json:"wash_priority"`
-	TotalEpisodes *int    `json:"total_episodes"`
-	Priority      *int    `json:"priority"`
-	Enabled       *bool   `json:"enabled"`
+	Name          *string  `json:"name"`
+	FeedURL       *string  `json:"feed_url"`
+	Filter        *string  `json:"filter"`
+	MediaType     *string  `json:"media_type"`
+	MediaCategory *string  `json:"media_category"`
+	SavePath      *string  `json:"save_path"`
+	SearchMode    *string  `json:"search_mode"`
+	IMDBID        *string  `json:"imdb_id"`
+	TMDbID        *int     `json:"tmdb_id"`
+	DoubanID      *string  `json:"douban_id"`
+	Source        *string  `json:"source"`
+	OriginalTitle *string  `json:"original_title"`
+	OriginalLang  *string  `json:"original_language"`
+	Year          *int     `json:"year"`
+	Rating        *float32 `json:"rating"`
+	Genres        *string  `json:"genres"`
+	PosterURL     *string  `json:"poster_url"`
+	BackdropURL   *string  `json:"backdrop_url"`
+	Overview      *string  `json:"overview"`
+	Resolution    *string  `json:"resolution"`
+	Quality       *string  `json:"quality"`
+	Effects       *string  `json:"effects"`
+	ReleaseGroups *string  `json:"release_groups"`
+	ExcludeWords  *string  `json:"exclude_words"`
+	WashEnabled   *bool    `json:"wash_enabled"`
+	WashPriority  *string  `json:"wash_priority"`
+	TotalEpisodes *int     `json:"total_episodes"`
+	Priority      *int     `json:"priority"`
+	Enabled       *bool    `json:"enabled"`
 }
 
 // updateSubscriptionHandler patches a subscription row.
@@ -85,8 +92,29 @@ func subscriptionPatchUpdates(patch subscriptionPatchReq) map[string]any {
 	if patch.IMDBID != nil {
 		updates["imdb_id"] = *patch.IMDBID
 	}
+	if patch.TMDbID != nil {
+		updates["tmdb_id"] = *patch.TMDbID
+	}
+	if patch.DoubanID != nil {
+		updates["douban_id"] = *patch.DoubanID
+	}
 	if patch.Source != nil {
 		updates["source"] = *patch.Source
+	}
+	if patch.OriginalTitle != nil {
+		updates["original_title"] = *patch.OriginalTitle
+	}
+	if patch.OriginalLang != nil {
+		updates["original_language"] = *patch.OriginalLang
+	}
+	if patch.Year != nil {
+		updates["year"] = *patch.Year
+	}
+	if patch.Rating != nil {
+		updates["rating"] = *patch.Rating
+	}
+	if patch.Genres != nil {
+		updates["genres"] = *patch.Genres
 	}
 	if patch.PosterURL != nil {
 		updates["poster_url"] = *patch.PosterURL
@@ -143,11 +171,7 @@ func searchSubscriptionHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": "subscription not found"})
 			return
 		}
-		keyword := sub.Filter
-		if keyword == "" {
-			keyword = sub.Name
-		}
-		results, err := svc.Site.Search(c.Request.Context(), keyword)
+		results, err := svc.Subscription.PreviewSearch(c.Request.Context(), &sub)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return

@@ -21,6 +21,7 @@ type SiteCategory struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Group       string `json:"group"`
+	ParentID    string `json:"parent_id,omitempty"`
 	SiteID      string `json:"site_id,omitempty"`
 	SiteName    string `json:"site_name,omitempty"`
 	SiteType    string `json:"site_type,omitempty"`
@@ -50,11 +51,40 @@ type siteCategorySearcher interface {
 	SearchWithCategory(ctx context.Context, cfg SiteConfig, keyword, category string, page int) (*SiteSearchResult, error)
 }
 
+type siteCategoryModeSearcher interface {
+	SearchWithCategoryMode(ctx context.Context, cfg SiteConfig, keyword, category string, page int, includeAdult bool) (*SiteSearchResult, error)
+}
+
+type siteBrowseModeAdapter interface {
+	BrowseWithMode(ctx context.Context, cfg SiteConfig, category string, page int, includeAdult bool) (*SiteSearchResult, error)
+}
+
 type siteCategoryProvider interface {
 	Categories(ctx context.Context, cfg SiteConfig) ([]SiteCategory, error)
 }
 
 const siteBrowsePageSize = 50
+
+const (
+	sitePortalDefaultCacheTTL    = 45 * time.Second
+	sitePortalRateLimitCacheTTL  = 2 * time.Minute
+	sitePortalStaleCacheTTL      = 15 * time.Minute
+	sitePortalRateLimitCooldown  = 3 * time.Minute
+	sitePortalMTeamMinInterval   = 10 * time.Second
+	sitePortalGenericMinInterval = 1500 * time.Millisecond
+)
+
+type sitePortalCacheEntry struct {
+	Result    *SiteSearchResult
+	Cats      []SiteCategory
+	ExpiresAt time.Time
+	StaleAt   time.Time
+}
+
+type sitePortalCooldownEntry struct {
+	Message string
+	Until   time.Time
+}
 
 func (s *SiteService) Categories(ctx context.Context, siteID string) ([]SiteCategory, error) {
 	sites, err := s.List(ctx)
@@ -94,6 +124,9 @@ func (s *SiteService) Categories(ctx context.Context, siteID string) ([]SiteCate
 }
 
 func (s *SiteService) originalCategoriesForSite(ctx context.Context, site model.Site) []SiteCategory {
+	if cats, ok := s.getCachedSiteCategories(site, false); ok {
+		return cats
+	}
 	adapter := NewSiteAdapter(&site)
 	if provider, ok := adapter.(siteCategoryProvider); ok {
 		cfg := s.siteModelToConfig(&site)
@@ -103,15 +136,30 @@ func (s *SiteService) originalCategoriesForSite(ctx context.Context, site model.
 		}
 		reqCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
+		if err := s.waitSitePortalRequest(reqCtx, site); err != nil {
+			s.log.Warn("site categories throttled", zap.String("site", site.Name), zap.String("type", site.Type), zap.Error(err))
+			if cats, ok := s.getCachedSiteCategories(site, true); ok {
+				return cats
+			}
+			cats := normalizeSiteCategories(site, siteCategoriesForSite(site))
+			return cats
+		}
 		cats, err := provider.Categories(reqCtx, cfg)
 		if err == nil && len(cats) > 0 {
-			return normalizeSiteCategories(site, cats)
+			cats = normalizeSiteCategories(site, cats)
+			s.storeSiteCategories(site, cats)
+			return cats
 		}
 		if err != nil {
 			s.log.Warn("site categories failed", zap.String("site", site.Name), zap.String("type", site.Type), zap.Error(err))
+			if cats, ok := s.getCachedSiteCategories(site, true); ok {
+				return cats
+			}
 		}
 	}
-	return normalizeSiteCategories(site, siteCategoriesForSite(site))
+	cats := normalizeSiteCategories(site, siteCategoriesForSite(site))
+	s.storeSiteCategories(site, cats)
+	return cats
 }
 
 func (s *SiteService) Browse(ctx context.Context, p SiteBrowseParams) (*SiteBrowseResult, error) {
@@ -158,7 +206,7 @@ func (s *SiteService) Browse(ctx context.Context, p SiteBrowseParams) (*SiteBrow
 			reqCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 
-			result, err := browseSiteResources(reqCtx, adapter, cfg, p.Keyword, p.Category, p.Page)
+			result, err := s.cachedBrowseSiteResources(reqCtx, site, adapter, cfg, p.Keyword, p.Category, p.Page, p.IncludeAdult)
 			if err != nil {
 				mu.Lock()
 				failed++
@@ -175,15 +223,18 @@ func (s *SiteService) Browse(ctx context.Context, p SiteBrowseParams) (*SiteBrow
 			if result == nil {
 				return
 			}
-			catAdult := siteCategoryIsAdult(site, p.Category)
+			cats := s.cachedOrFallbackSiteCategories(site)
+			catAdult := siteCategoryIsAdultFromCategories(cats, p.Category)
 			items := result.Items
 			if items == nil {
 				items = []TorrentItem{}
 			}
 			local := make([]SearchResult, 0, len(items))
 			for _, item := range items {
-				row := siteSearchResultFromItem(site, item, catAdult)
-				if !siteCategoryMatches(site, row.Category, p.Category) {
+				rawCategory := item.Category
+				item.Category = siteCategoryDisplayName(cats, item.Category)
+				row := siteSearchResultFromItemWithCategories(site, item, catAdult, cats)
+				if !siteCategoryMatchesCategories(cats, rawCategory, p.Category) {
 					continue
 				}
 				if !p.IncludeAdult && row.Adult {
@@ -231,8 +282,11 @@ func (s *SiteService) Browse(ctx context.Context, p SiteBrowseParams) (*SiteBrow
 	}, nil
 }
 
-func browseSiteResources(ctx context.Context, adapter SiteAdapter, cfg SiteConfig, keyword, category string, page int) (*SiteSearchResult, error) {
+func browseSiteResources(ctx context.Context, adapter SiteAdapter, cfg SiteConfig, keyword, category string, page int, includeAdult bool) (*SiteSearchResult, error) {
 	if strings.TrimSpace(keyword) != "" {
+		if searcher, ok := adapter.(siteCategoryModeSearcher); ok {
+			return searcher.SearchWithCategoryMode(ctx, cfg, keyword, category, page, includeAdult)
+		}
 		if strings.TrimSpace(category) != "" {
 			if searcher, ok := adapter.(siteCategorySearcher); ok {
 				return searcher.SearchWithCategory(ctx, cfg, keyword, category, page)
@@ -240,7 +294,283 @@ func browseSiteResources(ctx context.Context, adapter SiteAdapter, cfg SiteConfi
 		}
 		return adapter.Search(ctx, cfg, keyword, page)
 	}
+	if browser, ok := adapter.(siteBrowseModeAdapter); ok {
+		return browser.BrowseWithMode(ctx, cfg, category, page, includeAdult)
+	}
 	return adapter.Browse(ctx, cfg, category, page)
+}
+
+func (s *SiteService) cachedBrowseSiteResources(ctx context.Context, site model.Site, adapter SiteAdapter, cfg SiteConfig, keyword, category string, page int, includeAdult bool) (*SiteSearchResult, error) {
+	modeCategory := category
+	if includeAdult {
+		modeCategory = modeCategory + "\x00adult"
+	}
+	key := sitePortalCacheKey("browse", site, keyword, modeCategory, page)
+	if result, ok := s.getCachedSiteBrowse(key, false); ok {
+		return result, nil
+	}
+	if err := s.sitePortalCooldownError(site); err != nil {
+		if result, ok := s.getCachedSiteBrowse(key, true); ok {
+			return result, nil
+		}
+		return nil, err
+	}
+	if err := s.waitSitePortalRequest(ctx, site); err != nil {
+		if result, ok := s.getCachedSiteBrowse(key, true); ok {
+			return result, nil
+		}
+		return nil, err
+	}
+
+	result, err := browseSiteResources(ctx, adapter, cfg, keyword, category, page, includeAdult)
+	if err != nil {
+		if isSitePortalRateLimitError(err) {
+			s.markSitePortalCooldown(site, err)
+			if result, ok := s.getCachedSiteBrowse(key, true); ok {
+				return result, nil
+			}
+		}
+		return nil, err
+	}
+	s.storeSiteBrowse(key, site, result)
+	return result, nil
+}
+
+func sitePortalCacheKey(kind string, site model.Site, keyword, category string, page int) string {
+	siteKey := site.ID
+	if siteKey == "" {
+		siteKey = site.Type + ":" + site.URL
+	}
+	return strings.Join([]string{
+		kind,
+		siteKey,
+		strings.ToLower(strings.TrimSpace(keyword)),
+		strings.ToLower(strings.TrimSpace(category)),
+		strconv.Itoa(page),
+	}, "\x00")
+}
+
+func (s *SiteService) getCachedSiteBrowse(key string, allowStale bool) (*SiteSearchResult, bool) {
+	if s == nil {
+		return nil, false
+	}
+	now := time.Now()
+	s.portalMu.Lock()
+	defer s.portalMu.Unlock()
+	entry, ok := s.portalCache[key]
+	if !ok || entry.Result == nil {
+		return nil, false
+	}
+	if now.Before(entry.ExpiresAt) || (allowStale && now.Before(entry.StaleAt)) {
+		return cloneSiteSearchResult(entry.Result), true
+	}
+	return nil, false
+}
+
+func (s *SiteService) storeSiteBrowse(key string, site model.Site, result *SiteSearchResult) {
+	if s == nil || result == nil {
+		return
+	}
+	now := time.Now()
+	ttl := sitePortalDefaultCacheTTL
+	if site.RateLimit || strings.EqualFold(site.Type, "mteam") {
+		ttl = sitePortalRateLimitCacheTTL
+	}
+	s.portalMu.Lock()
+	defer s.portalMu.Unlock()
+	s.ensureSitePortalStateLocked()
+	s.portalCache[key] = sitePortalCacheEntry{
+		Result:    cloneSiteSearchResult(result),
+		ExpiresAt: now.Add(ttl),
+		StaleAt:   now.Add(sitePortalStaleCacheTTL),
+	}
+	s.pruneSitePortalCacheLocked(now)
+}
+
+func (s *SiteService) getCachedSiteCategories(site model.Site, allowStale bool) ([]SiteCategory, bool) {
+	if s == nil {
+		return nil, false
+	}
+	key := sitePortalCacheKey("categories", site, "", "", 0)
+	now := time.Now()
+	s.portalMu.Lock()
+	defer s.portalMu.Unlock()
+	entry, ok := s.portalCache[key]
+	if !ok || len(entry.Cats) == 0 {
+		return nil, false
+	}
+	if now.After(entry.ExpiresAt) && (!allowStale || now.After(entry.StaleAt)) {
+		return nil, false
+	}
+	return cloneSiteCategories(entry.Cats), true
+}
+
+func (s *SiteService) storeSiteCategories(site model.Site, cats []SiteCategory) {
+	if s == nil || len(cats) == 0 {
+		return
+	}
+	key := sitePortalCacheKey("categories", site, "", "", 0)
+	now := time.Now()
+	s.portalMu.Lock()
+	defer s.portalMu.Unlock()
+	s.ensureSitePortalStateLocked()
+	s.portalCache[key] = sitePortalCacheEntry{
+		Cats:      cloneSiteCategories(cats),
+		ExpiresAt: now.Add(6 * time.Hour),
+		StaleAt:   now.Add(48 * time.Hour),
+	}
+	s.pruneSitePortalCacheLocked(now)
+}
+
+func (s *SiteService) waitSitePortalRequest(ctx context.Context, site model.Site) error {
+	interval := sitePortalMinInterval(site)
+	if interval <= 0 || s == nil {
+		return nil
+	}
+	siteKey := site.ID
+	if siteKey == "" {
+		siteKey = site.Type + ":" + site.URL
+	}
+	now := time.Now()
+	s.portalMu.Lock()
+	s.ensureSitePortalStateLocked()
+	waitUntil := s.portalNext[siteKey]
+	if waitUntil.Before(now) {
+		waitUntil = now
+	}
+	s.portalNext[siteKey] = waitUntil.Add(interval)
+	s.portalMu.Unlock()
+
+	if delay := time.Until(waitUntil); delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil
+}
+
+func sitePortalMinInterval(site model.Site) time.Duration {
+	if strings.EqualFold(site.Type, "mteam") {
+		return sitePortalMTeamMinInterval
+	}
+	if site.RateLimit {
+		return sitePortalGenericMinInterval
+	}
+	return 0
+}
+
+func (s *SiteService) sitePortalCooldownError(site model.Site) error {
+	if s == nil {
+		return nil
+	}
+	siteKey := site.ID
+	if siteKey == "" {
+		siteKey = site.Type + ":" + site.URL
+	}
+	now := time.Now()
+	s.portalMu.Lock()
+	defer s.portalMu.Unlock()
+	entry, ok := s.portalCooldown[siteKey]
+	if !ok || now.After(entry.Until) {
+		if ok {
+			delete(s.portalCooldown, siteKey)
+		}
+		return nil
+	}
+	remaining := int(time.Until(entry.Until).Seconds())
+	if remaining < 1 {
+		remaining = 1
+	}
+	message := entry.Message
+	if message == "" {
+		message = "请求过于频繁"
+	}
+	return fmt.Errorf("%s: %s，已进入冷却，约 %d 秒后再试", site.Name, message, remaining)
+}
+
+func (s *SiteService) markSitePortalCooldown(site model.Site, err error) {
+	if s == nil || err == nil {
+		return
+	}
+	siteKey := site.ID
+	if siteKey == "" {
+		siteKey = site.Type + ":" + site.URL
+	}
+	s.portalMu.Lock()
+	defer s.portalMu.Unlock()
+	s.ensureSitePortalStateLocked()
+	s.portalCooldown[siteKey] = sitePortalCooldownEntry{
+		Message: strings.TrimSpace(err.Error()),
+		Until:   time.Now().Add(sitePortalRateLimitCooldown),
+	}
+}
+
+func isSitePortalRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	for _, needle := range []string{
+		"429",
+		"too many",
+		"too frequent",
+		"rate limit",
+		"请求过于频繁",
+		"请求太频繁",
+		"請求過於頻繁",
+		"頻繁",
+		"频繁",
+	} {
+		if strings.Contains(text, strings.ToLower(needle)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *SiteService) ensureSitePortalStateLocked() {
+	if s.portalNext == nil {
+		s.portalNext = map[string]time.Time{}
+	}
+	if s.portalCache == nil {
+		s.portalCache = map[string]sitePortalCacheEntry{}
+	}
+	if s.portalCooldown == nil {
+		s.portalCooldown = map[string]sitePortalCooldownEntry{}
+	}
+}
+
+func (s *SiteService) pruneSitePortalCacheLocked(now time.Time) {
+	if len(s.portalCache) < 256 {
+		return
+	}
+	for key, entry := range s.portalCache {
+		if now.After(entry.StaleAt) {
+			delete(s.portalCache, key)
+		}
+	}
+}
+
+func cloneSiteSearchResult(in *SiteSearchResult) *SiteSearchResult {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	if in.Items != nil {
+		out.Items = append([]TorrentItem(nil), in.Items...)
+	}
+	return &out
+}
+
+func cloneSiteCategories(in []SiteCategory) []SiteCategory {
+	if in == nil {
+		return nil
+	}
+	return append([]SiteCategory(nil), in...)
 }
 
 func (s *SiteService) Detail(ctx context.Context, siteID, torrentID string) (*TorrentDetail, error) {
@@ -267,7 +597,12 @@ func (s *SiteService) Detail(ctx context.Context, siteID, torrentID string) (*To
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return adapter.GetDetail(reqCtx, cfg, torrentID)
+	detail, err := adapter.GetDetail(reqCtx, cfg, torrentID)
+	if err != nil || detail == nil {
+		return detail, err
+	}
+	detail.Category = siteCategoryDisplayName(s.cachedOrFallbackSiteCategories(*site), detail.Category)
+	return detail, nil
 }
 
 func (s *SiteService) DownloadURL(ctx context.Context, siteID, torrentID, fallback string) (string, error) {
@@ -315,11 +650,15 @@ func (s *SiteService) DownloadURL(ctx context.Context, siteID, torrentID, fallba
 }
 
 func siteSearchResultFromItem(site model.Site, item TorrentItem, forcedAdult bool) SearchResult {
+	return siteSearchResultFromItemWithCategories(site, item, forcedAdult, siteCategoriesForSite(site))
+}
+
+func siteSearchResultFromItemWithCategories(site model.Site, item TorrentItem, forcedAdult bool, cats []SiteCategory) SearchResult {
 	upload := ""
 	if !item.UploadTime.IsZero() {
 		upload = item.UploadTime.UTC().Format(time.RFC3339)
 	}
-	adult := forcedAdult || siteCategoryIsAdult(site, item.Category) || looksAdultPTResource(item.Title+" "+item.Subtitle+" "+item.Category)
+	adult := forcedAdult || siteCategoryIsAdultFromCategories(cats, item.Category) || looksAdultPTResource(item.Title+" "+item.Subtitle+" "+item.Category)
 	return SearchResult{
 		SiteName:    site.Name,
 		SiteID:      site.ID,
@@ -342,15 +681,39 @@ func siteSearchResultFromItem(site model.Site, item TorrentItem, forcedAdult boo
 }
 
 func siteCategoriesForSite(site model.Site) []SiteCategory {
-	out := append([]SiteCategory(nil), defaultSiteCategories(site.Type)...)
+	out := []SiteCategory{{
+		ID:       "",
+		Name:     "全部",
+		Group:    "全部",
+		SiteID:   site.ID,
+		SiteName: site.Name,
+		SiteType: site.Type,
+	}}
+	for _, cat := range defaultSiteCategories(site.Type) {
+		if strings.TrimSpace(cat.ID) == "" && strings.TrimSpace(cat.Name) == "全部" {
+			continue
+		}
+		out = append(out, cat)
+	}
 	out = append(out, extraSiteCategories(site)...)
-	if len(out) == 0 {
-		out = append(out, SiteCategory{ID: "", Name: "全部", Group: "全部", SiteType: site.Type})
-	}
+	seen := map[string]struct{}{}
+	deduped := make([]SiteCategory, 0, len(out))
 	for i := range out {
+		if out[i].SiteID == "" {
+			out[i].SiteID = site.ID
+		}
+		if out[i].SiteName == "" {
+			out[i].SiteName = site.Name
+		}
 		out[i].SiteType = site.Type
+		key := strings.ToLower(strings.Join([]string{out[i].SiteID, out[i].ID, out[i].Name}, "\x00"))
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		deduped = append(deduped, out[i])
 	}
-	return out
+	return deduped
 }
 
 func normalizeSiteCategories(site model.Site, cats []SiteCategory) []SiteCategory {
@@ -364,13 +727,20 @@ func normalizeSiteCategories(site model.Site, cats []SiteCategory) []SiteCategor
 			cat.Name = cat.ID
 		}
 		if cat.Name == cat.ID && cat.ID != "" {
-			cat.Name = "原站分类 " + cat.ID
+			if name := defaultSiteCategoryName(site.Type, cat.ID); name != "" {
+				cat.Name = name
+			} else {
+				cat.Name = "原站分类 " + cat.ID
+			}
 		}
 		if cat.ID == "" && (cat.Name == "" || cat.Name == "全部") {
 			hasAll = true
 			cat.Name = "全部"
 		}
 		if cat.ID == "" && cat.Name == "" {
+			continue
+		}
+		if strings.EqualFold(site.Type, "mteam") && !mteamVisibleVideoCategory(cat) {
 			continue
 		}
 		if cat.Group == "" {
@@ -400,6 +770,58 @@ func normalizeSiteCategories(site model.Site, cats []SiteCategory) []SiteCategor
 	return out
 }
 
+func (s *SiteService) cachedOrFallbackSiteCategories(site model.Site) []SiteCategory {
+	if cats, ok := s.getCachedSiteCategories(site, true); ok {
+		return cats
+	}
+	return normalizeSiteCategories(site, siteCategoriesForSite(site))
+}
+
+func defaultSiteCategoryName(siteType, id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ""
+	}
+	for _, cat := range defaultSiteCategories(siteType) {
+		if strings.EqualFold(strings.TrimSpace(cat.ID), id) && strings.TrimSpace(cat.Name) != "" && !strings.EqualFold(cat.Name, id) {
+			return strings.TrimSpace(cat.Name)
+		}
+	}
+	return ""
+}
+
+func siteCategoryDisplayName(cats []SiteCategory, raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if strings.HasPrefix(raw, "原站分类 ") {
+		raw = strings.TrimSpace(strings.TrimPrefix(raw, "原站分类 "))
+	}
+	for _, cat := range cats {
+		if strings.EqualFold(strings.TrimSpace(cat.ID), raw) || strings.EqualFold(strings.TrimSpace(cat.Name), raw) {
+			name := strings.TrimSpace(cat.Name)
+			if name != "" && !strings.EqualFold(name, cat.ID) {
+				return name
+			}
+		}
+	}
+	siteType := ""
+	for _, cat := range cats {
+		if strings.TrimSpace(cat.SiteType) != "" {
+			siteType = cat.SiteType
+			break
+		}
+	}
+	if name := defaultSiteCategoryName(siteType, raw); name != "" {
+		return name
+	}
+	if strings.EqualFold(siteType, "mteam") && looksCategoryID(raw) {
+		return ""
+	}
+	return raw
+}
+
 func inferSiteCategoryGroup(name, id string) string {
 	text := strings.ToLower(strings.TrimSpace(name + " " + id))
 	switch {
@@ -417,6 +839,52 @@ func inferSiteCategoryGroup(name, id string) string {
 }
 
 func defaultSiteCategories(siteType string) []SiteCategory {
+	switch strings.ToLower(strings.TrimSpace(siteType)) {
+	case "mteam":
+		return []SiteCategory{
+			{ID: "", Name: "全部", Group: "全部", SiteType: siteType},
+			{ID: "100", Name: "电影", Group: "影视", SiteType: siteType},
+			{ID: "105", Name: "剧集", Group: "影视", SiteType: siteType},
+			{ID: "110", Name: "综艺", Group: "影视", SiteType: siteType},
+			{ID: "115", Name: "动漫", Group: "影视", SiteType: siteType},
+			{ID: "120", Name: "纪录片", Group: "影视", SiteType: siteType},
+			{ID: "419", Name: "成人", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "420", Name: "成人视频", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "421", Name: "成人写真", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "422", Name: "成人动漫", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "423", Name: "成人三级", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "424", Name: "成人高清", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "425", Name: "成人无码", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "426", Name: "成人有码", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "427", Name: "成人素人", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "429", Name: "成人写真", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "430", Name: "成人影像", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "431", Name: "成人图片", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "432", Name: "成人动漫", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "433", Name: "成人游戏", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "434", Name: "成人电子书", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "435", Name: "成人软件", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "436", Name: "成人音乐", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "437", Name: "成人MV", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "438", Name: "成人纪录片", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "439", Name: "成人综艺", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "440", Name: "成人其他", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "442", Name: "写真", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "444", Name: "成人影像", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "445", Name: "成人图片", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "446", Name: "成人写真", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "447", Name: "成人视频", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "448", Name: "成人动漫", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "449", Name: "成人游戏", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "450", Name: "成人小说", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "451", Name: "成人其他", Group: "成人", SiteType: siteType, Adult: true},
+			{ID: "401", Name: "电影", Group: "影视", SiteType: siteType},
+			{ID: "402", Name: "剧集", Group: "影视", SiteType: siteType},
+			{ID: "403", Name: "综艺", Group: "影视", SiteType: siteType},
+			{ID: "404", Name: "动漫", Group: "影视", SiteType: siteType},
+			{ID: "405", Name: "纪录片", Group: "影视", SiteType: siteType},
+		}
+	}
 	base := []SiteCategory{
 		{ID: "", Name: "全部", Group: "全部"},
 		{ID: "401", Name: "电影", Group: "影视"},
@@ -496,11 +964,19 @@ func extraSiteCategories(site model.Site) []SiteCategory {
 }
 
 func siteCategoryIsAdult(site model.Site, category string) bool {
+	return siteCategoryIsAdultFromCategories(siteCategoriesForSite(site), category)
+}
+
+func siteCategoryMatches(site model.Site, itemCategory, selected string) bool {
+	return siteCategoryMatchesCategories(siteCategoriesForSite(site), itemCategory, selected)
+}
+
+func siteCategoryIsAdultFromCategories(cats []SiteCategory, category string) bool {
 	category = strings.TrimSpace(category)
 	if category == "" {
 		return false
 	}
-	for _, cat := range siteCategoriesForSite(site) {
+	for _, cat := range cats {
 		if strings.EqualFold(cat.ID, category) || strings.EqualFold(cat.Name, category) {
 			return cat.Adult || looksAdultPTResource(cat.Name+" "+cat.ID)
 		}
@@ -508,7 +984,7 @@ func siteCategoryIsAdult(site model.Site, category string) bool {
 	return looksAdultPTResource(category)
 }
 
-func siteCategoryMatches(site model.Site, itemCategory, selected string) bool {
+func siteCategoryMatchesCategories(cats []SiteCategory, itemCategory, selected string) bool {
 	selected = strings.TrimSpace(selected)
 	if selected == "" {
 		return true
@@ -520,7 +996,7 @@ func siteCategoryMatches(site model.Site, itemCategory, selected string) bool {
 	if strings.EqualFold(itemCategory, selected) {
 		return true
 	}
-	for _, cat := range siteCategoriesForSite(site) {
+	for _, cat := range cats {
 		if strings.EqualFold(cat.ID, selected) || strings.EqualFold(cat.Name, selected) {
 			return strings.EqualFold(itemCategory, cat.ID) || strings.EqualFold(itemCategory, cat.Name)
 		}

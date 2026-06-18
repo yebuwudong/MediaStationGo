@@ -108,7 +108,7 @@ func selectRSSSubscriptionCandidates(items []rssItem, sub *model.Subscription, f
 		if _, ok := seenSet[guid]; ok {
 			continue
 		}
-		searchItem := SearchResult{Title: title, DownloadURL: download}
+		searchItem := SearchResult{Title: title, TorrentURL: strings.TrimSpace(item.Link), DownloadURL: download}
 		season, episode := ParseEpisode(title)
 		candidates = append(candidates, siteSearchCandidate{
 			Item:     searchItem,

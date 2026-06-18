@@ -385,6 +385,10 @@ func (p *ImageProxy) Serve(ctx context.Context, w http.ResponseWriter, r *http.R
 	if strings.Contains(host, "doubanio.com") {
 		req.Header.Set("Referer", "https://movie.douban.com/")
 	}
+	if strings.Contains(host, "m-team") {
+		req.Header.Set("Referer", "https://kp.m-team.cc/")
+		req.Header.Set("Origin", "https://kp.m-team.cc")
+	}
 
 	resp, err := p.client.Do(req)
 	if err != nil {
