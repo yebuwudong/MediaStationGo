@@ -526,8 +526,8 @@ func (s *TelegramBotService) redeemRegisterFlow(ctx context.Context, channel *mo
 	if channel == nil {
 		channel = s.findChannelForMessage(ctx, msg)
 	}
-	if !s.telegramUserCanBind(ctx, channel, msg.From.ID) {
-		return telegramCommandReply{Text: "当前 Telegram 账号不在管理员配置的绑定群组/频道中，无法兑换注册账号。请先加入管理员配置的群组或频道；如果尚未配置，请联系管理员。"}
+	if dec := s.telegramUserBindDecision(ctx, channel, msg.From.ID); dec != bindAllowed {
+		return telegramCommandReply{Text: telegramBindRejectText(dec, "兑换注册账号")}
 	}
 	rc, errMsg := s.lookupRedeemableCode(ctx, raw, model.RegistrationCodeRegister)
 	if rc == nil {
