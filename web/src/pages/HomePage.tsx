@@ -8,7 +8,7 @@ import { playbackAPI, type HistoryItem } from '../api/playback'
 import { imageURL } from '../api/client'
 import { MediaCard } from '../components/MediaCard'
 import type { Library, Media } from '../types'
-import { groupSeries } from '../utils/groupSeries'
+import { groupSeries, seriesCardLink } from '../utils/groupSeries'
 
 const hasArtwork = (media?: Media | null) => !!(media?.poster_url || media?.backdrop_url)
 const asArray = <T,>(value: unknown): T[] => (Array.isArray(value) ? value as T[] : [])
@@ -220,7 +220,7 @@ export function HomePage() {
                 key={card.key}
                 media={card.rep}
                 count={card.count}
-                linkTo={card.count > 1 ? `/library/${card.rep.library_id}?series=${encodeURIComponent(card.key)}` : undefined}
+                linkTo={card.count > 1 ? seriesCardLink(card) : undefined}
               />
             ))}
           </div>

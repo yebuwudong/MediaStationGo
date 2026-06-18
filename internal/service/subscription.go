@@ -130,6 +130,36 @@ func (s *SubscriptionService) History(ctx context.Context) ([]model.Subscription
 	return s.repo.Subscription.History(ctx)
 }
 
+// Restore moves an archived subscription back to the active management list.
+// It also clears the per-subscription seen state so an unfinished historical
+// rule can match resources again when it is run next.
+func (s *SubscriptionService) Restore(ctx context.Context, id string) (*model.Subscription, error) {
+	var sub model.Subscription
+	if err := s.repo.DB.WithContext(ctx).Where("id = ?", id).First(&sub).Error; err != nil {
+		return nil, err
+	}
+	if err := s.repo.DB.WithContext(ctx).Model(&model.Subscription{}).
+		Where("id = ?", id).
+		Updates(map[string]any{
+			"enabled":        true,
+			"archive_reason": "",
+		}).Error; err != nil {
+		return nil, err
+	}
+	if err := s.repo.DB.WithContext(ctx).
+		Exec("UPDATE subscriptions SET archived_at = NULL WHERE id = ?", id).Error; err != nil {
+		return nil, err
+	}
+	if s.repo.Setting != nil {
+		_ = s.repo.Setting.Delete(ctx, fmt.Sprintf("subscription.%s.seen", id))
+	}
+	var restored model.Subscription
+	if err := s.repo.DB.WithContext(ctx).Where("id = ?", id).First(&restored).Error; err != nil {
+		return nil, err
+	}
+	return &restored, nil
+}
+
 // Delete removes a subscription.
 func (s *SubscriptionService) Delete(ctx context.Context, id string) error {
 	var sub model.Subscription

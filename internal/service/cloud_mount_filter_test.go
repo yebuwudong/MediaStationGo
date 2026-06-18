@@ -134,6 +134,9 @@ func TestListMediaVisibleIncludesMergedCloudLibraryItems(t *testing.T) {
 	if got := mediaTitles(items); !slices.Equal(got, []string{"云盘剧", "本地剧"}) {
 		t.Fatalf("items = %#v, want local+cloud only", got)
 	}
+	if cloudItem := mediaByTitle(items, "云盘剧"); cloudItem == nil || cloudItem.DisplayLibraryID != local.ID {
+		t.Fatalf("cloud item display library = %#v, want merged local library %s", cloudItem, local.ID)
+	}
 
 	items, total, err = svc.ListMediaVisible(t.Context(), local.ID, 1, 20, MediaVisibility{
 		IncludeNSFW:       true,
@@ -155,6 +158,49 @@ func TestListMediaVisibleIncludesMergedCloudLibraryItems(t *testing.T) {
 	}
 	if got := mediaTitles(searchItems); !slices.Equal(got, []string{"云盘剧", "本地剧"}) {
 		t.Fatalf("profile-limited merged search items=%#v, want local+hidden cloud", got)
+	}
+	if cloudItem := mediaByTitle(searchItems, "云盘剧"); cloudItem == nil || cloudItem.DisplayLibraryID != local.ID {
+		t.Fatalf("search cloud item display library = %#v, want merged local library %s", cloudItem, local.ID)
+	}
+}
+
+func TestListMediaVisibleUsesSpecificCloudChildLibraryAsDisplayTarget(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Library{}, &model.Media{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	root := model.Library{Name: "OpenList", Path: "cloud://openlist", Type: "tv", Enabled: true}
+	child := model.Library{Name: "OpenList · 国产剧", Path: BuildCloudLibraryPath("openlist", "/国产剧", "/国产剧"), Type: "tv", Enabled: true}
+	for _, lib := range []*model.Library{&root, &child} {
+		if err := repos.Library.Create(t.Context(), lib); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repos.DB.Create(&model.Media{
+		LibraryID: root.ID,
+		Title:     "折腰",
+		Path:      "cloud://openlist/国产剧/折腰 (2025)/Season 1/折腰.S01E01.mkv",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc := NewMediaService(&config.Config{}, zap.NewNop(), repos)
+
+	items, total, err := svc.ListMediaVisible(t.Context(), root.ID, 1, 20, MediaVisibility{IncludeNSFW: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("items total=%d len=%d, want one root cloud item", total, len(items))
+	}
+	if items[0].DisplayLibraryID != child.ID {
+		t.Fatalf("display library = %q, want child cloud library %q", items[0].DisplayLibraryID, child.ID)
+	}
+	if items[0].DisplayLibraryPath != child.Path {
+		t.Fatalf("display library path = %q, want %q", items[0].DisplayLibraryPath, child.Path)
 	}
 }
 
@@ -200,4 +246,13 @@ func mediaTitles(items []model.Media) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+func mediaByTitle(items []model.Media, title string) *model.Media {
+	for i := range items {
+		if items[i].Title == title {
+			return &items[i]
+		}
+	}
+	return nil
 }

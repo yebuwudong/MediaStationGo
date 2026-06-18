@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
@@ -807,6 +808,63 @@ func TestSubscriptionArchiveKeepsWashSubscriptionActive(t *testing.T) {
 	}
 	if len(history) != 0 {
 		t.Fatalf("history subscriptions = %d, want 0", len(history))
+	}
+}
+
+func TestRestoreArchivedSubscriptionReturnsToActiveAndClearsSeenState(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Subscription{}, &model.Setting{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	svc := NewSubscriptionService(nil, zap.NewNop(), repos, nil, nil, NewHub(zap.NewNop()))
+	sub := &model.Subscription{
+		Name:          "南部档案 自动订阅",
+		FeedURL:       "https://rss.example/feed",
+		Filter:        "南部档案",
+		MediaType:     "tv",
+		TotalEpisodes: 33,
+	}
+	if err := repos.Subscription.Create(t.Context(), sub); err != nil {
+		t.Fatal(err)
+	}
+	archivedAt := time.Now()
+	if err := repos.Subscription.Archive(t.Context(), sub.ID, "已下载 1/33 集，缺 33 集", archivedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Setting.Set(t.Context(), "subscription."+sub.ID+".seen", "old-guid"); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := svc.Restore(t.Context(), sub.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.ArchivedAt != nil || restored.ArchiveReason != "" || !restored.Enabled {
+		t.Fatalf("restored subscription not active: archived=%v reason=%q enabled=%v", restored.ArchivedAt, restored.ArchiveReason, restored.Enabled)
+	}
+	active, err := repos.Subscription.List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 1 || active[0].ID != sub.ID {
+		t.Fatalf("active subscriptions = %#v, want restored subscription", active)
+	}
+	history, err := repos.Subscription.History(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 0 {
+		t.Fatalf("history subscriptions = %d, want 0 after restore", len(history))
+	}
+	seen, err := repos.Setting.Get(t.Context(), "subscription."+sub.ID+".seen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seen != "" {
+		t.Fatalf("seen state = %q, want cleared", seen)
 	}
 }
 

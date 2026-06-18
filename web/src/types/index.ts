@@ -106,6 +106,11 @@ export interface Library {
 export interface Media {
   id: string
   library_id: string
+  library_name?: string
+  library_path?: string
+  display_library_id?: string
+  display_library_name?: string
+  display_library_path?: string
   series_id?: string
   title: string
   original_name?: string

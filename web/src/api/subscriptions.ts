@@ -39,6 +39,9 @@ export const subscriptionsAPI = {
 
   remove: (id: string) => api.delete(`/subscriptions/${id}`).then((r) => r.data),
 
+  restore: (id: string) =>
+    api.post<Subscription>(`/subscriptions/${id}/restore`).then((r) => r.data),
+
   runNow: (id: string) =>
     api.post<{ queued: number }>(`/subscriptions/${id}/run`).then((r) => r.data),
 }

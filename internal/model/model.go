@@ -103,6 +103,13 @@ type Media struct {
 	// Used to expose WebDAV / Alist / S3 / HTTP direct links as media items.
 	STRMURL string `gorm:"size:2048" json:"strm_url,omitempty"`
 
+	LibraryName string `gorm:"-" json:"library_name,omitempty"`
+	LibraryPath string `gorm:"-" json:"library_path,omitempty"`
+
+	DisplayLibraryID   string `gorm:"-" json:"display_library_id,omitempty"`
+	DisplayLibraryName string `gorm:"-" json:"display_library_name,omitempty"`
+	DisplayLibraryPath string `gorm:"-" json:"display_library_path,omitempty"`
+
 	// FileHash is a sparse-sample MD5 used for duplicate detection.
 	// Computed on-demand by the duplicate finder; format: "<hex>-<size>".
 	FileHash string `gorm:"index;size:64" json:"file_hash,omitempty"`

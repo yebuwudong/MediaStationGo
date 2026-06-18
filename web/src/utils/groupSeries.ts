@@ -16,7 +16,7 @@ import type { Media } from '../types'
  *
  * 同一组内取最早 created_at 的那条作为代表卡片，并带 count 表示集数。
  */
-export type SeriesCard = { key: string; rep: Media; count: number }
+export type SeriesCard = { key: string; rep: Media; linkMedia: Media; count: number }
 
 export function getSeriesKey(media: Media): string {
   if (media.series_id) return `series:${media.series_id}`
@@ -74,9 +74,12 @@ export function groupSeries(items: Media[] = []): SeriesCard[] {
 
     const g = groups.get(key)
     if (!g) {
-      groups.set(key, { key, rep: m, count: 1 })
+      groups.set(key, { key, rep: m, linkMedia: m, count: 1 })
     } else {
       g.count += 1
+      if (betterSeriesLinkMedia(m, g.linkMedia)) {
+        g.linkMedia = m
+      }
       const currentArtwork = artworkScore(m)
       const representativeArtwork = artworkScore(g.rep)
       if (currentArtwork > representativeArtwork) {
@@ -93,9 +96,34 @@ export function groupSeries(items: Media[] = []): SeriesCard[] {
 
 export function seriesCardLink(card: SeriesCard): string {
   if (card.count > 1) {
-    return `/library/${card.rep.library_id}?series=${encodeURIComponent(card.key)}`
+    return `/library/${targetLibraryID(card.linkMedia)}`
   }
   return `/media/${card.rep.id}`
+}
+
+function betterSeriesLinkMedia(candidate: Media, current: Media): boolean {
+  const candidateScore = librarySpecificityScore(candidate)
+  const currentScore = librarySpecificityScore(current)
+  if (candidateScore !== currentScore) return candidateScore > currentScore
+  return artworkScore(candidate) > artworkScore(current)
+}
+
+function librarySpecificityScore(media: Media): number {
+  const rawPath = (media.display_library_path || media.library_path || '').trim()
+  if (!rawPath) return 0
+  const normalized = rawPath.replace(/\\/g, '/').replace(/\/+$/, '')
+  const lower = normalized.toLowerCase()
+  if (lower.startsWith('cloud://')) {
+    const rest = normalized.slice('cloud://'.length)
+    const slash = rest.indexOf('/')
+    if (slash < 0 || slash === rest.length - 1) return 0
+    return 100 + rest.slice(slash + 1).split('/').filter(Boolean).length
+  }
+  return 200 + normalized.split('/').filter(Boolean).length
+}
+
+function targetLibraryID(media: Media): string {
+  return media.display_library_id || media.library_id
 }
 
 export function artworkScore(media: Media): number {
