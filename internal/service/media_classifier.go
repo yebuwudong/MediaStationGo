@@ -40,6 +40,10 @@ func classifyMediaCategory(input mediaClassifyInput, categories map[string]strin
 	isChineseByMetadata := hasAny(languages, "ZH", "ZH-CN", "ZH-TW", "CN", "BO", "ZA") || hasAny(countries, "CN", "TW", "HK", "MO")
 	isChineseByText := containsHan(rawText) || containsAnyText(text, "华语", "国产", "国剧", "国漫")
 	isChinese := isChineseByMetadata || (!hasMetadata && isChineseByText)
+	// 动漫的中文译名几乎都是纯汉字(如日本动画「葬送的芙莉莲」),用 containsHan
+	// 判中文会把日本动画误判成国漫。动漫只在有元数据或显式中文标记时才算国漫,
+	// 否则默认日番(日本动画占绝大多数;未刮削的国漫刮出 origin_country=CN 后仍正确)。
+	isChineseAnime := isChineseByMetadata || (!hasMetadata && containsAnyText(text, "华语", "国产", "国漫", "國漫", "国创", "国产动漫", "国产动画"))
 	isJapanese := hasAny(languages, "JA", "JP") || hasAny(countries, "JP") || containsJapaneseKana(rawText) || strings.Contains(text, "日番")
 	isKorean := hasAny(languages, "KO", "KR") || hasAny(countries, "KR", "KP") || containsKoreanHangul(rawText)
 	isEastAsian := isJapanese || isKorean || hasAny(countries, "TH", "IN", "SG")
@@ -81,7 +85,7 @@ func classifyMediaCategory(input mediaClassifyInput, categories map[string]strin
 		}
 		return categoryName(categories, "foreign_movie", "外语电影")
 	case "anime":
-		if isChinese {
+		if isChineseAnime {
 			return categoryName(categories, "cn_anime", "国漫")
 		}
 		return categoryName(categories, "jp_anime", "日番")
@@ -101,7 +105,7 @@ func classifyMediaCategory(input mediaClassifyInput, categories map[string]strin
 			return categoryName(categories, "children", "儿童")
 		}
 		if hasGenre("16", "ANIMATION", "动画", "动漫") || hasAnimeText {
-			if isChinese {
+			if isChineseAnime {
 				return categoryName(categories, "cn_anime", "国漫")
 			}
 			return categoryName(categories, "jp_anime", "日番")
