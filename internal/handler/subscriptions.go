@@ -144,3 +144,16 @@ func runSubscriptionHandler(svc *service.Container) gin.HandlerFunc {
 		c.JSON(http.StatusOK, gin.H{"queued": n})
 	}
 }
+
+func restoreSubscriptionHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		sub, err := svc.Subscription.Restore(c.Request.Context(), c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		enriched := []model.Subscription{*sub}
+		svc.Subscription.EnrichProgress(c.Request.Context(), enriched)
+		c.JSON(http.StatusOK, enriched[0])
+	}
+}

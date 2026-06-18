@@ -377,6 +377,31 @@ func (r *MediaRepository) upsert(ctx context.Context, m *model.Media) error {
 			}
 		}
 	}
+	if existing.ScrapeStatus == "pending" || existing.ScrapeStatus == "" || existing.ScrapeStatus == "no_match" {
+		backfilledExternalID := false
+		if m.TMDbID > 0 && existing.TMDbID <= 0 {
+			updates["tm_db_id"] = m.TMDbID
+			backfilledExternalID = true
+		}
+		if m.BangumiID > 0 && existing.BangumiID <= 0 {
+			updates["bangumi_id"] = m.BangumiID
+			backfilledExternalID = true
+		}
+		if m.DoubanID != "" && existing.DoubanID == "" {
+			updates["douban_id"] = m.DoubanID
+			backfilledExternalID = true
+		}
+		if m.TheTVDBID != "" && existing.TheTVDBID == "" {
+			updates["thetvdb_id"] = m.TheTVDBID
+			backfilledExternalID = true
+		}
+		if m.Year > 0 && existing.Year <= 0 {
+			updates["year"] = m.Year
+		}
+		if backfilledExternalID && existing.ScrapeStatus == "no_match" {
+			updates["scrape_status"] = "pending"
+		}
+	}
 	if m.ScrapeStatus == "matched" {
 		setIfChanged(updates, "scrape_status", existing.ScrapeStatus, m.ScrapeStatus)
 		if m.OriginalName != "" {

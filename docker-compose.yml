@@ -124,6 +124,9 @@ services:
 
   postgres:
     image: postgres:16-alpine
+    # 数据库基础镜像不参与日常应用更新，避免误拉新版 PostgreSQL。
+    # 如需升级 PostgreSQL，请先备份 ./postgres 后再手动调整镜像版本并拉取。
+    pull_policy: never
     restart: unless-stopped
     environment:
       POSTGRES_DB: mediastation

@@ -383,12 +383,14 @@ func (s *MediaService) ListMediaVisible(ctx context.Context, libraryID string, p
 	cacheKey := s.mediaListCacheKey(libraryID, libraryIDs, page, pageSize, filter)
 	var cached mediaListCacheValue
 	if s.cache != nil && s.cache.GetJSON(ctx, cacheKey, &cached) {
+		s.attachLibraryMetadata(ctx, cached.Items)
 		return cached.Items, cached.Total, nil
 	}
 	items, total, err := s.repo.Media.ListByLibrariesFiltered(ctx, libraryIDs, (page-1)*pageSize, pageSize, filter)
 	if err != nil {
 		return nil, 0, err
 	}
+	s.attachLibraryMetadata(ctx, items)
 	if s.cache != nil {
 		s.cache.SetJSON(ctx, cacheKey, mediaListCacheValue{Items: items, Total: total}, time.Duration(s.mediaCacheTTLSeconds())*time.Second)
 	}
@@ -440,6 +442,138 @@ func (s *MediaService) invalidateMediaCache(ctx context.Context) {
 	}
 }
 
+func (s *MediaService) attachLibraryMetadata(ctx context.Context, items []model.Media) {
+	if s == nil || s.repo == nil || s.repo.Library == nil || len(items) == 0 {
+		return
+	}
+	libs, err := s.repo.Library.List(ctx)
+	if err != nil {
+		return
+	}
+	byID := make(map[string]model.Library, len(libs))
+	for _, lib := range libs {
+		byID[lib.ID] = lib
+	}
+	resolver := newMediaDisplayLibraryResolver(ctx, s.repo, libs)
+	for i := range items {
+		if lib, ok := byID[items[i].LibraryID]; ok {
+			items[i].LibraryName = lib.Name
+			items[i].LibraryPath = lib.Path
+		}
+		if lib, ok := resolver.DisplayLibraryForMedia(items[i]); ok {
+			items[i].DisplayLibraryID = lib.ID
+			items[i].DisplayLibraryName = lib.Name
+			items[i].DisplayLibraryPath = lib.Path
+		}
+	}
+}
+
+type mediaDisplayLibraryResolver struct {
+	byID              map[string]model.Library
+	displayByID       map[string]model.Library
+	displayByMergeKey map[string]model.Library
+	displayLibraries  []model.Library
+}
+
+func newMediaDisplayLibraryResolver(ctx context.Context, repo *repository.Container, libs []model.Library) mediaDisplayLibraryResolver {
+	displayLibraries := FilterDisplayCloudLibraries(ctx, repo, append([]model.Library(nil), libs...))
+	resolver := mediaDisplayLibraryResolver{
+		byID:              make(map[string]model.Library, len(libs)),
+		displayByID:       make(map[string]model.Library, len(displayLibraries)),
+		displayByMergeKey: make(map[string]model.Library, len(displayLibraries)),
+		displayLibraries:  displayLibraries,
+	}
+	for _, lib := range libs {
+		resolver.byID[lib.ID] = lib
+	}
+	for _, lib := range displayLibraries {
+		resolver.displayByID[lib.ID] = lib
+		if key, ok := CloudLibraryMergeKey(lib); ok {
+			if _, exists := resolver.displayByMergeKey[key]; !exists {
+				resolver.displayByMergeKey[key] = lib
+			}
+		}
+	}
+	return resolver
+}
+
+func (r mediaDisplayLibraryResolver) DisplayLibraryForMedia(media model.Media) (model.Library, bool) {
+	if lib, ok := r.bestPathDisplayLibrary(media); ok {
+		return lib, true
+	}
+	if lib, ok := r.displayByID[media.LibraryID]; ok {
+		return lib, true
+	}
+	own, hasOwn := r.byID[media.LibraryID]
+	if hasOwn {
+		if key, ok := CloudLibraryMergeKey(own); ok {
+			if lib, exists := r.displayByMergeKey[key]; exists {
+				return lib, true
+			}
+		}
+		return own, true
+	}
+	return model.Library{}, false
+}
+
+func (r mediaDisplayLibraryResolver) bestPathDisplayLibrary(media model.Media) (model.Library, bool) {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(media.Path)), "cloud://") {
+		mediaInfo, ok := ParseCloudLibraryMount(media.Path)
+		if !ok {
+			return model.Library{}, false
+		}
+		var best model.Library
+		bestDepth := 0
+		for _, lib := range r.displayLibraries {
+			info, ok := ParseCloudLibraryMount(lib.Path)
+			if !ok || info.Provider != mediaInfo.Provider || !lib.Enabled {
+				continue
+			}
+			dir := strings.Trim(firstNonEmpty(info.DisplayDir, info.ScanDir), "/")
+			if dir == "" {
+				continue
+			}
+			mediaDir := strings.Trim(firstNonEmpty(mediaInfo.DisplayDir, mediaInfo.ScanDir), "/")
+			if mediaDir != dir && !cloudMountAncestor(dir, mediaDir) {
+				continue
+			}
+			depth := len(strings.Split(dir, "/"))
+			if depth > bestDepth {
+				best = lib
+				bestDepth = depth
+			}
+		}
+		if bestDepth > 0 {
+			return best, true
+		}
+		return model.Library{}, false
+	}
+
+	mediaPath := cleanPathForVolumeMapping(media.Path)
+	var best model.Library
+	bestLen := 0
+	for _, lib := range r.displayLibraries {
+		if _, ok := ParseCloudLibraryMount(lib.Path); ok || !lib.Enabled {
+			continue
+		}
+		libPath := cleanPathForVolumeMapping(lib.Path)
+		if libPath == "" || libPath == "." {
+			continue
+		}
+		if mediaPath != libPath && !strings.HasPrefix(mediaPath, strings.TrimRight(libPath, "/")+"/") {
+			continue
+		}
+		if len(libPath) > bestLen {
+			best = lib
+			bestLen = len(libPath)
+		}
+	}
+	if bestLen > 0 {
+		return best, true
+	}
+	return model.Library{}, false
+}
+
 func groupMediaVersions(items []model.Media) []MediaItem {
 	if len(items) == 0 {
 		return nil
@@ -486,6 +620,16 @@ func groupMediaVersions(items []model.Media) []MediaItem {
 
 func mediaVersionGroupKey(m model.Media) string {
 	if m.SeasonNum > 0 || m.EpisodeNum > 0 {
+		switch {
+		case m.TMDbID > 0:
+			return fmt.Sprintf("episode:tmdb:%d:%d:%d", m.TMDbID, m.SeasonNum, m.EpisodeNum)
+		case m.BangumiID > 0:
+			return fmt.Sprintf("episode:bangumi:%d:%d:%d", m.BangumiID, m.SeasonNum, m.EpisodeNum)
+		case strings.TrimSpace(m.DoubanID) != "":
+			return fmt.Sprintf("episode:douban:%s:%d:%d", strings.ToLower(strings.TrimSpace(m.DoubanID)), m.SeasonNum, m.EpisodeNum)
+		case strings.TrimSpace(m.TheTVDBID) != "":
+			return fmt.Sprintf("episode:thetvdb:%s:%d:%d", strings.ToLower(strings.TrimSpace(m.TheTVDBID)), m.SeasonNum, m.EpisodeNum)
+		}
 		title := firstNonEmpty(m.OriginalName, m.Title)
 		if title == "" {
 			title, _ = CleanQuery(m.Path)
@@ -577,11 +721,16 @@ func (s *MediaService) SearchMediaVisible(ctx context.Context, query string, lim
 		limit = maxMediaSearchLimit
 	}
 	visibility = ExpandMediaVisibilityForMergedCloudLibraries(ctx, s.repo, visibility)
-	return s.repo.Media.SearchFiltered(ctx, query, limit, repository.MediaQueryFilter{
+	items, err := s.repo.Media.SearchFiltered(ctx, query, limit, repository.MediaQueryFilter{
 		IncludeNSFW:       visibility.IncludeNSFW,
 		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
 		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
 	})
+	if err != nil {
+		return nil, err
+	}
+	s.attachLibraryMetadata(ctx, items)
+	return items, nil
 }
 
 func (s *MediaService) SearchMediaVisibleGrouped(ctx context.Context, query string, limit int, visibility MediaVisibility) ([]MediaItem, error) {
@@ -603,11 +752,16 @@ func (s *MediaService) SearchMediaVisiblePage(ctx context.Context, query string,
 		page = 1
 	}
 	visibility = ExpandMediaVisibilityForMergedCloudLibraries(ctx, s.repo, visibility)
-	return s.repo.Media.SearchFilteredPage(ctx, query, (page-1)*pageSize, pageSize, repository.MediaQueryFilter{
+	items, total, err := s.repo.Media.SearchFilteredPage(ctx, query, (page-1)*pageSize, pageSize, repository.MediaQueryFilter{
 		IncludeNSFW:       visibility.IncludeNSFW,
 		AllowedLibraryIDs: visibility.AllowedLibraryIDs,
 		HiddenLibraryIDs:  visibility.HiddenLibraryIDs,
 	})
+	if err != nil {
+		return nil, 0, err
+	}
+	s.attachLibraryMetadata(ctx, items)
+	return items, total, nil
 }
 
 func (s *MediaService) SearchMediaVisiblePageGrouped(ctx context.Context, query string, page, pageSize int, visibility MediaVisibility) ([]MediaItem, int64, error) {
@@ -621,7 +775,14 @@ func (s *MediaService) SearchMediaVisiblePageGrouped(ctx context.Context, query 
 
 // GetMedia returns a single media row.
 func (s *MediaService) GetMedia(ctx context.Context, id string) (*model.Media, error) {
-	return s.repo.Media.FindByID(ctx, id)
+	media, err := s.repo.Media.FindByID(ctx, id)
+	if err != nil || media == nil {
+		return media, err
+	}
+	items := []model.Media{*media}
+	s.attachLibraryMetadata(ctx, items)
+	*media = items[0]
+	return media, nil
 }
 
 const maxRecycleBinRecords = 200

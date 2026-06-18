@@ -14,6 +14,7 @@ type organizeTargetInput struct {
 	MediaType string
 	Category  string
 	Title     string
+	Source    string
 	Ext       string
 	Year      int
 	Season    int
@@ -60,15 +61,17 @@ func (o *OrganizerService) buildOrganizeTargetPath(ctx context.Context, in organ
 		rel = defaultOrganizeRelativePath(title, ext, in.Year, in.Season, in.Episode, in.Series)
 	} else {
 		rel = renderOrganizeNamingTemplate(template, organizeNamingData{
-			Title:      title,
-			Year:       in.Year,
-			Season:     in.Season,
-			Episode:    in.Episode,
-			Ext:        strings.TrimPrefix(ext, "."),
-			FileExt:    ext,
-			Category:   sanitizeFilename(in.Category),
-			MediaType:  normalizeOrganizeMediaType(in.MediaType),
-			EpisodeTag: episodeTag,
+			Title:       title,
+			Year:        in.Year,
+			Season:      in.Season,
+			Episode:     in.Episode,
+			Ext:         strings.TrimPrefix(ext, "."),
+			FileExt:     ext,
+			Category:    sanitizeFilename(in.Category),
+			MediaType:   normalizeOrganizeMediaType(in.MediaType),
+			EpisodeTag:  episodeTag,
+			VideoFormat: extractOrganizeReleaseTag(in.Source),
+			Part:        extractOrganizeReleaseTag(in.Source),
 		})
 		rel = cleanOrganizeRelativePath(rel)
 		if rel == "" {
@@ -124,15 +127,17 @@ func defaultOrganizeRelativePath(title, ext string, year, season, episode int, s
 }
 
 type organizeNamingData struct {
-	Title      string
-	Year       int
-	Season     int
-	Episode    int
-	Ext        string
-	FileExt    string
-	Category   string
-	MediaType  string
-	EpisodeTag string
+	Title       string
+	Year        int
+	Season      int
+	Episode     int
+	Ext         string
+	FileExt     string
+	Category    string
+	MediaType   string
+	EpisodeTag  string
+	VideoFormat string
+	Part        string
 }
 
 var organizeTemplateTokenRE = regexp.MustCompile(`\{([A-Za-z_]+)(?::([^}]+))?\}`)
@@ -204,8 +209,10 @@ func organizeTemplateTruthy(name string, data organizeNamingData) bool {
 		return data.MediaType != ""
 	case "episode_tag", "episodetag", "season_episode":
 		return data.EpisodeTag != ""
-	case "part", "videoformat", "video_format":
-		return false
+	case "videoformat", "video_format":
+		return data.VideoFormat != ""
+	case "part":
+		return data.Part != ""
 	default:
 		return false
 	}
@@ -234,11 +241,50 @@ func organizeTemplateValue(name, format string, data organizeNamingData, fallbac
 		return data.MediaType
 	case "episode_tag", "episodetag", "season_episode":
 		return data.EpisodeTag
-	case "part", "videoformat", "video_format":
-		return ""
+	case "videoformat", "video_format":
+		return data.VideoFormat
+	case "part":
+		return data.Part
 	default:
 		return fallback
 	}
+}
+
+var organizeReleaseTailRE = regexp.MustCompile(`(?i)(?:^|[.\s_\-\[\(])((?:2160p|1080p|720p|480p|4k|uhd|fhd|web[\s._-]*dl|web[\s._-]*rip|bluray|blu[\s._-]*ray|bdrip|hdtv|remux|x26[45]|h[\s._-]*26[45]|hevc|avc|10bit|8bit|hdr10?\+?|dovi|dv|120fps|60fps|dts|ddp?|eac3|aac|flac|truehd|atmos).*)$`)
+
+func extractOrganizeReleaseTag(source string) string {
+	base := strings.TrimSuffix(filepath.Base(strings.TrimSpace(source)), filepath.Ext(source))
+	if base == "" {
+		return ""
+	}
+	matches := organizeReleaseTailRE.FindStringSubmatch(base)
+	if len(matches) < 2 {
+		return ""
+	}
+	value := strings.Trim(matches[1], " ._-[]()")
+	value = patSEnE.ReplaceAllString(value, " ")
+	value = patNxE.ReplaceAllString(value, " ")
+	value = patEP.ReplaceAllString(value, " ")
+	value = patCN.ReplaceAllString(value, " ")
+	if value == "" {
+		return ""
+	}
+	parts := strings.FieldsFunc(value, func(r rune) bool {
+		switch r {
+		case ' ', '_', '[', ']', '(', ')', '{', '}':
+			return true
+		default:
+			return false
+		}
+	})
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.Trim(part, ".-")
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return sanitizeFilename(strings.Join(out, "."))
 }
 
 func formatOrganizeNumber(value int, format string, fallback int) string {

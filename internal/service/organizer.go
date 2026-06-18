@@ -155,6 +155,7 @@ func (o *OrganizerService) OrganizeMediaWithOptions(ctx context.Context, mediaID
 			MediaType: lib.Type,
 			Category:  category,
 			Title:     title,
+			Source:    m.Path,
 			Ext:       ext,
 			Year:      m.Year,
 			Season:    m.SeasonNum,
@@ -172,6 +173,7 @@ func (o *OrganizerService) OrganizeMediaWithOptions(ctx context.Context, mediaID
 			MediaType: lib.Type,
 			Category:  category,
 			Title:     title,
+			Source:    m.Path,
 			Ext:       ext,
 			Year:      m.Year,
 		})

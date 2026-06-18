@@ -25,6 +25,7 @@ type LocalMetadata struct {
 	PosterURL    string
 	BackdropURL  string
 	TMDbID       int
+	BangumiID    int
 	DoubanID     string
 	TheTVDBID    string
 	SeasonNum    int
@@ -35,6 +36,7 @@ type LocalMetadata struct {
 	NSFW         bool
 	HasNFO       bool
 	HasArtwork   bool
+	PathHint     bool
 }
 
 type nfoUniqueID struct {
@@ -69,7 +71,7 @@ type nfoDocument struct {
 	OriginalTitle string        `xml:"originaltitle"`
 	SortTitle     string        `xml:"sorttitle"`
 	Num           string        `xml:"num"`
-	Year          int           `xml:"year"`
+	Year          nfoInt        `xml:"year"`
 	Premiered     string        `xml:"premiered"`
 	ReleaseDate   string        `xml:"releasedate"`
 	Release       string        `xml:"release"`
@@ -77,15 +79,15 @@ type nfoDocument struct {
 	Plot          string        `xml:"plot"`
 	Outline       string        `xml:"outline"`
 	OriginalPlot  string        `xml:"originalplot"`
-	Rating        float32       `xml:"rating"`
+	Rating        nfoFloat      `xml:"rating"`
 	Poster        string        `xml:"poster"`
 	Thumbs        []nfoThumb    `xml:"thumb"`
 	Fanart        nfoFanart     `xml:"fanart"`
 	Art           nfoArt        `xml:"art"`
-	TMDbID        int           `xml:"tmdbid"`
+	TMDbID        nfoInt        `xml:"tmdbid"`
 	UniqueIDs     []nfoUniqueID `xml:"uniqueid"`
-	Season        int           `xml:"season"`
-	Episode       int           `xml:"episode"`
+	Season        nfoInt        `xml:"season"`
+	Episode       nfoInt        `xml:"episode"`
 	Genres        []string      `xml:"genre"`
 	Tags          []string      `xml:"tag"`
 	Countries     []string      `xml:"country"`
@@ -96,6 +98,46 @@ type nfoDocument struct {
 	Label         string        `xml:"label"`
 	Directors     []string      `xml:"director"`
 	Actors        []nfoActor    `xml:"actor"`
+}
+
+type nfoInt int
+
+func (n *nfoInt) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	var raw string
+	if err := d.DecodeElement(&raw, &start); err != nil {
+		return err
+	}
+	raw = cleanXMLText(raw)
+	if raw == "" || strings.EqualFold(raw, "none") || strings.EqualFold(raw, "null") || strings.EqualFold(raw, "nan") {
+		*n = 0
+		return nil
+	}
+	if v, err := strconv.Atoi(raw); err == nil {
+		*n = nfoInt(v)
+		return nil
+	}
+	if f, err := strconv.ParseFloat(raw, 64); err == nil {
+		*n = nfoInt(int(f))
+	}
+	return nil
+}
+
+type nfoFloat float32
+
+func (n *nfoFloat) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	var raw string
+	if err := d.DecodeElement(&raw, &start); err != nil {
+		return err
+	}
+	raw = cleanXMLText(raw)
+	if raw == "" || strings.EqualFold(raw, "none") || strings.EqualFold(raw, "null") || strings.EqualFold(raw, "nan") {
+		*n = 0
+		return nil
+	}
+	if v, err := strconv.ParseFloat(raw, 32); err == nil {
+		*n = nfoFloat(v)
+	}
+	return nil
 }
 
 type nfoActor struct {
@@ -253,16 +295,17 @@ func metadataFromDoc(doc *nfoDocument, baseDir string, seriesLike bool) *LocalMe
 		Title:        cleanXMLText(doc.Title),
 		OriginalName: cleanXMLText(doc.OriginalTitle),
 		AdultCode:    normalizeAdultCode(doc.Num),
-		Year:         doc.Year,
+		Year:         int(doc.Year),
 		Overview:     firstText(doc.Plot, doc.Outline, doc.OriginalPlot),
-		Rating:       doc.Rating,
+		Rating:       float32(doc.Rating),
 		PosterURL:    firstRemoteURL(baseDir, nfoPosterValues(doc)...),
 		BackdropURL:  firstRemoteURL(baseDir, nfoBackdropValues(doc)...),
-		TMDbID:       doc.TMDbID,
+		TMDbID:       int(doc.TMDbID),
+		BangumiID:    mustAtoi(externalIDFromUniqueIDs(doc.UniqueIDs, "bangumi", "bgm")),
 		DoubanID:     externalIDFromUniqueIDs(doc.UniqueIDs, "douban"),
 		TheTVDBID:    externalIDFromUniqueIDs(doc.UniqueIDs, "thetvdb", "tvdb"),
-		SeasonNum:    doc.Season,
-		EpisodeNum:   doc.Episode,
+		SeasonNum:    int(doc.Season),
+		EpisodeNum:   int(doc.Episode),
 		Genres:       joinNFOValues(adultAwareGenres(doc)),
 		Countries:    joinNFOValues(doc.Countries),
 		Languages:    joinNFOValues(doc.Languages),
@@ -394,6 +437,9 @@ func mergeEpisodeMetadata(dst, episode *LocalMetadata, doc *nfoDocument) {
 	}
 	if episode.TMDbID > 0 {
 		dst.TMDbID = episode.TMDbID
+	}
+	if episode.BangumiID > 0 {
+		dst.BangumiID = episode.BangumiID
 	}
 	if episode.DoubanID != "" {
 		dst.DoubanID = episode.DoubanID

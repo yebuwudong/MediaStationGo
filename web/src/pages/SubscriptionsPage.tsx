@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
-import { Archive, CalendarClock, CheckCircle2, Film, Pencil, Play, Plus, Save, ShieldCheck, Trash2 } from 'lucide-react'
+import { Archive, CalendarClock, CheckCircle2, Film, Pencil, Play, Plus, RotateCcw, Save, ShieldCheck, Trash2 } from 'lucide-react'
 
 import { subscriptionsAPI } from '../api/subscriptions'
 import { imageURL } from '../api/client'
@@ -115,6 +115,22 @@ export function SubscriptionsPage() {
     setWashEnabled(Boolean(s.wash_enabled))
     setWashPriority(s.wash_priority || 'balanced')
     window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const restoreHistorySubscription = async (subscription: Subscription, runAfterRestore = false) => {
+    try {
+      const restored = await subscriptionsAPI.restore(subscription.id)
+      if (runAfterRestore) {
+        const result = await subscriptionsAPI.runNow(restored.id)
+        toast.success(`已恢复订阅并加入 ${result.queued} 项`)
+      } else {
+        toast.success('已恢复到正在订阅')
+      }
+      await refresh()
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || '恢复订阅失败'
+      toast.error(msg)
+    }
   }
 
   return (
@@ -344,6 +360,22 @@ export function SubscriptionsPage() {
                       {subscription.archived_at ? new Date(subscription.archived_at).toLocaleString() : '完成时间未知'}
                     </p>
                     <p className="mt-1 text-xs text-ink-50">{subscriptionProgressLabel(subscription)}</p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        className="rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-ink-100 hover:bg-gray-50"
+                        onClick={() => restoreHistorySubscription(subscription)}
+                      >
+                        <RotateCcw size={13} className="mr-1 inline" />
+                        恢复订阅
+                      </button>
+                      <button
+                        className="rounded-xl border border-primary-400/40 bg-white px-3 py-1.5 text-xs font-semibold text-brand-500 hover:bg-primary-400/10"
+                        onClick={() => restoreHistorySubscription(subscription, true)}
+                      >
+                        <Play size={13} className="mr-1 inline" />
+                        恢复并运行
+                      </button>
+                    </div>
                   </div>
                 </div>
               </article>

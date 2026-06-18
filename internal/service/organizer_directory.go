@@ -242,9 +242,17 @@ type organizeDirectoryLayout struct {
 // into destRoot, applying dedup + 洗版.
 func (o *OrganizerService) organizeSourceFile(ctx context.Context, src, sourceRoot, destRoot string, mode TransferMode, mediaTypeOverride, mediaCategoryOverride string, dryRun bool, allowReplaceExisting bool, metadataCache map[string]*Match, res *OrganizeResult) error {
 	ext := filepath.Ext(src)
+	season, episode := ParseEpisode(src)
 	title, year := CleanQuery(src)
-	if title == "" {
-		title = strings.TrimSuffix(filepath.Base(src), ext)
+	if organizeWeakFileTitle(title) {
+		if folderTitle, folderYear := organizeTitleFromParentFolder(src, sourceRoot, season > 0 || episode > 0); folderTitle != "" {
+			title = folderTitle
+			if year <= 0 {
+				year = folderYear
+			}
+		} else {
+			title = strings.TrimSuffix(filepath.Base(src), ext)
+		}
 	}
 	// CleanQuery lowercases the parsed title; title-case it so organized output
 	// matches typical library casing (and stays consistent for dedup).
@@ -253,7 +261,6 @@ func (o *OrganizerService) organizeSourceFile(ctx context.Context, src, sourceRo
 	if title == "" {
 		title = "Unknown"
 	}
-	season, episode := ParseEpisode(src)
 	pathLayout := o.inferOrganizeDirectoryLayout(src, sourceRoot)
 	layout := pathLayout
 	forcedType := normalizeOrganizeMediaType(mediaTypeOverride)
@@ -320,6 +327,7 @@ func (o *OrganizerService) organizeSourceFile(ctx context.Context, src, sourceRo
 		MediaType: layout.MediaType,
 		Category:  layout.Category,
 		Title:     title,
+		Source:    src,
 		Ext:       ext,
 		Year:      year,
 		Season:    season,
@@ -425,6 +433,21 @@ func (o *OrganizerService) organizeSourceFile(ctx context.Context, src, sourceRo
 	return nil
 }
 
+func organizeTitleFromParentFolder(src, sourceRoot string, seriesLike bool) (string, int) {
+	if !seriesLike {
+		return "", 0
+	}
+	raw := seriesFolderTitle(src, sourceRoot)
+	if strings.TrimSpace(raw) == "" {
+		return "", 0
+	}
+	title, year := CleanQuery(raw)
+	if title == "" {
+		title = strings.TrimSpace(raw)
+	}
+	return title, year
+}
+
 func shouldSkipOrganizeSourceVideo(path, sourceRoot string) (bool, string) {
 	cleanPath := filepath.Clean(path)
 	cleanRoot := filepath.Clean(sourceRoot)
@@ -471,6 +494,31 @@ func normalizeOrganizeMediaType(mediaType string) string {
 	default:
 		return ""
 	}
+}
+
+func organizeWeakFileTitle(title string) bool {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return true
+	}
+	fields := strings.Fields(strings.ToLower(title))
+	if len(fields) == 0 {
+		return true
+	}
+	meaningful := 0
+	for _, field := range fields {
+		if _, ok := noiseTokenSet[field]; ok {
+			continue
+		}
+		if _, ok := releaseBoundaryTokenSet[field]; ok {
+			continue
+		}
+		if len(field) == 4 && strings.HasPrefix(field, "20") {
+			continue
+		}
+		meaningful++
+	}
+	return meaningful == 0
 }
 
 func (o *OrganizerService) inferMediaTypeForSourceFile(src, title string, season, episode int) string {
