@@ -106,3 +106,63 @@ func cloudPathRepairShouldReplaceTitle(current, hinted string) bool {
 	}
 	return len([]rune(current)) > len([]rune(hinted))*2
 }
+
+
+// RepairAndRescrapeResult 汇总一次「全库修复+重刮」的结果。
+type RepairAndRescrapeResult struct {
+	Repaired  int `json:"repaired"`  // 从路径占位符回填外部 ID 的媒体数
+	Libraries int `json:"libraries"` // 参与重刮的媒体库数
+	Matched   int `json:"matched"`   // 重刮后成功匹配的媒体数
+}
+
+// RepairAndRescrapeAllLibraries 修复并重刮所有媒体库:先从媒体路径中的
+// {tmdb-123}/{bangumi-456} 等占位符回填缺失或错误的外部 ID(回填后会把相关
+// 行的 scrape_status 重置为 pending),随后逐个媒体库重刮(含 no_match 重试),
+// 让此前因空 ID / 脏 ID 无法刮削的媒体重新匹配到正确数据。
+func (c *Container) RepairAndRescrapeAllLibraries(ctx context.Context) (RepairAndRescrapeResult, error) {
+	var result RepairAndRescrapeResult
+	if c == nil || c.Repo == nil || c.Repo.DB == nil {
+		return result, nil
+	}
+	repaired, err := c.RepairCloudPathMetadata(ctx)
+	if err != nil {
+		return result, err
+	}
+	result.Repaired = repaired
+
+	if c.Scraper == nil || c.Repo.Library == nil {
+		return result, nil
+	}
+	libraries, err := c.Repo.Library.List(ctx)
+	if err != nil {
+		return result, err
+	}
+	for i := range libraries {
+		select {
+		case <-ctx.Done():
+			return result, ctx.Err()
+		default:
+		}
+		lib := libraries[i]
+		if !lib.Enabled {
+			continue
+		}
+		result.Libraries++
+		// retryNoMatch=true:连之前匹配失败的也再试一次,因为这次可能已回填到正确 ID。
+		matched, err := c.Scraper.EnrichLibrary(ctx, lib.ID, true)
+		if err != nil {
+			if c.Log != nil {
+				c.Log.Warn("repair rescrape library failed", zap.String("library", lib.ID), zap.Error(err))
+			}
+			continue
+		}
+		result.Matched += matched
+	}
+	if c.Log != nil {
+		c.Log.Info("repair and rescrape all libraries done",
+			zap.Int("repaired", result.Repaired),
+			zap.Int("libraries", result.Libraries),
+			zap.Int("matched", result.Matched))
+	}
+	return result, nil
+}

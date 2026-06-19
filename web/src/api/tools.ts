@@ -96,4 +96,12 @@ export const toolsAPI = {
     api
       .post<{ message: string }>('/admin/notify/test', { title, body })
       .then((r) => r.data),
+
+  // repairAndRescrapeAll 触发「全库修复+重刮」：先从媒体路径中的
+  // {tmdb-N}/{bangumi-N} 占位符回填缺失/错误的外部 ID，再批量重刮整库。
+  // 后端异步执行，立即返回；进度通过 WS "scrape" topic 推送。
+  repairAndRescrapeAll: () =>
+    api
+      .post<{ status: string }>('/admin/media/repair-rescrape', {})
+      .then((r) => r.data),
 }

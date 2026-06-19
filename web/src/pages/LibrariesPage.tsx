@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { ArrowRight, Film, FolderOpen, Library as LibraryIcon, Music, PlayCircle, Tv } from 'lucide-react'
+import { ArrowRight, Film, FolderOpen, Library as LibraryIcon, Music, PlayCircle, RefreshCw, Tv } from 'lucide-react'
 
 import { imageURL } from '../api/client'
 import { libraryAPI } from '../api/library'
+import { toolsAPI } from '../api/tools'
 import { MediaCard } from '../components/MediaCard'
 import type { Library, Media } from '../types'
 import { artworkScore, groupSeries, seriesCardLink, type SeriesCard } from '../utils/groupSeries'
@@ -35,6 +36,22 @@ const TYPE_LABELS: Record<string, string> = {
 export function LibrariesPage() {
   const [previews, setPreviews] = useState<LibraryPreview[]>([])
   const [loading, setLoading] = useState(true)
+  const [repairing, setRepairing] = useState(false)
+  const [repairMsg, setRepairMsg] = useState('')
+
+  async function handleRepairRescrape() {
+    if (repairing) return
+    setRepairing(true)
+    setRepairMsg('')
+    try {
+      await toolsAPI.repairAndRescrapeAll()
+      setRepairMsg('已开始全库修复+重刮，进度可在任务中查看。')
+    } catch {
+      setRepairMsg('启动失败，请稍后重试。')
+    } finally {
+      setRepairing(false)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -75,10 +92,23 @@ export function LibrariesPage() {
             共 {previews.length} 个目录 · {total.toLocaleString()} 个条目。每个目录直接展示最新入库内容。
           </p>
         </div>
-        <Link to="/admin" className="btn-outline">
-          管理媒体库
-          <ArrowRight size={14} />
-        </Link>
+        <div className="flex flex-wrap items-center gap-3">
+          {repairMsg && <span className="text-xs text-ink-50">{repairMsg}</span>}
+          <button
+            type="button"
+            onClick={handleRepairRescrape}
+            disabled={repairing}
+            className="btn-outline disabled:cursor-not-allowed disabled:opacity-60"
+            title="从媒体路径回填缺失/错误的外部 ID，再批量重刮整库"
+          >
+            <RefreshCw size={14} className={repairing ? 'animate-spin' : ''} />
+            {repairing ? '正在启动…' : '全库修复+重刮'}
+          </button>
+          <Link to="/admin" className="btn-outline">
+            管理媒体库
+            <ArrowRight size={14} />
+          </Link>
+        </div>
       </div>
 
       {previews.length === 0 ? (

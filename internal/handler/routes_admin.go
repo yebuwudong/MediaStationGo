@@ -87,6 +87,9 @@ func registerAdminRoutes(api *gin.RouterGroup, cfg *config.Config, svc *service.
 		admin.GET("/organize/sources", organizeSourcesHandler(svc))
 		admin.POST("/organize/source", organizeDirectoryHandler(svc))
 
+		// 全库修复+重刮:从路径占位符回填缺失外部 ID,然后批量重刮整库。
+		admin.POST("/media/repair-rescrape", repairAndRescrapeAllHandler(svc))
+
 		// API key management (encrypted at rest).
 		admin.GET("/api-configs", listAPIConfigsHandler(svc))
 		admin.GET("/api-configs/:provider", getAPIConfigHandler(svc))

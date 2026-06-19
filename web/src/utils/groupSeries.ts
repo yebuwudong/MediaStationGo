@@ -38,8 +38,24 @@ export function isEpisodeLike(media: Media): boolean {
   return (media.season_num ?? 0) > 0 || (media.episode_num ?? 0) > 0
 }
 
+// 剧集类目录名(电视剧/动漫及其二级分类)。媒体路径落在这些目录下时, 即便
+// 季集号未识别出来, 也应按剧集对待, 跳转到 /library 分类视图而非 /media 单页。
+const EPISODIC_PATH_RE =
+  /[\\/](?:电视剧|剧集|国产剧|欧美剧|日韩剧|日剧|韩剧|综艺|纪录片|动漫|番剧|国漫|日番|儿童|tv|series|shows?|season[\s._-]*\d|s\d{1,2}(?:[\s._-]|[\\/])|specials?|sp|ova|oad|特别篇|特別篇|番外|特典)[\\/]/i
+
+function pathLooksEpisodic(media: Media): boolean {
+  const path = (media.path || media.display_library_path || media.library_path || '')
+  return EPISODIC_PATH_RE.test(path)
+}
+
 export function isSeriesCard(card: SeriesCard): boolean {
-  return card.count > 1 || isEpisodeLike(card.rep) || isEpisodeLike(card.linkMedia)
+  return (
+    card.count > 1 ||
+    isEpisodeLike(card.rep) ||
+    isEpisodeLike(card.linkMedia) ||
+    pathLooksEpisodic(card.rep) ||
+    pathLooksEpisodic(card.linkMedia)
+  )
 }
 
 export function seriesTitle(media: Media): string {
