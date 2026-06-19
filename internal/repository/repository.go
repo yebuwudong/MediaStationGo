@@ -456,8 +456,14 @@ func (r *MediaRepository) upsert(ctx context.Context, m *model.Media) error {
 	if m.BackdropURL != "" {
 		setIfChanged(updates, "backdrop_url", existing.BackdropURL, m.BackdropURL)
 	}
-	if lib := m.LibraryID; lib != "" && lib != existing.LibraryID {
-		updates["library_id"] = m.LibraryID
+	// 云盘媒体：同一 cloud:// 文件可能先被父目录库扫描入库，之后用户按二级
+	// 分类重新挂载/扫描到更精确的分类库。此时让 library_id 迁移到当前扫描库，
+	// 否则媒体被钉死在旧库、新分类库里看不到(表现为"媒体部分消失")。
+	// 本地媒体物理位置固定：仅在原 library_id 为空时回填，不迁移。
+	if isCloudMediaPath := strings.HasPrefix(strings.ToLower(strings.TrimSpace(m.Path)), "cloud://"); m.LibraryID != "" && m.LibraryID != existing.LibraryID {
+		if isCloudMediaPath || existing.LibraryID == "" {
+			updates["library_id"] = m.LibraryID
+		}
 	}
 	if (m.SeasonNum > 0 || m.EpisodeNum > 0) && existing.SeasonNum != m.SeasonNum {
 		updates["season_num"] = m.SeasonNum
@@ -537,7 +543,14 @@ func (r *MediaRepository) ListByLibrariesFiltered(ctx context.Context, libraryID
 	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	err := q.Order("created_at desc").Offset(offset).Limit(limit).Find(&items).Error
+	// 多级排序消除"随机"观感:
+	//  1. year desc        — 上映年份新→旧(用户期望的上映时间维度)
+	//  2. updated_at desc  — 同年按最近更新(刮削/补集会刷新)
+	//  3. created_at desc  — 再按入库时间
+	//  4. id desc          — 稳定 tie-breaker:云盘批量扫描同批 created_at 相同时,
+	//                        没有它 DB 返回顺序不确定,正是"随机排序"的根因。
+	err := q.Order("year DESC, updated_at DESC, created_at DESC, id DESC").
+		Offset(offset).Limit(limit).Find(&items).Error
 	return items, total, err
 }
 

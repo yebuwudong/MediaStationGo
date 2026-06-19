@@ -143,6 +143,11 @@ func (s *SubscriptionService) Restore(ctx context.Context, id string) (*model.Su
 		Updates(map[string]any{
 			"enabled":        true,
 			"archive_reason": "",
+			// 重置为 0:此前可能被 feed 低估并锁死(updateSubscriptionTotalEpisodes
+			// 只增不减,resolveSubscriptionTotalEpisodes 见 >0 即不再回查元数据)。
+			// 归零后下次 run 会从 TMDb/豆瓣等权威源重算真实总集数,避免恢复后
+			// 因"误判已无缺集"而不再搜索资源。
+			"total_episodes": 0,
 		}).Error; err != nil {
 		return nil, err
 	}

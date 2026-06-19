@@ -11,6 +11,7 @@ export interface OrganizeOverrides {
   dest_path?: string
   transfer_mode?: string
   media_type?: string
+  media_category?: string
   scan_after?: boolean
   scrape_after?: boolean
   library_id?: string

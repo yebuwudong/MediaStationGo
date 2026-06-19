@@ -1,7 +1,7 @@
 ﻿import { motion } from 'framer-motion'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { FileText, Heart, Play, RefreshCw, Sparkles, Trash2, Calendar, Database, Search, Pencil } from 'lucide-react'
+import { FileText, Heart, Play, RefreshCw, Sparkles, Trash2, Calendar, Database, Search, Pencil, FolderInput } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 import { mediaAPI } from '../api/library'
@@ -15,6 +15,7 @@ import { confirmAction } from '../components/ConfirmDialog'
 import { ExternalPlayerButton } from '../components/ExternalPlayerButton'
 import { ManualScrapeDialog } from '../components/ManualScrapeDialog'
 import { MetadataEditDialog } from '../components/MetadataEditDialog'
+import { OrganizeMediaDialog } from '../components/OrganizeMediaDialog'
 
 function fmtDuration(sec: number): string {
   if (!sec || sec <= 0) return '—'
@@ -49,6 +50,7 @@ export function MediaDetailPage() {
   const [loading, setLoading] = useState(true)
   const [manualScrapeOpen, setManualScrapeOpen] = useState(false)
   const [metadataEditOpen, setMetadataEditOpen] = useState(false)
+  const [organizeOpen, setOrganizeOpen] = useState(false)
 
   const refresh = async () => {
     if (!id) return
@@ -327,6 +329,10 @@ export function MediaDetailPage() {
                     <Pencil size={13} className="text-gray-600" />
                     <span>编辑元数据</span>
                   </button>
+                  <button onClick={() => setOrganizeOpen(true)} className="btn-outline py-2 px-3.5 text-xs gap-1.5 border-gray-200 hover:border-brand-500/50 hover:bg-brand-50">
+                    <FolderInput size={13} className="text-[#c9954a]" />
+                    <span>整理入库</span>
+                  </button>
                   <button onClick={reprobe} className="btn-outline py-2 px-3.5 text-xs gap-1.5 border-gray-200 hover:border-brand-500/50 hover:bg-brand-50">
                     <Database size={13} className="text-gray-600" />
                     <span>探测媒体轨 (ffprobe)</span>
@@ -365,6 +371,12 @@ export function MediaDetailPage() {
           setMedia(next)
           await refresh()
         }}
+      />
+      <OrganizeMediaDialog
+        open={organizeOpen}
+        media={media}
+        onClose={() => setOrganizeOpen(false)}
+        onOrganized={refresh}
       />
     </div>
   )
