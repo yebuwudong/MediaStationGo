@@ -443,7 +443,128 @@ func (e *EmbyService) Items(ctx context.Context, p ItemsParams) (map[string]any,
 	if containsItemType(p.IncludeItemTypes, "Series") && !containsItemType(p.IncludeItemTypes, "Episode") {
 		return e.seriesItemsForLibrary(ctx, p.ParentID, p)
 	}
+
+	// 电影库的「常规浏览」(未指定 IncludeItemTypes): 电影库里偶尔混入按
+	// Season/SxxE 结构整理的内容(如整合成剧集的剧场版 / 合集动画)。这些行若按
+	// 散装单集(Episode)漏出,在 Infuse/yamby 等客户端表现为「整部剧被拆成一堆
+	// 单集卡片」。方案 B: 把它们按整剧聚成 Series 卡片,与真正的电影(Movie)并列
+	// 展示在同一电影库视图。仅在该电影库确实含此类内容时才走此分支,普通电影库
+	// 仍走 mediaItems(保留其缓存 / 版本合并逻辑)。
+	if p.ParentID != "" && !p.Recursive && len(p.IncludeItemTypes) == 0 {
+		if episodic, err := e.libraryIsEpisodic(ctx, p.ParentID); err == nil && !episodic {
+			if has, err := e.movieLibraryHasEpisodicContent(ctx, p.ParentID); err == nil && has {
+				return e.movieLibraryItems(ctx, p)
+			}
+		}
+	}
 	return e.mediaItems(ctx, p)
+}
+
+// movieLibraryHasEpisodicContent 报告电影类型库里是否混入了「剧集结构」内容
+// (有季集号且路径形如剧集,例如 .../国产剧/某剧/Season 01/某剧 - S01E01.mkv)。
+// 用于决定是否需要走 movieLibraryItems 把这些内容聚成 Series 卡片。普通电影库
+// 没有这类行时返回 false,继续走常规 mediaItems。
+func (e *EmbyService) movieLibraryHasEpisodicContent(ctx context.Context, libraryID string) (bool, error) {
+	clause, args := embyLikelyEpisodicPathSQL()
+	if clause == "" {
+		return false, nil
+	}
+	q := e.repo.DB.WithContext(ctx).Model(&model.Media{}).
+		Where("library_id IN ?", e.mergedLibraryIDs(ctx, libraryID)).
+		Where("(season_num > 0 OR episode_num > 0) AND ("+clause+")", args...)
+	var count int64
+	if err := q.Limit(1).Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// movieLibraryItems 处理电影类型库的常规浏览,返回「真正的电影(Movie)」与
+// 「库内剧集结构内容聚成的 Series 卡片」的合并列表(按 DateCreated 倒序分页)。
+// 与 mediaItems 的区别: 后者会把剧集结构行当散装 Episode 漏出;这里改为聚合成
+// Series,从根本上消除「电影库里整部剧被拆成单集」的现象。
+func (e *EmbyService) movieLibraryItems(ctx context.Context, p ItemsParams) (map[string]any, error) {
+	libIDs := e.mergedLibraryIDs(ctx, p.ParentID)
+	apply := func(q *gorm.DB) *gorm.DB {
+		q = e.applyUserMediaVisibility(ctx, q, p.UserID)
+		q = q.Where("library_id IN ?", libIDs)
+		if p.SearchTerm != "" {
+			q = q.Where("title LIKE ? OR original_name LIKE ?", "%"+p.SearchTerm+"%", "%"+p.SearchTerm+"%")
+		}
+		if containsEmbyFilter(p.Filters, "IsFavorite") {
+			if strings.TrimSpace(p.UserID) == "" {
+				return nil
+			}
+			q = q.Joins("JOIN favorites ON favorites.media_id = media.id AND favorites.user_id = ? AND favorites.deleted_at IS NULL", p.UserID)
+		}
+		return q
+	}
+
+	// 剧集结构内容 → Series 卡片。
+	clause, args := embyLikelyEpisodicPathSQL()
+	var episodicRows []model.Media
+	if clause != "" {
+		epQ := apply(e.repo.DB.WithContext(ctx).Model(&model.Media{}))
+		if epQ == nil {
+			return map[string]any{"Items": []map[string]any{}, "TotalRecordCount": 0, "StartIndex": p.StartIndex}, nil
+		}
+		epQ = epQ.Where("(season_num > 0 OR episode_num > 0) AND ("+clause+")", args...).
+			Order("media.created_at desc").Limit(embySeriesGroupingLimit)
+		if err := epQ.Find(&episodicRows).Error; err != nil {
+			return nil, err
+		}
+	}
+	seriesGroups := e.seriesGroupsFromMedia(episodicRows)
+
+	// 真正的电影 → Movie 项(剔除剧集结构行)。
+	movieQ := apply(e.repo.DB.WithContext(ctx).Model(&model.Media{}))
+	if movieQ == nil {
+		return map[string]any{"Items": []map[string]any{}, "TotalRecordCount": 0, "StartIndex": p.StartIndex}, nil
+	}
+	movieQ = filterLikelyEpisodicPathsFromMovieQuery(movieQ).
+		Order("media.created_at desc").Limit(embySeriesGroupingLimit)
+	var movieRows []model.Media
+	if err := movieQ.Find(&movieRows).Error; err != nil {
+		return nil, err
+	}
+	movieItems, err := e.payloadsForMedia(ctx, movieRows, p.UserID)
+	if err != nil {
+		return nil, err
+	}
+
+	// 合并: Series 卡片 + Movie 项, 统一按 DateCreated 倒序。
+	type entry struct {
+		createdAt time.Time
+		payload   map[string]any
+	}
+	entries := make([]entry, 0, len(seriesGroups)+len(movieItems))
+	for _, g := range seriesGroups {
+		entries = append(entries, entry{createdAt: g.CreatedAt, payload: e.seriesPayload(g)})
+	}
+	for _, item := range movieItems {
+		entries = append(entries, entry{createdAt: embyPayloadCreatedAt(item), payload: item})
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		return entries[i].createdAt.After(entries[j].createdAt)
+	})
+	total := len(entries)
+	paged := pageSlice(entries, p.StartIndex, p.Limit)
+	items := make([]map[string]any, 0, len(paged))
+	for _, en := range paged {
+		items = append(items, en.payload)
+	}
+	return map[string]any{"Items": items, "TotalRecordCount": total, "StartIndex": p.StartIndex}, nil
+}
+
+// embyPayloadCreatedAt 从 item payload 里取 DateCreated(time.Time),用于合并排序。
+func embyPayloadCreatedAt(item map[string]any) time.Time {
+	if item == nil {
+		return time.Time{}
+	}
+	if v, ok := item["DateCreated"].(time.Time); ok {
+		return v
+	}
+	return time.Time{}
 }
 
 func (e *EmbyService) mediaItems(ctx context.Context, p ItemsParams) (map[string]any, error) {

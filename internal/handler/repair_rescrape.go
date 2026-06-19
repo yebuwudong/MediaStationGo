@@ -24,6 +24,7 @@ func repairAndRescrapeAllHandler(svc *service.Container) gin.HandlerFunc {
 				"repaired":  int64(result.Repaired),
 				"libraries": int64(result.Libraries),
 				"matched":   int64(result.Matched),
+				"reset":     int64(result.Reset),
 			}
 			stage := "completed"
 			message := "全库修复并重刮完成"
@@ -52,6 +53,7 @@ func repairAndRescrapeLibraryHandler(svc *service.Container) gin.HandlerFunc {
 				"repaired":  int64(result.Repaired),
 				"libraries": int64(result.Libraries),
 				"matched":   int64(result.Matched),
+				"reset":     int64(result.Reset),
 			}
 			stage := "completed"
 			message := "媒体库修复并重刮完成"

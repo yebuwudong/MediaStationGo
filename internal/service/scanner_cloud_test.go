@@ -580,7 +580,9 @@ func TestScanCloudLibraryReadsRemoteNFOAndArtwork(t *testing.T) {
 	if err := repos.DB.First(&media).Error; err != nil {
 		t.Fatal(err)
 	}
-	if media.Title != "剑来" || media.OriginalName != "第一集" || media.Year != 2024 {
+	// 单集名(episode <title>「第一集」)不得写入 OriginalName(整剧原名/分组键)。
+	// tvshow.nfo 未提供 originaltitle, 故 OriginalName 应为空。
+	if media.Title != "剑来" || media.OriginalName != "" || media.Year != 2024 {
 		t.Fatalf("metadata not applied: %#v", media)
 	}
 	if media.SeasonNum != 1 || media.EpisodeNum != 1 {

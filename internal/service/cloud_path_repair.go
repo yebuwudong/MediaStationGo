@@ -118,6 +118,40 @@ type RepairAndRescrapeResult struct {
 	Repaired  int `json:"repaired"`  // 从路径占位符回填外部 ID 的媒体数
 	Libraries int `json:"libraries"` // 参与重刮的媒体库数
 	Matched   int `json:"matched"`   // 重刮后成功匹配的媒体数
+	Reset     int `json:"reset"`     // 被重置为 pending 以便重刮的剧集行数
+}
+
+// resetEpisodicMatchedForRescrape 把剧集类(有季集号)且已 matched 的行重置为
+// pending,使 EnrichLibrary(只处理 pending/no_match)能重新刮削它们。
+//
+// 背景: 历史版本(commit b44c7f8)曾把【单集 episode id】写进整剧 tm_db_id、把
+// 单集名写进 original_name,污染了合集分组键 —— 同一部剧每集 id/原名各不相同,
+// 被前端 / Emby 拆成 N 张单集卡。这些行 scrape_status 多为 matched,常规「修复+
+// 重刮」会跳过,导致「无法修复」。源头已在 local_metadata.go 修正,这里把脏的
+// matched 剧集行放回 pending,借重刮写回正确的整剧 ID / 原名。
+//
+// libraryID 为空时处理全库;非空时仅该库。返回被重置的行数。
+func (c *Container) resetEpisodicMatchedForRescrape(ctx context.Context, libraryID string) (int, error) {
+	if c == nil || c.Repo == nil || c.Repo.DB == nil {
+		return 0, nil
+	}
+	q := c.Repo.DB.WithContext(ctx).Model(&model.Media{}).
+		Where("(season_num > 0 OR episode_num > 0)").
+		Where("LOWER(scrape_status) = ?", "matched")
+	if id := strings.TrimSpace(libraryID); id != "" {
+		q = q.Where("library_id = ?", id)
+	}
+	res := q.Update("scrape_status", "pending")
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	reset := int(res.RowsAffected)
+	if reset > 0 && c.Log != nil {
+		c.Log.Info("episodic matched rows reset to pending for rescrape",
+			zap.String("library", strings.TrimSpace(libraryID)),
+			zap.Int("reset", reset))
+	}
+	return reset, nil
 }
 
 // RepairAndRescrapeAllLibraries 修复并重刮所有媒体库:先从媒体路径中的
@@ -134,6 +168,13 @@ func (c *Container) RepairAndRescrapeAllLibraries(ctx context.Context) (RepairAn
 		return result, err
 	}
 	result.Repaired = repaired
+
+	// 重置全库脏的 matched 剧集行(单集 id 污染整剧字段),让其下方重刮一并修正。
+	if reset, err := c.resetEpisodicMatchedForRescrape(ctx, ""); err != nil {
+		return result, err
+	} else {
+		result.Reset = reset
+	}
 
 	if c.Scraper == nil || c.Repo.Library == nil {
 		return result, nil
@@ -186,6 +227,13 @@ func (c *Container) RepairAndRescrapeLibrary(ctx context.Context, libraryID stri
 		return result, err
 	}
 	result.Repaired = repaired
+
+	// 重置该库脏的 matched 剧集行,让下方重刮修正被单集 id 污染的整剧字段。
+	if reset, err := c.resetEpisodicMatchedForRescrape(ctx, libraryID); err != nil {
+		return result, err
+	} else {
+		result.Reset = reset
+	}
 
 	if c.Scraper == nil {
 		return result, nil

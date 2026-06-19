@@ -9,28 +9,47 @@ import type { Media } from '../types'
  *
  * 折叠键优先级（命中第一个就分组）：
  *
- *   1. series_id     （后端某些场景下会预先聚合）
- *   2. 有季/集信息时用 library_id + 节目名（综艺每集常有不同 TMDB episode id）
- *   3. tmdb_id / bangumi_id（电影或无季集条目）
- *   4. library_id + title （fallback：同库同名视为同一剧）
+ * 剧集（有季集号 / 路径像剧集）:
+ *   1. library_id + 路径剧名   ← 最稳定:同一部剧的各集都在同一剧目录下
+ *   2. tmdb_id / bangumi_id / douban / thetvdb （无路径剧名时兜底）
+ *   3. series_id              （后端预聚合,目前仅 Emby 虚拟分组用,DB 一般为空）
+ *   4. library_id + title     （最终兜底）
+ * 电影:
+ *   1. tmdb_id / bangumi_id
+ *   2. library_id + 路径剧名
+ *   3. library_id + title
+ *
+ * 为什么剧集要把「路径剧名」放在 tmdb_id 之前:
+ * 本地/网盘按 MoviePilot 整理的剧集每集旁带 episode NFO, 其 <uniqueid type="tmdb">
+ * 是【单集 episode id】(每集都不同)。若按 tmdb_id 分组, 同一部剧 N 集会被拆成 N
+ * 张卡(实测「遮天」90 集 = 89 个不同 tmdb_id)。而整剧目录名对全剧一致, 是最可靠的
+ * 分组依据, 且对「部分集已刮削、部分未刮削」也能稳定合并。
+ *
+ * key 必须是「单条 media 的纯函数」且与子集无关——它会被写进卡片链接
+ * (seriesCardLink → ?series=KEY), 之后 LibraryPage 用 getSeriesKey(m)===KEY 反查
+ * 该剧的所有集。路径剧名优先正好满足:同剧各集的 key 恒等, 跨页面/子集稳定。
  *
  * 同一组内取最早 created_at 的那条作为代表卡片，并带 count 表示集数。
  */
 export type SeriesCard = { key: string; rep: Media; linkMedia: Media; count: number }
 
 export function getSeriesKey(media: Media): string {
-  if (media.series_id) return `series:${media.series_id}`
   const fromPath = seriesTitleFromPath(media.path)
-  if (isEpisodeLike(media)) {
+  if (isEpisodeLike(media) || pathLooksEpisodic(media)) {
+    // 路径剧名优先:对全剧一致, 不受单集 tmdb 污染影响。
+    if (fromPath) return `lib:${targetLibraryID(media)}|show:${fromPath}`
+    // 无路径剧名(扁平目录)时才退而用外部 id;此时各集若共享整剧 id 仍能合并。
     if (media.tmdb_id && media.tmdb_id > 0) return `tmdb:${media.tmdb_id}`
     if (media.bangumi_id && media.bangumi_id > 0) return `bgm:${media.bangumi_id}`
     if (media.douban_id) return `douban:${media.douban_id}`
     if (media.thetvdb_id) return `thetvdb:${media.thetvdb_id}`
-    return `lib:${targetLibraryID(media)}|show:${normalizeTitle(fromPath || seriesTitle(media))}`
+    if (media.series_id) return `series:${media.series_id}`
+    return `lib:${targetLibraryID(media)}|show:${normalizeTitle(seriesTitle(media))}`
   }
+  if (media.series_id) return `series:${media.series_id}`
   if (media.tmdb_id && media.tmdb_id > 0) return `tmdb:${media.tmdb_id}`
   if (media.bangumi_id && media.bangumi_id > 0) return `bgm:${media.bangumi_id}`
-  if (fromPath) return `lib:${media.library_id}|show:${normalizeTitle(fromPath)}`
+  if (fromPath) return `lib:${media.library_id}|show:${fromPath}`
   return `lib:${media.library_id}|${normalizeTitle(media.title)}`
 }
 
