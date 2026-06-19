@@ -127,3 +127,42 @@ func TestTelegramDispatchUsesPhotoAndFormattedCaption(t *testing.T) {
 		}
 	}
 }
+
+// TestTelegramMediaTemplateRendersEnrichedFields 验证补齐的媒体字段
+// (年份/评分/类型/原名/语言)确实透传进 Telegram 富模板 caption。
+// 这是「模型/刮削链路补齐字段」与「作者富模板」对接的端到端断言。
+func TestTelegramMediaTemplateRendersEnrichedFields(t *testing.T) {
+	caption := formatTelegramNotification(NotifyEvent{
+		Type:    EventSubscriptionHit,
+		Title:   "MediaStationGo 订阅命中新资源",
+		Message: "订阅：遮天\n新增资源：1",
+		Data: map[string]interface{}{
+			"media_category":    "国漫",
+			"title":             "遮天",
+			"original_title":    "Shrouding the Heavens",
+			"original_language": "zh",
+			"year":              2023,
+			"rating":            8.6,
+			"genres":            "动画,奇幻",
+			"overview":          "荒古禁地中走出的少年。",
+			"tmdb_url":          "https://www.themoviedb.org/tv/223911",
+			"imdb_url":          "https://www.imdb.com/title/tt12345678/",
+		},
+	})
+	for _, want := range []string{
+		"#国漫",
+		"📺 中文片名：遮天",
+		"🧿 原始片名：Shrouding the Heavens",
+		"🌐 原始语言：中文",
+		"📅 发行年份：2023",
+		"⭐️ 评分：8.6",
+		"💎 类型：动画、奇幻",
+		"🪬 简介：",
+		`<a href="https://www.themoviedb.org/tv/223911">TMDB</a>`,
+		`<a href="https://www.imdb.com/title/tt12345678/">IMDB</a>`,
+	} {
+		if !strings.Contains(caption, want) {
+			t.Fatalf("caption missing %q:\n%s", want, caption)
+		}
+	}
+}

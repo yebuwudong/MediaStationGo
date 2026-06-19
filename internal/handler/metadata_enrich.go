@@ -27,7 +27,13 @@ type cachedDisplayMetadata struct {
 }
 
 func enrichSubscriptionArtwork(ctx context.Context, svc *service.Container, sub *model.Subscription) {
-	if svc == nil || sub == nil || (strings.TrimSpace(sub.PosterURL) != "" && strings.TrimSpace(sub.BackdropURL) != "") {
+	if svc == nil || sub == nil {
+		return
+	}
+	// 已有图片且媒体展示字段也齐全时才跳过;否则仍需查一次补 年份/评分/类型 等
+	// 富通知字段(老订阅只存了 poster/overview 的情况)。
+	if strings.TrimSpace(sub.PosterURL) != "" && strings.TrimSpace(sub.BackdropURL) != "" &&
+		sub.Year > 0 && sub.Rating > 0 && strings.TrimSpace(sub.Genres) != "" {
 		return
 	}
 	meta := lookupDisplayMetadata(ctx, svc, sub.Name, sub.Filter, sub.MediaType)
@@ -46,6 +52,21 @@ func enrichSubscriptionArtwork(ctx context.Context, svc *service.Container, sub 
 	if strings.TrimSpace(sub.Overview) == "" {
 		sub.Overview = meta.Overview
 	}
+	if strings.TrimSpace(sub.OriginalName) == "" {
+		sub.OriginalName = meta.OriginalName
+	}
+	if strings.TrimSpace(sub.OriginalLanguage) == "" {
+		sub.OriginalLanguage = meta.OriginalLanguage
+	}
+	if sub.Year <= 0 && meta.Year > 0 {
+		sub.Year = meta.Year
+	}
+	if sub.Rating <= 0 && meta.Rating > 0 {
+		sub.Rating = meta.Rating
+	}
+	if strings.TrimSpace(sub.Genres) == "" {
+		sub.Genres = meta.Genres
+	}
 }
 
 func enrichAndPersistSubscriptions(ctx context.Context, svc *service.Container, items []model.Subscription) {
@@ -55,7 +76,12 @@ func enrichAndPersistSubscriptions(ctx context.Context, svc *service.Container, 
 		if before.Source == items[i].Source &&
 			before.PosterURL == items[i].PosterURL &&
 			before.BackdropURL == items[i].BackdropURL &&
-			before.Overview == items[i].Overview {
+			before.Overview == items[i].Overview &&
+			before.OriginalName == items[i].OriginalName &&
+			before.OriginalLanguage == items[i].OriginalLanguage &&
+			before.Year == items[i].Year &&
+			before.Rating == items[i].Rating &&
+			before.Genres == items[i].Genres {
 			continue
 		}
 		updates := map[string]any{}
@@ -70,6 +96,21 @@ func enrichAndPersistSubscriptions(ctx context.Context, svc *service.Container, 
 		}
 		if before.Overview != items[i].Overview {
 			updates["overview"] = items[i].Overview
+		}
+		if before.OriginalName != items[i].OriginalName {
+			updates["original_name"] = items[i].OriginalName
+		}
+		if before.OriginalLanguage != items[i].OriginalLanguage {
+			updates["original_language"] = items[i].OriginalLanguage
+		}
+		if before.Year != items[i].Year {
+			updates["year"] = items[i].Year
+		}
+		if before.Rating != items[i].Rating {
+			updates["rating"] = items[i].Rating
+		}
+		if before.Genres != items[i].Genres {
+			updates["genres"] = items[i].Genres
 		}
 		if len(updates) == 0 {
 			continue
@@ -88,22 +129,41 @@ func enrichAndPersistDownloadRows(ctx context.Context, svc *service.Container, r
 			title = downloadDisplayTitle(rows[i].URL)
 			rows[i].Title = title
 		}
-		if strings.TrimSpace(rows[i].PosterURL) == "" || strings.TrimSpace(rows[i].BackdropURL) == "" {
+		needsMeta := strings.TrimSpace(rows[i].PosterURL) == "" || strings.TrimSpace(rows[i].BackdropURL) == "" ||
+			strings.TrimSpace(rows[i].Overview) == "" || rows[i].Year <= 0 || rows[i].Rating <= 0 ||
+			strings.TrimSpace(rows[i].Genres) == "" || strings.TrimSpace(rows[i].OriginalName) == "" ||
+			strings.TrimSpace(rows[i].OriginalLanguage) == ""
+		if needsMeta {
 			meta := enrichDownloadTaskMeta(ctx, svc, service.DownloadTaskMeta{
-				Title:       rows[i].Title,
-				PosterURL:   rows[i].PosterURL,
-				BackdropURL: rows[i].BackdropURL,
-				Overview:    rows[i].Overview,
-			}, firstNonEmptyString(rows[i].Title, rows[i].URL), "")
+				Title:            rows[i].Title,
+				PosterURL:        rows[i].PosterURL,
+				BackdropURL:      rows[i].BackdropURL,
+				Overview:         rows[i].Overview,
+				OriginalName:     rows[i].OriginalName,
+				OriginalLanguage: rows[i].OriginalLanguage,
+				Year:             rows[i].Year,
+				Rating:           rows[i].Rating,
+				Genres:           rows[i].Genres,
+			}, firstNonEmptyString(rows[i].Title, rows[i].URL), rows[i].MediaType)
 			rows[i].Title = firstNonEmptyString(rows[i].Title, meta.Title)
 			rows[i].PosterURL = meta.PosterURL
 			rows[i].BackdropURL = meta.BackdropURL
 			rows[i].Overview = meta.Overview
+			rows[i].OriginalName = meta.OriginalName
+			rows[i].OriginalLanguage = meta.OriginalLanguage
+			rows[i].Year = meta.Year
+			rows[i].Rating = meta.Rating
+			rows[i].Genres = meta.Genres
 		}
 		if before.Title == rows[i].Title &&
 			before.PosterURL == rows[i].PosterURL &&
 			before.BackdropURL == rows[i].BackdropURL &&
-			before.Overview == rows[i].Overview {
+			before.Overview == rows[i].Overview &&
+			before.OriginalName == rows[i].OriginalName &&
+			before.OriginalLanguage == rows[i].OriginalLanguage &&
+			before.Year == rows[i].Year &&
+			before.Rating == rows[i].Rating &&
+			before.Genres == rows[i].Genres {
 			continue
 		}
 		updates := map[string]any{}
@@ -118,6 +178,21 @@ func enrichAndPersistDownloadRows(ctx context.Context, svc *service.Container, r
 		}
 		if before.Overview != rows[i].Overview {
 			updates["overview"] = rows[i].Overview
+		}
+		if before.OriginalName != rows[i].OriginalName {
+			updates["original_name"] = rows[i].OriginalName
+		}
+		if before.OriginalLanguage != rows[i].OriginalLanguage {
+			updates["original_language"] = rows[i].OriginalLanguage
+		}
+		if before.Year != rows[i].Year {
+			updates["year"] = rows[i].Year
+		}
+		if before.Rating != rows[i].Rating {
+			updates["rating"] = rows[i].Rating
+		}
+		if before.Genres != rows[i].Genres {
+			updates["genres"] = rows[i].Genres
 		}
 		if len(updates) == 0 {
 			continue
@@ -160,7 +235,11 @@ func enrichDownloadTaskMeta(ctx context.Context, svc *service.Container, meta se
 	if strings.TrimSpace(meta.Title) == "" {
 		meta.Title = strings.TrimSpace(downloadDisplayTitle(fallbackTitle))
 	}
-	if strings.TrimSpace(meta.PosterURL) != "" && strings.TrimSpace(meta.BackdropURL) != "" {
+	// 仅当展示字段都齐时才跳过查询(含媒体富通知所需的年份/评分/类型/原始信息)。
+	if strings.TrimSpace(meta.PosterURL) != "" && strings.TrimSpace(meta.BackdropURL) != "" &&
+		strings.TrimSpace(meta.Overview) != "" && meta.Year > 0 && meta.Rating > 0 &&
+		strings.TrimSpace(meta.Genres) != "" && strings.TrimSpace(meta.OriginalName) != "" &&
+		strings.TrimSpace(meta.OriginalLanguage) != "" {
 		return meta
 	}
 	found := lookupDisplayMetadata(ctx, svc, meta.Title, fallbackTitle, mediaType)
@@ -175,6 +254,21 @@ func enrichDownloadTaskMeta(ctx context.Context, svc *service.Container, meta se
 	}
 	if strings.TrimSpace(meta.Overview) == "" {
 		meta.Overview = found.Overview
+	}
+	if strings.TrimSpace(meta.OriginalName) == "" {
+		meta.OriginalName = found.OriginalName
+	}
+	if strings.TrimSpace(meta.OriginalLanguage) == "" {
+		meta.OriginalLanguage = found.OriginalLanguage
+	}
+	if meta.Year <= 0 && found.Year > 0 {
+		meta.Year = found.Year
+	}
+	if meta.Rating <= 0 && found.Rating > 0 {
+		meta.Rating = found.Rating
+	}
+	if strings.TrimSpace(meta.Genres) == "" {
+		meta.Genres = found.Genres
 	}
 	return meta
 }
@@ -203,11 +297,16 @@ func downloadDisplayTitle(raw string) string {
 }
 
 type displayMetadata struct {
-	Source      string
-	Title       string
-	PosterURL   string
-	BackdropURL string
-	Overview    string
+	Source           string
+	Title            string
+	OriginalName     string
+	OriginalLanguage string
+	PosterURL        string
+	BackdropURL      string
+	Overview         string
+	Year             int
+	Rating           float32
+	Genres           string
 }
 
 func lookupDisplayMetadata(ctx context.Context, svc *service.Container, title, fallback, mediaType string) displayMetadata {
@@ -244,12 +343,21 @@ func lookupDisplayMetadata(ctx context.Context, svc *service.Container, title, f
 			break
 		}
 	}
+	originalLanguage := ""
+	if len(best.Languages) > 0 {
+		originalLanguage = strings.TrimSpace(best.Languages[0])
+	}
 	meta := displayMetadata{
-		Source:      best.Source,
-		Title:       best.Title,
-		PosterURL:   best.PosterURL,
-		BackdropURL: best.BackdropURL,
-		Overview:    best.Overview,
+		Source:           best.Source,
+		Title:            best.Title,
+		OriginalName:     best.OriginalName,
+		OriginalLanguage: originalLanguage,
+		PosterURL:        best.PosterURL,
+		BackdropURL:      best.BackdropURL,
+		Overview:         best.Overview,
+		Year:             best.Year,
+		Rating:           best.Rating,
+		Genres:           strings.Join(best.Genres, ","),
 	}
 	displayMetadataCache.Store(cacheKey, cachedDisplayMetadata{value: meta, expiresAt: time.Now().Add(12 * time.Hour)})
 	return meta

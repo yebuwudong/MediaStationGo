@@ -211,8 +211,14 @@ type DownloadTask struct {
 	SavePath       string  `gorm:"size:1024" json:"save_path"`
 	MediaType      string  `gorm:"size:16" json:"media_type,omitempty"`
 	MediaCategory  string  `gorm:"size:128" json:"media_category,omitempty"`
-	Status         string  `gorm:"size:32;default:queued" json:"status"`
-	Progress       float32 `json:"progress"`
+	// 媒体展示元数据(用于 Telegram 富通知模板等):原始片名/语言/年份/评分/类型。
+	OriginalName     string  `gorm:"size:512" json:"original_name,omitempty"`
+	OriginalLanguage string  `gorm:"size:32" json:"original_language,omitempty"`
+	Year             int     `json:"year,omitempty"`
+	Rating           float32 `json:"rating,omitempty"`
+	Genres           string  `gorm:"size:255" json:"genres,omitempty"` // comma separated
+	Status           string  `gorm:"size:32;default:queued" json:"status"`
+	Progress         float32 `json:"progress"`
 
 	// AllowExistingLibrary is true for subscription wash/upgrade tasks that are
 	// allowed to replace an existing library item after download completion.
@@ -235,11 +241,17 @@ type Subscription struct {
 	PosterURL     string     `gorm:"size:2048" json:"poster_url,omitempty"`
 	BackdropURL   string     `gorm:"size:2048" json:"backdrop_url,omitempty"`
 	Overview      string     `gorm:"type:text" json:"overview,omitempty"`
-	Resolution    string     `gorm:"size:32" json:"resolution,omitempty"`      // 2160p / 1080p / 720p / best
-	Quality       string     `gorm:"size:64" json:"quality,omitempty"`         // remux / bluray / web-dl / hdtv
-	Effects       string     `gorm:"size:128" json:"effects,omitempty"`        // hdr,dolby-vision,atmos
-	ReleaseGroups string     `gorm:"size:255" json:"release_groups,omitempty"` // comma separated
-	ExcludeWords  string     `gorm:"size:255" json:"exclude_words,omitempty"`  // comma separated
+	// 媒体展示元数据(用于 Telegram 富通知模板等):原始片名/语言/年份/评分/类型。
+	OriginalName     string  `gorm:"size:512" json:"original_name,omitempty"`
+	OriginalLanguage string  `gorm:"size:32" json:"original_language,omitempty"`
+	Year             int     `json:"year,omitempty"`
+	Rating           float32 `json:"rating,omitempty"`
+	Genres           string  `gorm:"size:255" json:"genres,omitempty"` // comma separated
+	Resolution       string  `gorm:"size:32" json:"resolution,omitempty"`      // 2160p / 1080p / 720p / best
+	Quality          string  `gorm:"size:64" json:"quality,omitempty"`         // remux / bluray / web-dl / hdtv
+	Effects          string  `gorm:"size:128" json:"effects,omitempty"`        // hdr,dolby-vision,atmos
+	ReleaseGroups    string  `gorm:"size:255" json:"release_groups,omitempty"` // comma separated
+	ExcludeWords     string  `gorm:"size:255" json:"exclude_words,omitempty"`  // comma separated
 	WashEnabled   bool       `gorm:"default:false" json:"wash_enabled"`
 	WashPriority  string     `gorm:"size:32" json:"wash_priority,omitempty"` // balanced / resolution / quality / effects / seeders
 	TotalEpisodes int        `gorm:"default:0" json:"total_episodes,omitempty"`

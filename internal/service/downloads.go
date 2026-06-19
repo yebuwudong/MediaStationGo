@@ -110,6 +110,11 @@ type DownloadTaskMeta struct {
 	MediaType            string
 	MediaCategory        string
 	SourceCategory       string
+	OriginalName         string
+	OriginalLanguage     string
+	Year                 int
+	Rating               float32
+	Genres               string
 	AllowExistingLibrary bool
 }
 
@@ -570,6 +575,11 @@ func (d *DownloadService) createTask(ctx context.Context, userID, urlStr, savePa
 		SavePath:             savePath,
 		MediaType:            meta.MediaType,
 		MediaCategory:        meta.MediaCategory,
+		OriginalName:         meta.OriginalName,
+		OriginalLanguage:     meta.OriginalLanguage,
+		Year:                 meta.Year,
+		Rating:               meta.Rating,
+		Genres:               meta.Genres,
 		Status:               "queued",
 		AllowExistingLibrary: meta.AllowExistingLibrary,
 	}
@@ -1380,6 +1390,21 @@ func (d *DownloadService) notifyDownloadComplete(ctx context.Context, torrent QB
 		}
 		if strings.TrimSpace(task.Overview) != "" {
 			data["overview"] = task.Overview
+		}
+		if strings.TrimSpace(task.OriginalName) != "" {
+			data["original_title"] = task.OriginalName
+		}
+		if strings.TrimSpace(task.OriginalLanguage) != "" {
+			data["original_language"] = task.OriginalLanguage
+		}
+		if task.Year > 0 {
+			data["year"] = task.Year
+		}
+		if task.Rating > 0 {
+			data["rating"] = task.Rating
+		}
+		if strings.TrimSpace(task.Genres) != "" {
+			data["genres"] = task.Genres
 		}
 	}
 	go func() {
