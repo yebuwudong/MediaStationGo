@@ -469,6 +469,20 @@ func (s *SubscriptionService) notifySubscriptionHit(sub *model.Subscription, que
 		if strings.TrimSpace(sub.MediaCategory) != "" {
 			data["media_category"] = sub.MediaCategory
 		}
+		// 补充媒体通知模板(formatTelegramMediaNotification)所需字段:片名 / 简介 /
+		// 外链 / 资源标题(供模板提取季集 + 版本)。仅填现成可用的,缺失项模板会自动略过。
+		if strings.TrimSpace(sub.Name) != "" {
+			data["title"] = sub.Name
+		}
+		if strings.TrimSpace(sub.Overview) != "" {
+			data["overview"] = sub.Overview
+		}
+		if id := strings.TrimSpace(sub.IMDBID); id != "" {
+			data["imdb_url"] = "https://www.imdb.com/title/" + id + "/"
+		}
+		if len(resources) > 0 {
+			data["resource_title"] = resources[0]
+		}
 		s.notify.BroadcastEvent(ctx, NotifyEvent{
 			Type:    EventSubscriptionHit,
 			Title:   "MediaStationGo 订阅命中新资源",

@@ -1357,6 +1357,11 @@ func (d *DownloadService) notifyDownloadComplete(ctx context.Context, torrent QB
 	}
 	body := fmt.Sprintf("任务：%s\n保存路径：%s\nHash：%s", name, firstNonEmpty(torrent.ContentPath, torrent.SavePath), torrent.Hash)
 	data := map[string]interface{}{}
+	// resource_title 供 Telegram 模板从发布名提取季集(SxxEyy)与版本(分辨率/编码/
+	// 字幕组等)信息;隐藏不直接展示。优先用 torrent 原始名(信息最全)。
+	if rt := strings.TrimSpace(torrent.Name); rt != "" {
+		data["resource_title"] = rt
+	}
 	if task != nil {
 		if strings.TrimSpace(task.PosterURL) != "" {
 			data["poster_url"] = task.PosterURL
@@ -1369,6 +1374,12 @@ func (d *DownloadService) notifyDownloadComplete(ctx context.Context, torrent QB
 		}
 		if strings.TrimSpace(task.MediaCategory) != "" {
 			data["media_category"] = task.MediaCategory
+		}
+		if strings.TrimSpace(task.Title) != "" {
+			data["title"] = task.Title
+		}
+		if strings.TrimSpace(task.Overview) != "" {
+			data["overview"] = task.Overview
 		}
 	}
 	go func() {
