@@ -11,31 +11,35 @@ import (
 // intentionally separate from model.Media because the item may not exist in
 // the local library yet.
 type ExternalMediaResult struct {
-	Source             string  `json:"source"`
-	MediaType          string  `json:"media_type,omitempty"`
-	Title              string  `json:"title"`
-	OriginalTitle      string  `json:"original_title,omitempty"`
-	OriginalLanguage   string  `json:"original_language,omitempty"`
-	Overview           string  `json:"overview,omitempty"`
-	PosterURL          string  `json:"poster_url,omitempty"`
-	BackdropURL        string  `json:"backdrop_url,omitempty"`
-	Year               int     `json:"year,omitempty"`
-	Rating             float32 `json:"rating,omitempty"`
-	Genres             string  `json:"genres,omitempty"`
-	TMDbID             int     `json:"tmdb_id,omitempty"`
-	BangumiID          int     `json:"bangumi_id,omitempty"`
-	DoubanID           string  `json:"douban_id,omitempty"`
-	TheTVDBID          string  `json:"thetvdb_id,omitempty"`
-	SubscribeKeyword   string  `json:"subscribe_keyword"`
-	TotalEpisodes      int     `json:"total_episodes,omitempty"`
-	DownloadedEpisodes int     `json:"downloaded_episodes,omitempty"`
-	LocalMediaCount    int     `json:"local_media_count,omitempty"`
-	MissingEpisodes    []int   `json:"missing_episodes,omitempty"`
-	InLibrary          bool    `json:"in_library"`
+	Source             string   `json:"source"`
+	MediaType          string   `json:"media_type,omitempty"`
+	Title              string   `json:"title"`
+	OriginalTitle      string   `json:"original_title,omitempty"`
+	OriginalName       string   `json:"original_name,omitempty"`
+	OriginalLanguage   string   `json:"original_language,omitempty"`
+	Overview           string   `json:"overview,omitempty"`
+	PosterURL          string   `json:"poster_url,omitempty"`
+	BackdropURL        string   `json:"backdrop_url,omitempty"`
+	Year               int      `json:"year,omitempty"`
+	Rating             float32  `json:"rating,omitempty"`
+	Genres             string   `json:"genres,omitempty"`
+	TMDbID             int      `json:"tmdb_id,omitempty"`
+	BangumiID          int      `json:"bangumi_id,omitempty"`
+	DoubanID           string   `json:"douban_id,omitempty"`
+	TheTVDBID          string   `json:"thetvdb_id,omitempty"`
+	SubscribeKeyword   string   `json:"subscribe_keyword"`
+	TotalEpisodes      int      `json:"total_episodes,omitempty"`
+	DownloadedEpisodes int      `json:"downloaded_episodes,omitempty"`
+	LocalMediaCount    int      `json:"local_media_count,omitempty"`
+	MissingEpisodes    []int    `json:"missing_episodes,omitempty"`
+	InLibrary          bool     `json:"in_library"`
+	Languages          []string `json:"languages,omitempty"`
+	Countries          []string `json:"countries,omitempty"`
+	NSFW               bool     `json:"nsfw,omitempty"`
 }
 
 // SearchExternalMedia fans out one normalized search intent to TMDb, Douban
-// and Bangumi. This mirrors MoviePilot's separation of "metadata discovery"
+// and Bangumi. This keeps a clean separation of "metadata discovery"
 // from later tracker searching/downloading, but keeps our Go service small.
 func SearchExternalMedia(ctx context.Context, query string, year int, mediaType string, tmdb *TMDbProvider, douban *DoubanProvider, bangumi *BangumiProvider) []ExternalMediaResult {
 	query = strings.TrimSpace(query)
@@ -57,6 +61,7 @@ func SearchExternalMedia(ctx context.Context, query string, year int, mediaType 
 			MediaType:        typ,
 			Title:            m.Title,
 			OriginalTitle:    m.OriginalName,
+			OriginalName:     m.OriginalName,
 			OriginalLanguage: strings.Join(m.Languages, ","),
 			Overview:         m.Overview,
 			PosterURL:        m.PosterURL,
@@ -68,6 +73,9 @@ func SearchExternalMedia(ctx context.Context, query string, year int, mediaType 
 			BangumiID:        m.BangumiID,
 			SubscribeKeyword: buildSubscribeKeyword(m.Title, m.Year),
 			TotalEpisodes:    totalEpisodes,
+			Languages:        m.Languages,
+			Countries:        m.Countries,
+			NSFW:             m.NSFW,
 		})
 	}
 

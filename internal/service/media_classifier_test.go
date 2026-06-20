@@ -12,7 +12,7 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
-func TestClassifyMediaCategoryMatchesMoviePilotStyleRules(t *testing.T) {
+func TestClassifyMediaCategoryMatchesSmartRules(t *testing.T) {
 	tests := []struct {
 		name  string
 		input mediaClassifyInput
@@ -143,6 +143,43 @@ func TestClassifyMediaCategoryMatchesMoviePilotStyleRules(t *testing.T) {
 				Title:     "HNTV Spring Festival Gala 2026 2160p WEB-DL",
 			},
 			want: "综艺",
+		},
+		{
+			name: "japanese anime localized chinese title defaults to jp without metadata",
+			input: mediaClassifyInput{
+				MediaType: "anime",
+				Title:     "葬送的芙莉莲",
+			},
+			want: "日番",
+		},
+		{
+			name: "chinese anime explicit marker without metadata",
+			input: mediaClassifyInput{
+				MediaType: "anime",
+				Title:     "斗破苍穹 国漫",
+			},
+			want: "国漫",
+		},
+		{
+			name: "anime with JP country metadata is jp even from wrong source folder",
+			input: mediaClassifyInput{
+				MediaType: "anime",
+				Title:     "间谍过家家 SPY×FAMILY",
+				Countries: []string{"JP"},
+				Genres:    []string{"16"},
+				Category:  "国产剧",
+			},
+			want: "日番",
+		},
+		{
+			name: "anime with CN country metadata is cn",
+			input: mediaClassifyInput{
+				MediaType: "anime",
+				Title:     "某番",
+				Countries: []string{"CN"},
+				Genres:    []string{"16"},
+			},
+			want: "国漫",
 		},
 		{
 			name: "jav code is adult",

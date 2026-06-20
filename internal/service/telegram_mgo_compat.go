@@ -596,14 +596,16 @@ func (s *TelegramBotService) cmdMgoSyncGroup(ctx context.Context, channel *model
 		if user == nil || UserIsProtectedAccount(ctx, s.repo, user) {
 			continue
 		}
-		member := false
+		// 仅当所有绑定群组/频道都「查实不是成员」时才判定为可清理；
+		// getChatMember 出错（membershipUnknown）时保守跳过，避免误删。
+		confirmedNo := true
 		for _, chatID := range chatIDs {
-			if s.telegramUserIsChatMember(ctx, channel, chatID, int(binding.TelegramUserID)) {
-				member = true
+			if s.telegramChatMembership(ctx, channel, chatID, int(binding.TelegramUserID)) != membershipNo {
+				confirmedNo = false
 				break
 			}
 		}
-		if !member {
+		if confirmedNo {
 			stale = append(stale, staleBinding{User: *user, Binding: binding})
 		}
 	}
@@ -634,7 +636,7 @@ func (s *TelegramBotService) telegramMembershipChatIDs(channel *model.NotifyChan
 	cfg := s.telegramChannelConfig(channel)
 	seen := map[string]struct{}{}
 	var out []string
-	for _, key := range []string{"group_chat_id", "channel_chat_id"} {
+	for _, key := range []string{"group_chat_id", "channel_chat_id", "command_chat_id"} {
 		value := strings.TrimSpace(cfg[key])
 		if value == "" {
 			continue

@@ -61,7 +61,9 @@ func TestReadLocalEpisodeMetadataMergesShowAndEpisode(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(showDir, "tvshow.nfo"), []byte(`<tvshow><title>正确剧名</title><year>2024</year><tmdbid>123</tmdbid></tvshow>`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(nfoPath(mediaPath), []byte(`<episodedetails><title>第三集</title><season>2</season><episode>3</episode><plot>本集简介</plot></episodedetails>`), 0o644); err != nil {
+	// 单集 NFO 携带【单集级】tmdb id(4375419)与单集名(第三集):二者都不得
+	// 覆盖整剧字段,否则同剧各集 id/原名互不相同会被拆成多张卡。
+	if err := os.WriteFile(nfoPath(mediaPath), []byte(`<episodedetails><title>第三集</title><season>2</season><episode>3</episode><plot>本集简介</plot><uniqueid type="tmdb">4375419</uniqueid></episodedetails>`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -69,9 +71,14 @@ func TestReadLocalEpisodeMetadataMergesShowAndEpisode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got == nil || got.Title != "正确剧名" || got.OriginalName != "第三集" || got.SeasonNum != 2 || got.EpisodeNum != 3 {
+	if got == nil || got.Title != "正确剧名" || got.SeasonNum != 2 || got.EpisodeNum != 3 {
 		t.Fatalf("unexpected metadata: %+v", got)
 	}
+	// 单集名不得写入整剧原名(分组键)。
+	if got.OriginalName != "" {
+		t.Fatalf("episode title must not pollute OriginalName, got %q", got.OriginalName)
+	}
+	// 单集级简介按集回填;整剧 tmdb 仍取 tvshow.nfo 的 123,单集 id 不得覆盖。
 	if got.Overview != "本集简介" || got.TMDbID != 123 {
 		t.Fatalf("episode/show merge failed: %+v", got)
 	}
@@ -464,7 +471,9 @@ func TestScanLibraryUsesLocalMetadata(t *testing.T) {
 	if err := db.First(&media, "path = ?", mediaPath).Error; err != nil {
 		t.Fatal(err)
 	}
-	if media.Title != "本地剧名" || media.OriginalName != "本地第三集" || media.SeasonNum != 2 || media.EpisodeNum != 3 || media.ScrapeStatus != "matched" {
+	// 单集名(本地第三集)不应写入 OriginalName(整剧原名,合集分组键)。
+	// tvshow.nfo 未提供 originaltitle, 故 OriginalName 应为空。
+	if media.Title != "本地剧名" || media.OriginalName != "" || media.SeasonNum != 2 || media.EpisodeNum != 3 || media.ScrapeStatus != "matched" {
 		t.Fatalf("unexpected scanned media: %+v", media)
 	}
 

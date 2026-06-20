@@ -409,6 +409,21 @@ func TestCloudSeriesTitlePrefersShowFolder(t *testing.T) {
 	}
 }
 
+func TestCloudMetadataNeedsRefreshWhenPathHintConflicts(t *testing.T) {
+	existing := existingCloudMedia{
+		Year:   2025,
+		TMDbID: 220269,
+	}
+	local := &LocalMetadata{
+		Year:     2025,
+		TMDbID:   296753,
+		PathHint: true,
+	}
+	if !cloudMetadataNeedsRefresh(existing, local) {
+		t.Fatal("conflicting explicit cloud path hint should refresh existing media")
+	}
+}
+
 func TestScanCloudLibraryReadsRemoteSTRMTarget(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -565,7 +580,9 @@ func TestScanCloudLibraryReadsRemoteNFOAndArtwork(t *testing.T) {
 	if err := repos.DB.First(&media).Error; err != nil {
 		t.Fatal(err)
 	}
-	if media.Title != "剑来" || media.OriginalName != "第一集" || media.Year != 2024 {
+	// 单集名(episode <title>「第一集」)不得写入 OriginalName(整剧原名/分组键)。
+	// tvshow.nfo 未提供 originaltitle, 故 OriginalName 应为空。
+	if media.Title != "剑来" || media.OriginalName != "" || media.Year != 2024 {
 		t.Fatalf("metadata not applied: %#v", media)
 	}
 	if media.SeasonNum != 1 || media.EpisodeNum != 1 {

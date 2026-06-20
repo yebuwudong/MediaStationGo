@@ -113,7 +113,7 @@ func normalizeSubscriptionDefaults(sub *model.Subscription) {
 	sub.SearchMode = truncateString(strings.TrimSpace(sub.SearchMode), 16)
 	sub.Source = truncateString(strings.TrimSpace(sub.Source), 32)
 	sub.OriginalTitle = truncateString(strings.TrimSpace(sub.OriginalTitle), 512)
-	sub.OriginalLang = truncateString(strings.TrimSpace(sub.OriginalLang), 64)
+	sub.OriginalLanguage = truncateString(strings.TrimSpace(sub.OriginalLanguage), 64)
 	sub.IMDBID = NormalizeIMDBID(sub.IMDBID)
 	sub.DoubanID = NormalizeDoubanID(sub.DoubanID)
 	if strings.TrimSpace(sub.SearchMode) == "" {
@@ -164,6 +164,11 @@ func (s *SubscriptionService) Restore(ctx context.Context, id string) (*model.Su
 		Updates(map[string]any{
 			"enabled":        true,
 			"archive_reason": "",
+			// 重置为 0:此前可能被 feed 低估并锁死(updateSubscriptionTotalEpisodes
+			// 只增不减,resolveSubscriptionTotalEpisodes 见 >0 即不再回查元数据)。
+			// 归零后下次 run 会从 TMDb/豆瓣等权威源重算真实总集数,避免恢复后
+			// 因"误判已无缺集"而不再搜索资源。
+			"total_episodes": 0,
 		}).Error; err != nil {
 		return nil, err
 	}
@@ -681,6 +686,36 @@ func (s *SubscriptionService) notifySubscriptionHit(sub *model.Subscription, que
 				data["backdrop_url"] = first.BackdropURL
 			}
 		}
+		// 补充媒体通知模板(formatTelegramMediaNotification)所需字段:片名 / 原名 /
+		// 语言 / 年份 / 评分 / 类型 / 简介 / 外链 / 资源标题(供模板提取季集 + 版本)。
+		// 仅填现成可用的,缺失项模板会自动略过。
+		if strings.TrimSpace(sub.Name) != "" {
+			data["title"] = sub.Name
+		}
+		if strings.TrimSpace(sub.OriginalName) != "" {
+			data["original_title"] = sub.OriginalName
+		}
+		if strings.TrimSpace(sub.OriginalLanguage) != "" {
+			data["original_language"] = sub.OriginalLanguage
+		}
+		if sub.Year > 0 {
+			data["year"] = sub.Year
+		}
+		if sub.Rating > 0 {
+			data["rating"] = sub.Rating
+		}
+		if strings.TrimSpace(sub.Genres) != "" {
+			data["genres"] = sub.Genres
+		}
+		if strings.TrimSpace(sub.Overview) != "" {
+			data["overview"] = sub.Overview
+		}
+		if id := strings.TrimSpace(sub.IMDBID); id != "" {
+			data["imdb_url"] = "https://www.imdb.com/title/" + id + "/"
+		}
+		if len(resources) > 0 {
+			data["resource_title"] = resources[0]
+		}
 		s.notify.BroadcastEvent(ctx, NotifyEvent{
 			Type:    EventSubscriptionHit,
 			Title:   "MediaStationGo 订阅命中新资源",
@@ -707,8 +742,8 @@ func subscriptionNotifyData(sub *model.Subscription) map[string]interface{} {
 	if strings.TrimSpace(sub.OriginalTitle) != "" {
 		data["original_title"] = sub.OriginalTitle
 	}
-	if strings.TrimSpace(sub.OriginalLang) != "" {
-		data["original_language"] = sub.OriginalLang
+	if strings.TrimSpace(sub.OriginalLanguage) != "" {
+		data["original_language"] = sub.OriginalLanguage
 	}
 	if sub.Year > 0 {
 		data["year"] = sub.Year

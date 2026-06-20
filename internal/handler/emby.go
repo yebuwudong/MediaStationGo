@@ -973,7 +973,15 @@ func embyItemImageHandler(svc *service.Container) gin.HandlerFunc {
 		id := c.Param("id")
 		imgType := strings.ToLower(c.Param("type"))
 		raw, err := svc.Emby.ImageURL(ctx, id, imgType)
-		if err != nil || raw == "" {
+		if err != nil {
+			if errors.Is(err, service.ErrMediaNotFound) {
+				c.Status(http.StatusNotFound)
+				return
+			}
+			embyServePlaceholderImage(c)
+			return
+		}
+		if raw == "" {
 			embyServePlaceholderImage(c)
 			return
 		}

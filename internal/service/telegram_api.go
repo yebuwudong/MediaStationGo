@@ -87,6 +87,9 @@ func telegramProxyCandidates(cfg map[string]string) []string {
 	if len(out) > 0 {
 		return out
 	}
+	if telegramUsesCustomAPIBase(cfg) {
+		return out
+	}
 	for _, value := range []string{
 		"http://127.0.0.1:10808",
 		"http://127.0.0.1:10809",
@@ -100,6 +103,17 @@ func telegramProxyCandidates(cfg map[string]string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func telegramUsesCustomAPIBase(cfg map[string]string) bool {
+	base := strings.TrimSpace(cfg["api_base_url"])
+	if base == "" {
+		base = strings.TrimSpace(os.Getenv("MEDIASTATION_TELEGRAM_API_BASE_URL"))
+	}
+	if base == "" {
+		return false
+	}
+	return strings.TrimRight(base, "/") != defaultTelegramAPIBaseURL
 }
 
 func telegramPostForm(ctx context.Context, cfg map[string]string, method string, form url.Values, timeout time.Duration) error {

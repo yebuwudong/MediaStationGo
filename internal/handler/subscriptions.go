@@ -12,35 +12,35 @@ import (
 )
 
 type subscriptionReq struct {
-	Name          string  `json:"name" binding:"required"`
-	FeedURL       string  `json:"feed_url" binding:"required"`
-	Filter        string  `json:"filter"`
-	MediaType     string  `json:"media_type"`
-	MediaCategory string  `json:"media_category"`
-	SavePath      string  `json:"save_path"`
-	SearchMode    string  `json:"search_mode"`
-	IMDBID        string  `json:"imdb_id"`
-	TMDbID        int     `json:"tmdb_id"`
-	DoubanID      string  `json:"douban_id"`
-	Source        string  `json:"source"`
-	OriginalTitle string  `json:"original_title"`
-	OriginalLang  string  `json:"original_language"`
-	Year          int     `json:"year"`
-	Rating        float32 `json:"rating"`
-	Genres        string  `json:"genres"`
-	PosterURL     string  `json:"poster_url"`
-	BackdropURL   string  `json:"backdrop_url"`
-	Overview      string  `json:"overview"`
-	Resolution    string  `json:"resolution"`
-	Quality       string  `json:"quality"`
-	Effects       string  `json:"effects"`
-	ReleaseGroups string  `json:"release_groups"`
-	ExcludeWords  string  `json:"exclude_words"`
-	WashEnabled   bool    `json:"wash_enabled"`
-	WashPriority  string  `json:"wash_priority"`
-	TotalEpisodes int     `json:"total_episodes"`
-	Priority      int     `json:"priority"`
-	Enabled       *bool   `json:"enabled"`
+	Name             string  `json:"name" binding:"required"`
+	FeedURL          string  `json:"feed_url" binding:"required"`
+	Filter           string  `json:"filter"`
+	MediaType        string  `json:"media_type"`
+	MediaCategory    string  `json:"media_category"`
+	SavePath         string  `json:"save_path"`
+	SearchMode       string  `json:"search_mode"`
+	IMDBID           string  `json:"imdb_id"`
+	TMDbID           int     `json:"tmdb_id"`
+	DoubanID         string  `json:"douban_id"`
+	Source           string  `json:"source"`
+	OriginalTitle    string  `json:"original_title"`
+	OriginalLanguage string  `json:"original_language"`
+	Year             int     `json:"year"`
+	Rating           float32 `json:"rating"`
+	Genres           string  `json:"genres"`
+	PosterURL        string  `json:"poster_url"`
+	BackdropURL      string  `json:"backdrop_url"`
+	Overview         string  `json:"overview"`
+	Resolution       string  `json:"resolution"`
+	Quality          string  `json:"quality"`
+	Effects          string  `json:"effects"`
+	ReleaseGroups    string  `json:"release_groups"`
+	ExcludeWords     string  `json:"exclude_words"`
+	WashEnabled      bool    `json:"wash_enabled"`
+	WashPriority     string  `json:"wash_priority"`
+	TotalEpisodes    int     `json:"total_episodes"`
+	Priority         int     `json:"priority"`
+	Enabled          *bool   `json:"enabled"`
 }
 
 func createSubscriptionHandler(svc *service.Container) gin.HandlerFunc {
@@ -56,36 +56,36 @@ func createSubscriptionHandler(svc *service.Container) gin.HandlerFunc {
 			enabled = *req.Enabled
 		}
 		s := &model.Subscription{
-			UserID:        uid.(string),
-			Name:          req.Name,
-			FeedURL:       req.FeedURL,
-			Filter:        req.Filter,
-			MediaType:     req.MediaType,
-			MediaCategory: req.MediaCategory,
-			SavePath:      req.SavePath,
-			SearchMode:    req.SearchMode,
-			IMDBID:        service.NormalizeIMDBID(req.IMDBID),
-			TMDbID:        req.TMDbID,
-			DoubanID:      service.NormalizeDoubanID(req.DoubanID),
-			Source:        req.Source,
-			OriginalTitle: req.OriginalTitle,
-			OriginalLang:  req.OriginalLang,
-			Year:          req.Year,
-			Rating:        req.Rating,
-			Genres:        req.Genres,
-			PosterURL:     req.PosterURL,
-			BackdropURL:   req.BackdropURL,
-			Overview:      req.Overview,
-			Resolution:    req.Resolution,
-			Quality:       req.Quality,
-			Effects:       req.Effects,
-			ReleaseGroups: req.ReleaseGroups,
-			ExcludeWords:  req.ExcludeWords,
-			WashEnabled:   req.WashEnabled,
-			WashPriority:  req.WashPriority,
-			TotalEpisodes: req.TotalEpisodes,
-			Priority:      req.Priority,
-			Enabled:       enabled,
+			UserID:           uid.(string),
+			Name:             req.Name,
+			FeedURL:          req.FeedURL,
+			Filter:           req.Filter,
+			MediaType:        req.MediaType,
+			MediaCategory:    req.MediaCategory,
+			SavePath:         req.SavePath,
+			SearchMode:       req.SearchMode,
+			IMDBID:           service.NormalizeIMDBID(req.IMDBID),
+			TMDbID:           req.TMDbID,
+			DoubanID:         service.NormalizeDoubanID(req.DoubanID),
+			Source:           req.Source,
+			OriginalTitle:    req.OriginalTitle,
+			OriginalLanguage: req.OriginalLanguage,
+			Year:             req.Year,
+			Rating:           req.Rating,
+			Genres:           req.Genres,
+			PosterURL:        req.PosterURL,
+			BackdropURL:      req.BackdropURL,
+			Overview:         req.Overview,
+			Resolution:       req.Resolution,
+			Quality:          req.Quality,
+			Effects:          req.Effects,
+			ReleaseGroups:    req.ReleaseGroups,
+			ExcludeWords:     req.ExcludeWords,
+			WashEnabled:      req.WashEnabled,
+			WashPriority:     req.WashPriority,
+			TotalEpisodes:    req.TotalEpisodes,
+			Priority:         req.Priority,
+			Enabled:          enabled,
 		}
 		enrichSubscriptionArtwork(c.Request.Context(), svc, s)
 		if err := svc.Subscription.Create(c.Request.Context(), s); err != nil {

@@ -128,6 +128,11 @@ type DownloadTaskMeta struct {
 	MediaCategory        string
 	SourceCategory       string
 	SelectedFiles        []string
+	OriginalName         string
+	OriginalLanguage     string
+	Year                 int
+	Rating               float32
+	Genres               string
 	AllowExistingLibrary bool
 }
 
@@ -325,6 +330,12 @@ func (d *DownloadService) AddDownloadWithMeta(ctx context.Context, userID, urlSt
 	if !meta.AllowExistingLibrary && d.localMediaAlreadyExists(ctx, title) {
 		return nil, ErrMediaAlreadyInLibrary
 	}
+	if existing, ok := d.findExistingDownloadTask(ctx, identityTitle, strings.TrimSpace(meta.SubscriptionID) != ""); ok && d.qb.IsConfigured() {
+		live, liveErr := d.qb.List(ctx, "")
+		if liveErr != nil || torrentExistsInListByIdentity(live, identityTitle) {
+			return existing, ErrDownloadAlreadyExists
+		}
+	}
 	_ = d.ReloadConfig(ctx)
 	if !d.qb.IsConfigured() {
 		return nil, errors.New("no default downloader configured")
@@ -374,6 +385,13 @@ func (d *DownloadService) PrepareDownloadWithMeta(ctx context.Context, userID, u
 	}
 	if !meta.AllowExistingLibrary && d.localMediaAlreadyExists(ctx, title) {
 		return nil, ErrMediaAlreadyInLibrary
+	}
+	if existing, ok := d.findExistingDownloadTask(ctx, identityTitle, strings.TrimSpace(meta.SubscriptionID) != ""); ok && d.qb.IsConfigured() {
+		_ = existing
+		live, liveErr := d.qb.List(ctx, "")
+		if liveErr != nil || torrentExistsInListByIdentity(live, identityTitle) {
+			return nil, ErrDownloadAlreadyExists
+		}
 	}
 	_ = d.ReloadConfig(ctx)
 	if !d.qb.IsConfigured() {
@@ -853,6 +871,11 @@ func (d *DownloadService) createTask(ctx context.Context, userID, urlStr, savePa
 		SavePath:             savePath,
 		MediaType:            meta.MediaType,
 		MediaCategory:        meta.MediaCategory,
+		OriginalName:         meta.OriginalName,
+		OriginalLanguage:     meta.OriginalLanguage,
+		Year:                 meta.Year,
+		Rating:               meta.Rating,
+		Genres:               meta.Genres,
 		Status:               "queued",
 		AllowExistingLibrary: meta.AllowExistingLibrary,
 	}
@@ -1647,6 +1670,11 @@ func (d *DownloadService) notifyDownloadComplete(ctx context.Context, torrent QB
 	}
 	body := fmt.Sprintf("任务：%s\n保存路径：%s\nHash：%s", name, firstNonEmpty(torrent.ContentPath, torrent.SavePath), torrent.Hash)
 	data := map[string]interface{}{}
+	// resource_title 供 Telegram 模板从发布名提取季集(SxxEyy)与版本(分辨率/编码/
+	// 字幕组等)信息;隐藏不直接展示。优先用 torrent 原始名(信息最全)。
+	if rt := strings.TrimSpace(torrent.Name); rt != "" {
+		data["resource_title"] = rt
+	}
 	if task != nil {
 		if strings.TrimSpace(task.PosterURL) != "" {
 			data["poster_url"] = task.PosterURL
@@ -1660,8 +1688,26 @@ func (d *DownloadService) notifyDownloadComplete(ctx context.Context, torrent QB
 		if strings.TrimSpace(task.MediaCategory) != "" {
 			data["media_category"] = task.MediaCategory
 		}
+		if strings.TrimSpace(task.Title) != "" {
+			data["title"] = task.Title
+		}
 		if strings.TrimSpace(task.Overview) != "" {
 			data["overview"] = truncateTelegramText(task.Overview, 180)
+		}
+		if strings.TrimSpace(task.OriginalName) != "" {
+			data["original_title"] = task.OriginalName
+		}
+		if strings.TrimSpace(task.OriginalLanguage) != "" {
+			data["original_language"] = task.OriginalLanguage
+		}
+		if task.Year > 0 {
+			data["year"] = task.Year
+		}
+		if task.Rating > 0 {
+			data["rating"] = task.Rating
+		}
+		if strings.TrimSpace(task.Genres) != "" {
+			data["genres"] = task.Genres
 		}
 		if imdbURL := imdbExternalURL(task.IMDBID); imdbURL != "" {
 			data["imdb_url"] = imdbURL

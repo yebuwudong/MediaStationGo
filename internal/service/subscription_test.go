@@ -352,7 +352,9 @@ func TestSelectSiteSearchCandidatesSingleExistingEpisodeIsSkipped(t *testing.T) 
 	}
 }
 
-func TestSelectSiteSearchCandidatesSinglePackIsSkippedWhenLibraryPartiallyExists(t *testing.T) {
+func TestSelectSiteSearchCandidatesFullPackUsedAsFallbackWhenLibraryPartiallyExists(t *testing.T) {
+	// 本地缺第 3 集,站点只有整季全集包(无单集种)。剧集完结后站点常只挂全集包,
+	// 此时必须用全集包兜底补缺集,否则"补全缺失集"永远匹配为空(用户报告的 bug)。
 	sub := &model.Subscription{Name: "间谍过家家 自动订阅", Filter: "间谍过家家", MediaType: "tv", TotalEpisodes: 3}
 	results := []SearchResult{
 		{Title: "间谍过家家 S01 Complete 1080p", DownloadURL: "https://pt/download/pack", Seeders: 100},
@@ -365,8 +367,11 @@ func TestSelectSiteSearchCandidatesSinglePackIsSkippedWhenLibraryPartiallyExists
 	}
 
 	got := selectSiteSearchCandidates(results, sub, map[string]struct{}{}, availability)
-	if len(got) != 0 {
-		t.Fatalf("selected %#v, want none because a full pack would redownload existing episodes", got)
+	if len(got) != 1 {
+		t.Fatalf("selected %#v, want the full pack as fallback to cover missing episode 3", got)
+	}
+	if got[0].Download != "https://pt/download/pack" {
+		t.Fatalf("selected %#v, want the Complete pack", got)
 	}
 }
 
@@ -913,6 +918,9 @@ func TestRestoreArchivedSubscriptionReturnsToActiveAndClearsSeenState(t *testing
 	}
 	if restored.ArchivedAt != nil || restored.ArchiveReason != "" || !restored.Enabled {
 		t.Fatalf("restored subscription not active: archived=%v reason=%q enabled=%v", restored.ArchivedAt, restored.ArchiveReason, restored.Enabled)
+	}
+	if restored.TotalEpisodes != 0 {
+		t.Fatalf("restored total_episodes = %d, want 0 so it gets recomputed from authoritative metadata", restored.TotalEpisodes)
 	}
 	active, err := repos.Subscription.List(t.Context())
 	if err != nil {

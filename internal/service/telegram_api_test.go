@@ -249,6 +249,13 @@ func TestTelegramProxyCandidatesDefaultLocalFallbacks(t *testing.T) {
 	}
 }
 
+func TestTelegramProxyCandidatesSkipDefaultLocalFallbacksForCustomAPIBase(t *testing.T) {
+	got := telegramProxyCandidates(map[string]string{"api_base_url": "http://127.0.0.1:18080"})
+	if len(got) != 0 {
+		t.Fatalf("custom api_base_url should not use default proxy candidates, got %v", got)
+	}
+}
+
 func TestTelegramHTTPClientsPreferConfiguredProxy(t *testing.T) {
 	clients := telegramHTTPClients(time.Second, map[string]string{
 		"proxy_url": "http://proxy.example:7890",

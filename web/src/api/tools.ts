@@ -11,6 +11,7 @@ export interface OrganizeOverrides {
   dest_path?: string
   transfer_mode?: string
   media_type?: string
+  media_category?: string
   scan_after?: boolean
   scrape_after?: boolean
   library_id?: string
@@ -95,5 +96,20 @@ export const toolsAPI = {
   notifyTest: (title: string, body: string) =>
     api
       .post<{ message: string }>('/admin/notify/test', { title, body })
+      .then((r) => r.data),
+
+  // repairAndRescrapeAll 触发「全库修复+重刮」：先从媒体路径中的
+  // {tmdb-N}/{bangumi-N} 占位符回填缺失/错误的外部 ID，再批量重刮整库。
+  // 后端异步执行，立即返回；进度通过 WS "scrape" topic 推送。
+  repairAndRescrapeAll: () =>
+    api
+      .post<{ status: string }>('/admin/media/repair-rescrape', {})
+      .then((r) => r.data),
+
+  // repairAndRescrapeLibrary 触发「单库修复+重刮」：只对指定媒体库回填占位符
+  // 外部 ID 并重刮，不影响其它库。后端异步执行，进度通过 WS "scrape" topic 推送。
+  repairAndRescrapeLibrary: (libraryID: string) =>
+    api
+      .post<{ status: string }>(`/admin/libraries/${libraryID}/repair-rescrape`, {})
       .then((r) => r.data),
 }

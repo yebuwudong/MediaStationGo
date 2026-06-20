@@ -141,7 +141,7 @@ func selectPreparedSubscriptionCandidates(candidates []siteSearchCandidate, sub 
 
 	mediaType := normalizeMediaType(sub.MediaType, sub.Name+" "+sub.Filter, "")
 	if !isSubscriptionSeriesType(mediaType) {
-		// 对齐 MoviePilot：非洗版订阅成功下载一次即满足，媒体库/下载中已存在则不再重复下载。
+		// 非洗版订阅成功下载一次即满足，媒体库/下载中已存在则不再重复下载。
 		if (sub == nil || !sub.WashEnabled) && local.LocalMediaCount > 0 {
 			return nil
 		}
@@ -157,8 +157,16 @@ func selectPreparedSubscriptionCandidates(candidates []siteSearchCandidate, sub 
 		}
 		missingSet := missingEpisodeSet(local)
 		onlyMissing := make([]siteSearchCandidate, 0, len(candidates))
-		for _, candidate := range candidates {
+		var packFallback *siteSearchCandidate
+		for i := range candidates {
+			candidate := candidates[i]
 			if candidate.Episode <= 0 {
+				// 整季/全集包(无单集号)。剧集完结后站点常只挂全集包,
+				// 这里记下来作兜底:当单集候选不足以补齐缺失集时启用,
+				// 否则"补全缺失集"在站点只有全集包时永远匹配为空。
+				if candidate.Pack && packFallback == nil {
+					packFallback = &candidates[i]
+				}
 				continue
 			}
 			season := candidate.Season
@@ -175,7 +183,13 @@ func selectPreparedSubscriptionCandidates(candidates []siteSearchCandidate, sub 
 			}
 			onlyMissing = append(onlyMissing, candidate)
 		}
-		return sortedEpisodeCandidates(onlyMissing)
+		selected := sortedEpisodeCandidates(onlyMissing)
+		if len(selected) == 0 && packFallback != nil {
+			// 没有可用的单集候选,但站点有整季/全集包 → 用包兜底补缺集。
+			// 代价是会重下已有集,但用户主动触发补全时这是可接受的。
+			return []siteSearchCandidate{*packFallback}
+		}
+		return selected
 	}
 
 	for _, candidate := range candidates {
@@ -253,7 +267,7 @@ func stableDownloadURLKey(raw string) string {
 	return base
 }
 
-// defaultExcludeWords 是参考 MoviePilot 默认过滤的「垃圾版本」排除清单，对所有订阅生效，
+// defaultExcludeWords 是默认过滤的「垃圾版本」排除清单，对所有订阅生效，
 // 与用户自定义排除词合并。拉丁词在 containsAnyExcludeToken 里按词边界匹配以避免子串误伤。
 const defaultExcludeWords = "cam,ts,tc,telesync,telecine,hdcam,hdts,枪版,抢先,抢鲜,预告,trailer,sample"
 

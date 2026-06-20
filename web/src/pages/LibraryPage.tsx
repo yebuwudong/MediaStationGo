@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import toast from 'react-hot-toast'
-import { ArrowLeft, Play, Film, Database, FileText, Search, Sparkles, Trash2 } from 'lucide-react'
+import { ArrowLeft, Play, Film, Database, FileText, Search, Sparkles, Trash2, Pencil } from 'lucide-react'
 
 import { libraryAPI } from '../api/library'
+import { toolsAPI } from '../api/tools'
 import { storageAPI, type CloudScanStatus } from '../api/storage_config'
 import { api } from '../api/client'
 import { recycleAPI } from '../api/recycle'
@@ -17,6 +18,7 @@ import { getSeriesKey, groupSeries, isEpisodeLike, seriesTitle, type SeriesCard 
 import { useWebSocket } from '../hooks/useWebSocket'
 import { confirmAction } from '../components/ConfirmDialog'
 import { ManualScrapeDialog } from '../components/ManualScrapeDialog'
+import { MetadataEditDialog } from '../components/MetadataEditDialog'
 
 export function LibraryPage() {
   const { id = '' } = useParams()
@@ -31,8 +33,10 @@ export function LibraryPage() {
   const [scanning, setScanning] = useState(false)
   const [scanProgress, setScanProgress] = useState('')
   const [scraping, setScraping] = useState(false)
+  const [repairing, setRepairing] = useState(false)
   const [seriesToolBusy, setSeriesToolBusy] = useState('')
   const [manualSeriesScrapeOpen, setManualSeriesScrapeOpen] = useState(false)
+  const [seriesMetadataEditOpen, setSeriesMetadataEditOpen] = useState(false)
   const [manualMovie, setManualMovie] = useState<Media | null>(null)
   const [movieToolBusy, setMovieToolBusy] = useState('')
 
@@ -56,7 +60,7 @@ export function LibraryPage() {
     // 按季分组，按集排序
     const seasons = new Map<number, Media[]>()
     for (const ep of eps) {
-      const s = ep.season_num || 1
+      const s = ep.episode_num > 0 ? (ep.season_num ?? 0) : (ep.season_num || 1)
       if (!seasons.has(s)) seasons.set(s, [])
       seasons.get(s)!.push(ep)
     }
@@ -226,7 +230,11 @@ export function LibraryPage() {
     }
 
     const next = seriesCards.find((card) => card.key === key)
-    if (next) setSelectedSeries(next)
+    if (next) {
+      setSelectedSeries(next)
+    } else {
+      setSelectedSeries(null)
+    }
   }, [isSeries, loading, searchParams, seriesCards])
 
   useEffect(() => {
@@ -271,6 +279,16 @@ export function LibraryPage() {
       toast.success('刮削已加入后台队列')
     } catch { toast.error('刮削失败') }
     finally { setScraping(false) }
+  }
+
+  const handleRepairRescrape = async () => {
+    if (repairing) return
+    setRepairing(true)
+    try {
+      await toolsAPI.repairAndRescrapeLibrary(id)
+      toast.success('本库修复+重刮已加入后台队列，进度可在任务中查看')
+    } catch { toast.error('修复+重刮启动失败') }
+    finally { setRepairing(false) }
   }
 
   const runSeriesTool = async (key: string, label: string, action: (media: Media) => Promise<unknown>) => {
@@ -385,6 +403,7 @@ export function LibraryPage() {
   const clearSelectedSeries = () => {
     setSelectedSeries(null)
     setSelectedSeason(null)
+    setSeriesMetadataEditOpen(false)
     const next = new URLSearchParams(searchParams)
     next.delete('series')
     setSearchParams(next)
@@ -420,6 +439,7 @@ export function LibraryPage() {
           <div className="flex flex-wrap gap-2">
             <button onClick={handleScan} disabled={scanning} className="btn-outline">{scanning ? '扫描中…' : '立即扫描'}</button>
             <button onClick={handleScrape} disabled={scraping} className="btn-outline">{scraping ? '刮削中…' : '刮削元数据'}</button>
+            <button onClick={handleRepairRescrape} disabled={repairing} className="btn-outline" title="回填本库占位符外部 ID 并重刮，修正空 ID / 拆集问题">{repairing ? '修复中…' : '修复+重刮本库'}</button>
           </div>
         )}
       </div>
@@ -518,6 +538,10 @@ export function LibraryPage() {
                         <Search size={13} className="text-[#c9954a]" />
                         <span>手动匹配整剧</span>
                       </button>
+                      <button onClick={() => setSeriesMetadataEditOpen(true)} disabled={!!seriesToolBusy} className="btn-outline py-2 px-3.5 text-xs gap-1.5">
+                        <Pencil size={13} />
+                        <span>编辑元数据</span>
+                      </button>
                       <button onClick={handleSeriesProbe} disabled={!!seriesToolBusy} className="btn-outline py-2 px-3.5 text-xs gap-1.5">
                         <Database size={13} />
                         <span>{seriesToolBusy === 'probe' ? '探测中…' : '探测媒体轨'}</span>
@@ -550,14 +574,16 @@ export function LibraryPage() {
                         : 'border-sand-200 bg-white text-ink-100 hover:border-brand-200 hover:text-brand-600')
                     }
                   >
-                    第 {season} 季 · {episodes.length} 集
+                    {season === 0 ? '特别篇' : `第 ${season} 季`} · {episodes.length} 集
                   </button>
                 ))}
               </div>
 
               <div>
                 <h3 className="mb-3 font-display text-lg font-semibold text-ink-600">
-                  第 {selectedSeason ?? selectedEpisodes[0]?.season ?? 1} 季
+                  {(selectedSeason ?? selectedEpisodes[0]?.season ?? 1) === 0
+                    ? '特别篇'
+                    : `第 ${selectedSeason ?? selectedEpisodes[0]?.season ?? 1} 季`}
                 </h3>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
                   {visibleEpisodes.map((ep) => (
@@ -566,8 +592,17 @@ export function LibraryPage() {
                       className="group flex items-center gap-3 rounded-xl border border-sand-200 bg-white p-3 shadow-card transition-all hover:border-brand-300 hover:shadow-card-hover"
                     >
                       <Link to={`/play/${ep.id}`} className="flex min-w-0 flex-1 items-center gap-3">
-                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-600 font-semibold text-sm">
-                          {ep.episode_num || '—'}
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-brand-50 text-brand-600 font-semibold text-sm">
+                          {ep.backdrop_url || ep.poster_url ? (
+                            <img
+                              src={imageURL(ep.backdrop_url || ep.poster_url || '')}
+                              alt=""
+                              className="h-full w-full object-cover"
+                              referrerPolicy="no-referrer"
+                            />
+                          ) : (
+                            ep.episode_num || '—'
+                          )}
                         </div>
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-medium text-ink-600">
@@ -608,6 +643,15 @@ export function LibraryPage() {
         scopeLabel={selectedSeries ? seriesTitle(selectedSeries.rep) : '当前剧集'}
         onClose={() => setManualSeriesScrapeOpen(false)}
         onApplied={reloadCurrentLibrary}
+      />
+      <MetadataEditDialog
+        open={seriesMetadataEditOpen}
+        media={selectedSeries?.rep ?? null}
+        mediaIds={selectedSeriesMediaIDs}
+        mode="series"
+        scopeLabel={selectedSeries ? seriesTitle(selectedSeries.rep) : '当前剧集'}
+        onClose={() => setSeriesMetadataEditOpen(false)}
+        onSaved={reloadCurrentLibrary}
       />
       <ManualScrapeDialog
         open={!!manualMovie}

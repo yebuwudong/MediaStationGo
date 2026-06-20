@@ -72,6 +72,117 @@ func TestMediaUpsertSkipsUnchangedExistingRow(t *testing.T) {
 	}
 }
 
+func TestMediaUpsertRefreshesCloudExternalIDFromPathHint(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := New(db)
+	lib := model.Library{Name: "OpenList · 国产剧", Path: "cloud://openlist/国产剧", Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	path := "cloud://openlist/国产剧/折腰 (2025) {tmdb-296753}/Season 1/折腰.S01E01.mkv"
+	existing := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "折腰",
+		Path:         path,
+		SeasonNum:    1,
+		EpisodeNum:   1,
+		TMDbID:       220269,
+		ScrapeStatus: "matched",
+	}
+	if err := repos.Media.Upsert(t.Context(), &existing); err != nil {
+		t.Fatal(err)
+	}
+	next := model.Media{
+		LibraryID:  lib.ID,
+		Title:      "折腰",
+		Path:       path,
+		SeasonNum:  1,
+		EpisodeNum: 1,
+		TMDbID:     296753,
+	}
+	if err := repos.Media.Upsert(t.Context(), &next); err != nil {
+		t.Fatal(err)
+	}
+	var got model.Media
+	if err := repos.DB.Where("path = ?", path).First(&got).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.TMDbID != 296753 || got.ScrapeStatus != "pending" {
+		t.Fatalf("cloud path hint should refresh tmdb and retry scrape, got tmdb=%d status=%q", got.TMDbID, got.ScrapeStatus)
+	}
+}
+
+// TestMediaUpsertMigratesCloudLibraryIDOnRescan 复现"一键挂载子目录后媒体消失"的
+// 回归：同一 cloud:// 文件先被父目录库扫描入库，之后用户按二级分类重新挂载到更
+// 精确的分类库并扫描，library_id 必须迁移到新分类库，否则媒体被钉死在旧库、新库
+// 视图里看不到。本地媒体物理位置固定，不参与迁移。
+func TestMediaUpsertMigratesCloudLibraryIDOnRescan(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := New(db)
+	parent := model.Library{Name: "OpenList", Path: "cloud://openlist", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &parent); err != nil {
+		t.Fatal(err)
+	}
+	category := model.Library{Name: "国漫", Path: "cloud://openlist/国漫", Type: "anime", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &category); err != nil {
+		t.Fatal(err)
+	}
+	path := "cloud://openlist/国漫/成何体统 (2024) {tmdb-256783}/Season 1/成何体统.S01E01.mkv"
+	// 第一次：被父目录库扫描入库。
+	first := model.Media{LibraryID: parent.ID, Title: "成何体统", Path: path, SeasonNum: 1, EpisodeNum: 1}
+	if err := repos.Media.Upsert(t.Context(), &first); err != nil {
+		t.Fatal(err)
+	}
+	// 第二次：按二级分类重新挂载并扫描，归入更精确的「国漫」库。
+	second := model.Media{LibraryID: category.ID, Title: "成何体统", Path: path, SeasonNum: 1, EpisodeNum: 1}
+	if err := repos.Media.Upsert(t.Context(), &second); err != nil {
+		t.Fatal(err)
+	}
+	var got model.Media
+	if err := repos.DB.Where("path = ?", path).First(&got).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.LibraryID != category.ID {
+		t.Fatalf("cloud media library_id should migrate to category library %q, got %q", category.ID, got.LibraryID)
+	}
+
+	// 本地媒体不迁移：同一物理路径不应改库归属。
+	localA := model.Library{Name: "Movies A", Path: "/media/a", Type: "movie", Enabled: true}
+	localB := model.Library{Name: "Movies B", Path: "/media/b", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &localA); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Library.Create(t.Context(), &localB); err != nil {
+		t.Fatal(err)
+	}
+	localPath := "/media/a/Inception (2010)/Inception.mkv"
+	if err := repos.Media.Upsert(t.Context(), &model.Media{LibraryID: localA.ID, Title: "Inception", Path: localPath}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Media.Upsert(t.Context(), &model.Media{LibraryID: localB.ID, Title: "Inception", Path: localPath}); err != nil {
+		t.Fatal(err)
+	}
+	var localGot model.Media
+	if err := repos.DB.Where("path = ?", localPath).First(&localGot).Error; err != nil {
+		t.Fatal(err)
+	}
+	if localGot.LibraryID != localA.ID {
+		t.Fatalf("local media library_id must not migrate, want %q got %q", localA.ID, localGot.LibraryID)
+	}
+}
+
 type fakeMediaSearchBackend struct {
 	ids []string
 	err error
