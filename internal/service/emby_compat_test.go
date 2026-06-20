@@ -339,6 +339,9 @@ func TestEmbyMovieTypedLibraryAutoDetectsEpisodes(t *testing.T) {
 	if view["CollectionType"] != "mixed" {
 		t.Fatalf("mixed library collection type = %#v", view["CollectionType"])
 	}
+	if view["RecursiveItemCount"] != 2 || view["ChildCount"] != 2 {
+		t.Fatalf("mixed library counts = recursive %#v child %#v", view["RecursiveItemCount"], view["ChildCount"])
+	}
 	views, err := svc.Views(t.Context(), "user-1")
 	if err != nil {
 		t.Fatalf("views: %v", err)
@@ -352,12 +355,25 @@ func TestEmbyMovieTypedLibraryAutoDetectsEpisodes(t *testing.T) {
 		switch item["CollectionType"] {
 		case "movies":
 			movieViewID = item["Id"].(string)
+			if item["RecursiveItemCount"] != 1 || item["ChildCount"] != 1 {
+				t.Fatalf("movie virtual view counts = %#v", item)
+			}
 		case "tvshows":
 			showViewID = item["Id"].(string)
+			if item["RecursiveItemCount"] != 1 || item["ChildCount"] != 1 {
+				t.Fatalf("show virtual view counts = %#v", item)
+			}
 		}
 	}
 	if movieViewID == "" || showViewID == "" {
 		t.Fatalf("split views should expose movies and tvshows, got %#v", viewItems)
+	}
+	counts, err := svc.ItemsCounts(t.Context(), "user-1", "")
+	if err != nil {
+		t.Fatalf("item counts: %v", err)
+	}
+	if counts["MovieCount"] != 1 || counts["SeriesCount"] != 1 || counts["EpisodeCount"] != 1 || counts["ItemCount"] != 2 {
+		t.Fatalf("unexpected item counts: %#v", counts)
 	}
 
 	movieViewItems, err := svc.Items(t.Context(), ItemsParams{ParentID: movieViewID, IncludeItemTypes: []string{"Movie"}, Recursive: true, Limit: 50})

@@ -205,6 +205,7 @@ type DownloadTask struct {
 	Source         string  `gorm:"size:32;not null" json:"source"` // qbittorrent / transmission / http
 	URL            string  `gorm:"size:2048;not null" json:"-"`
 	Title          string  `gorm:"size:512" json:"title,omitempty"`
+	IdentityKey    string  `gorm:"index;size:128" json:"-"`
 	PosterURL      string  `gorm:"size:2048" json:"poster_url,omitempty"`
 	BackdropURL    string  `gorm:"size:2048" json:"backdrop_url,omitempty"`
 	Overview       string  `gorm:"type:text" json:"overview,omitempty"`

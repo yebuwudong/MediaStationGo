@@ -66,10 +66,8 @@ func (s *SiteService) ResolveDownloadURL(ctx context.Context, raw string) string
 		return raw
 	}
 	cfg := s.siteModelToConfig(matched)
-	timeout := cfg.Timeout
-	if timeout <= 0 {
-		timeout = 15 * time.Second
-	}
+	timeout := siteRequestTimeout(*matched)
+	cfg.Timeout = timeout
 	resolveCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	resolved, err := adapter.GetDownloadURL(resolveCtx, cfg, id)
@@ -89,11 +87,11 @@ func (s *SiteService) FetchTorrentFile(ctx context.Context, raw string) ([]byte,
 		return nil, "", errors.New("no matching PT site for torrent URL")
 	}
 	cfg := s.siteModelToConfig(matched)
-	timeout := cfg.Timeout
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
-	req, err := buildRequest(ctx, http.MethodGet, raw, cfg, nil)
+	timeout := siteRequestTimeout(*matched)
+	cfg.Timeout = timeout
+	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	req, err := buildRequest(fetchCtx, http.MethodGet, raw, cfg, nil)
 	if err != nil {
 		return nil, "", err
 	}
@@ -296,18 +294,17 @@ func (s *SiteService) TestConnection(ctx context.Context, id string) (bool, stri
 		return false, "site not found", err
 	}
 
-	// Get timeout from site config (default 15 seconds)
-	timeout := site.Timeout
-	if timeout <= 0 {
-		timeout = 15
-	}
+	// Use the effective site timeout; M-Team gets a longer floor because the
+	// API is rate-limited and often slower than ordinary tracker pages.
+	timeout := siteRequestTimeout(*site)
 	flareSolverrURL := s.flareSolverrURL
 
 	// ── Path 1: site-aware adapter Authenticate ────────────────────────
 	// custom_rss 没有真适配器，跳过；其它类型先尝试针对性认证端点。
 	if adapter := NewSiteAdapter(site); adapter != nil && site.Type != "" && site.Type != "custom_rss" {
 		cfg := s.siteModelToConfig(site)
-		actx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+		cfg.Timeout = timeout
+		actx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		if authErr := adapter.Authenticate(actx, cfg); authErr == nil {
 			now := time.Now()
@@ -342,7 +339,7 @@ func (s *SiteService) TestConnection(ctx context.Context, id string) (bool, stri
 	}
 
 	// ── Path 2: generic GET with browser headers / FlareSolverr ───────
-	ok, msg, err := helper.TestSiteConnectivity(site, flareSolverrURL, timeout, s.log)
+	ok, msg, err := helper.TestSiteConnectivity(site, flareSolverrURL, int(timeout.Seconds()), s.log)
 	if err != nil {
 		now := time.Now()
 		_ = s.repo.DB.WithContext(ctx).Model(&model.Site{}).Where("id = ?", id).
@@ -424,11 +421,8 @@ func (s *SiteService) Search(ctx context.Context, keyword string) ([]SearchResul
 
 			cfg := s.siteModelToConfig(&site)
 
-			// Use site timeout or default 30s
-			timeout := time.Duration(site.Timeout) * time.Second
-			if timeout <= 0 {
-				timeout = 30 * time.Second
-			}
+			timeout := siteRequestTimeout(site)
+			cfg.Timeout = timeout
 			ctxWithTimeout, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 

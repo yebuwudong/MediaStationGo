@@ -286,6 +286,7 @@ func matchesSubscriptionRules(sub *model.Subscription, title string) bool {
 func subscriptionCandidateScore(sub *model.Subscription, item SearchResult) int {
 	title := strings.ToLower(item.Title)
 	score := item.Seeders
+	score += subscriptionCandidateTitleScore(sub, item.Title)
 	if sub == nil || !sub.WashEnabled {
 		if item.Free {
 			score += 25
@@ -316,6 +317,107 @@ func subscriptionCandidateScore(sub *model.Subscription, item SearchResult) int 
 		score += 25
 	}
 	return score
+}
+
+func subscriptionCandidateTitleScore(sub *model.Subscription, title string) int {
+	if sub == nil || strings.TrimSpace(title) == "" {
+		return 0
+	}
+	titleKey := normalizeAvailabilityComparable(title)
+	if titleKey == "" {
+		return 0
+	}
+	best := 0
+	for _, query := range subscriptionTitleMatchQueries(sub) {
+		queryKey := normalizeAvailabilityComparable(query)
+		if queryKey == "" {
+			continue
+		}
+		switch {
+		case titleKey == queryKey:
+			best = maxInt(best, 2600)
+		case strings.Contains(titleKey, queryKey):
+			best = maxInt(best, 2200)
+		case strings.Contains(queryKey, titleKey):
+			best = maxInt(best, 900)
+		default:
+			best = maxInt(best, subscriptionTokenOverlapScore(title, query))
+		}
+	}
+	if sub.Year > 0 {
+		yearText := fmt.Sprintf("%d", sub.Year)
+		if strings.Contains(title, yearText) {
+			best += 350
+		} else if !isSubscriptionSeriesType(sub.MediaType) && titleHasDifferentYear(title, sub.Year) {
+			best -= 450
+		}
+	}
+	if best < 0 {
+		return 0
+	}
+	return best
+}
+
+func subscriptionTokenOverlapScore(title, query string) int {
+	titleTokens := subscriptionMeaningfulTokens(title)
+	queryTokens := subscriptionMeaningfulTokens(query)
+	if len(titleTokens) == 0 || len(queryTokens) == 0 {
+		return 0
+	}
+	titleSet := map[string]struct{}{}
+	for _, token := range titleTokens {
+		titleSet[token] = struct{}{}
+	}
+	matched := 0
+	for _, token := range queryTokens {
+		if _, ok := titleSet[token]; ok {
+			matched++
+		}
+	}
+	if matched == 0 {
+		return 0
+	}
+	if matched == len(queryTokens) {
+		return 1600
+	}
+	if matched*2 >= len(queryTokens) {
+		return 700 + matched*100
+	}
+	return 0
+}
+
+func subscriptionMeaningfulTokens(value string) []string {
+	value = strings.ToLower(value)
+	parts := strings.FieldsFunc(value, func(r rune) bool {
+		return !(unicode.IsLetter(r) || unicode.IsDigit(r))
+	})
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if len([]rune(part)) <= 1 && isASCIIWordToken(part) {
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
+}
+
+func titleHasDifferentYear(title string, expected int) bool {
+	if expected <= 0 {
+		return false
+	}
+	for _, match := range yearPattern.FindAllStringSubmatch(strings.ToLower(title), -1) {
+		if len(match) < 2 {
+			continue
+		}
+		if match[1] != fmt.Sprintf("%d", expected) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsAnyToken(titleFold, csv string) bool {

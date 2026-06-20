@@ -240,33 +240,41 @@ func (e *EmbyService) Views(ctx context.Context, userID string) (map[string]any,
 		if !e.libraryVisibleFromCachedVisibility(l, visibility) {
 			continue
 		}
-		items = append(items, e.libraryAsViews(ctx, &l)...)
+		items = append(items, e.libraryAsViews(ctx, userID, &l)...)
 	}
 	return map[string]any{"Items": items, "TotalRecordCount": len(items), "StartIndex": 0}, nil
 }
 
 func (e *EmbyService) libraryAsView(ctx context.Context, l *model.Library) map[string]any {
-	return e.libraryAsViewWith(l, l.ID, l.Name, e.libraryCollectionType(ctx, l))
+	return e.libraryAsViewWith(ctx, "", l, l.ID, l.Name, e.libraryCollectionType(ctx, l))
 }
 
-func (e *EmbyService) libraryAsViews(ctx context.Context, l *model.Library) []map[string]any {
+func (e *EmbyService) libraryAsViews(ctx context.Context, userID string, l *model.Library) []map[string]any {
 	if l == nil {
 		return nil
 	}
 	if strings.EqualFold(strings.TrimSpace(l.Type), "music") {
-		return []map[string]any{e.libraryAsViewWith(l, l.ID, l.Name, "music")}
+		return []map[string]any{e.libraryAsViewWith(ctx, userID, l, l.ID, l.Name, "music")}
 	}
 	shape, err := e.libraryMediaShape(ctx, l.ID)
 	if err == nil && shape.HasMovies && shape.HasEpisodes {
 		return []map[string]any{
-			e.libraryAsViewWith(l, virtualLibraryID("movies", l.ID), l.Name+" · 电影", "movies"),
-			e.libraryAsViewWith(l, virtualLibraryID("shows", l.ID), l.Name+" · 剧集", "tvshows"),
+			e.libraryAsViewWith(ctx, userID, l, virtualLibraryID("movies", l.ID), l.Name+" · 电影", "movies"),
+			e.libraryAsViewWith(ctx, userID, l, virtualLibraryID("shows", l.ID), l.Name+" · 剧集", "tvshows"),
 		}
 	}
-	return []map[string]any{e.libraryAsView(ctx, l)}
+	return []map[string]any{e.libraryAsViewWith(ctx, userID, l, l.ID, l.Name, e.libraryCollectionType(ctx, l))}
 }
 
-func (e *EmbyService) libraryAsViewWith(l *model.Library, id, name, collectionType string) map[string]any {
+func (e *EmbyService) libraryAsViewWith(ctx context.Context, userID string, l *model.Library, id, name, collectionType string) map[string]any {
+	counts := e.libraryViewCounts(ctx, userID, l, id, collectionType)
+	userData := map[string]any{
+		"PlaybackPositionTicks": 0,
+		"PlayCount":             0,
+		"IsFavorite":            false,
+		"Played":                false,
+		"UnplayedItemCount":     counts.Unplayed,
+	}
 	return map[string]any{
 		"Id":                       id,
 		"Name":                     name,
@@ -282,8 +290,8 @@ func (e *EmbyService) libraryAsViewWith(l *model.Library, id, name, collectionTy
 		"DisplayPreferencesId":     id,
 		"PrimaryImageItemId":       id,
 		"PrimaryImageAspectRatio":  1.7777777777777777,
-		"RecursiveItemCount":       0,
-		"ChildCount":               0,
+		"RecursiveItemCount":       counts.Recursive,
+		"ChildCount":               counts.Child,
 		"SpecialFeatureCount":      0,
 		"EnableMediaSourceDisplay": true,
 		"PlayAccess":               "Full",
@@ -293,14 +301,213 @@ func (e *EmbyService) libraryAsViewWith(l *model.Library, id, name, collectionTy
 		"Tags":                     []string{},
 		"ImageTags":                map[string]string{},
 		"BackdropImageTags":        []string{},
-		"UserData": map[string]any{
-			"PlaybackPositionTicks": 0,
-			"PlayCount":             0,
-			"IsFavorite":            false,
-			"Played":                false,
-			"UnplayedItemCount":     0,
-		},
+		"UserData":                 userData,
 	}
+}
+
+type embyLibraryViewCounts struct {
+	Recursive int
+	Child     int
+	Unplayed  int
+}
+
+type embyMediaCounts struct {
+	MovieCount   int
+	SeriesCount  int
+	EpisodeCount int
+	ItemCount    int
+}
+
+func (e *EmbyService) libraryViewCounts(ctx context.Context, userID string, l *model.Library, viewID, collectionType string) embyLibraryViewCounts {
+	if e == nil || l == nil {
+		return embyLibraryViewCounts{}
+	}
+	counts, err := e.mediaCountsForParent(ctx, userID, viewID)
+	if err != nil {
+		return embyLibraryViewCounts{}
+	}
+	switch strings.ToLower(strings.TrimSpace(collectionType)) {
+	case "tvshows":
+		return embyLibraryViewCounts{Recursive: counts.EpisodeCount, Child: counts.SeriesCount, Unplayed: counts.EpisodeCount}
+	case "movies":
+		return embyLibraryViewCounts{Recursive: counts.MovieCount, Child: counts.MovieCount, Unplayed: counts.MovieCount}
+	default:
+		recursive := counts.MovieCount + counts.EpisodeCount
+		child := counts.MovieCount + counts.SeriesCount
+		if recursive == 0 {
+			recursive = counts.ItemCount
+		}
+		if child == 0 {
+			child = recursive
+		}
+		return embyLibraryViewCounts{Recursive: recursive, Child: child, Unplayed: recursive}
+	}
+}
+
+func (e *EmbyService) ItemsCounts(ctx context.Context, userID, parentID string) (map[string]any, error) {
+	counts, err := e.mediaCountsForParent(ctx, userID, parentID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"MovieCount":   counts.MovieCount,
+		"SeriesCount":  counts.SeriesCount,
+		"EpisodeCount": counts.EpisodeCount,
+		"ItemCount":    counts.ItemCount,
+	}, nil
+}
+
+func (e *EmbyService) mediaCountsForParent(ctx context.Context, userID, parentID string) (embyMediaCounts, error) {
+	if e == nil || e.repo == nil || e.repo.DB == nil {
+		return embyMediaCounts{}, nil
+	}
+	var (
+		libraryIDs    []string
+		kind          string
+		countParentID string
+	)
+	parentID = strings.TrimSpace(parentID)
+	if libraryID, virtualKind, ok := parseVirtualLibraryID(parentID); ok {
+		libraryIDs = e.mergedLibraryIDs(ctx, libraryID)
+		kind = virtualKind
+		countParentID = libraryID
+	} else if parentID != "" {
+		if lib, err := e.repo.Library.FindByID(ctx, parentID); err != nil {
+			return embyMediaCounts{}, err
+		} else if lib != nil {
+			libraryIDs = e.mergedLibraryIDs(ctx, parentID)
+			countParentID = parentID
+		} else {
+			return embyMediaCounts{}, nil
+		}
+	}
+	counts, err := e.mediaCountsForLibraryIDs(ctx, userID, countParentID, libraryIDs)
+	if err != nil {
+		return embyMediaCounts{}, err
+	}
+	return counts.forVirtualKind(kind), nil
+}
+
+func (e *EmbyService) mediaCountsForLibraryIDs(ctx context.Context, userID, cacheParentID string, libraryIDs []string) (embyMediaCounts, error) {
+	cacheKey := e.embyCountsCacheKey(userID, cacheParentID)
+	var cached embyCountsCacheValue
+	if e.cache != nil && e.cache.GetJSON(ctx, cacheKey, &cached) {
+		return cached.Counts, nil
+	}
+	base := e.repo.DB.WithContext(ctx).Model(&model.Media{})
+	if len(libraryIDs) > 0 {
+		base = base.Where("library_id IN ?", libraryIDs)
+	}
+	base = e.applyUserMediaVisibility(ctx, base, userID)
+
+	var agg struct {
+		Total            int64
+		SeriesIDEpisodes int64
+		SeriesWithID     int64
+	}
+	if err := base.Session(&gorm.Session{}).Select(`
+		COUNT(*) AS total,
+		SUM(CASE WHEN series_id IS NOT NULL AND series_id <> '' THEN 1 ELSE 0 END) AS series_id_episodes,
+		COUNT(DISTINCT NULLIF(series_id, '')) AS series_with_id
+	`).Scan(&agg).Error; err != nil {
+		return embyMediaCounts{}, err
+	}
+
+	noSeriesRows, err := e.noSeriesEpisodeCandidateRows(ctx, base)
+	if err != nil {
+		return embyMediaCounts{}, err
+	}
+	libraryTypes := e.libraryTypesForRows(ctx, noSeriesRows)
+	noSeriesEpisodeRows := make([]model.Media, 0, len(noSeriesRows))
+	for i := range noSeriesRows {
+		if embyMediaShouldBeEpisodeWithLibraryTypes(&noSeriesRows[i], libraryTypes) {
+			noSeriesEpisodeRows = append(noSeriesEpisodeRows, noSeriesRows[i])
+		}
+	}
+	episodeCount := int(agg.SeriesIDEpisodes) + len(noSeriesEpisodeRows)
+	movieCount := int(agg.Total) - episodeCount
+	if movieCount < 0 {
+		movieCount = 0
+	}
+	counts := embyMediaCounts{
+		MovieCount:   movieCount,
+		SeriesCount:  int(agg.SeriesWithID) + len(e.seriesGroupsFromMedia(noSeriesEpisodeRows)),
+		EpisodeCount: episodeCount,
+	}
+	counts.ItemCount = counts.MovieCount + counts.EpisodeCount
+	if e.cache != nil {
+		e.cache.SetJSON(ctx, cacheKey, embyCountsCacheValue{Counts: counts}, time.Duration(e.mediaCacheTTLSeconds())*time.Second)
+	}
+	return counts, nil
+}
+
+func (e *EmbyService) noSeriesEpisodeCandidateRows(ctx context.Context, base *gorm.DB) ([]model.Media, error) {
+	q := base.Session(&gorm.Session{}).
+		Select("id", "library_id", "series_id", "title", "original_name", "path", "season_num", "episode_num", "created_at", "year", "tm_db_id", "bangumi_id").
+		Where("(series_id IS NULL OR series_id = '') AND (season_num > 0 OR episode_num > 0)")
+	var rows []model.Media
+	if err := q.Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func (c embyMediaCounts) forVirtualKind(kind string) embyMediaCounts {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "movies":
+		return embyMediaCounts{MovieCount: c.MovieCount, ItemCount: c.MovieCount}
+	case "shows", "tvshows", "series":
+		return embyMediaCounts{SeriesCount: c.SeriesCount, EpisodeCount: c.EpisodeCount, ItemCount: c.EpisodeCount}
+	default:
+		return c
+	}
+}
+
+func (e *EmbyService) libraryTypesForRows(ctx context.Context, rows []model.Media) map[string]string {
+	if e == nil || e.repo == nil || e.repo.DB == nil || len(rows) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(rows))
+	seen := map[string]struct{}{}
+	for _, row := range rows {
+		id := strings.TrimSpace(row.LibraryID)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	var libs []model.Library
+	if err := e.repo.DB.WithContext(ctx).Model(&model.Library{}).Select("id", "type").Where("id IN ?", ids).Find(&libs).Error; err != nil {
+		return nil
+	}
+	out := make(map[string]string, len(libs))
+	for _, lib := range libs {
+		out[lib.ID] = lib.Type
+	}
+	return out
+}
+
+func embyMediaShouldBeEpisodeWithLibraryTypes(m *model.Media, libraryTypes map[string]string) bool {
+	if m == nil {
+		return false
+	}
+	if strings.TrimSpace(m.SeriesID) != "" {
+		return true
+	}
+	if m.SeasonNum <= 0 && m.EpisodeNum <= 0 {
+		return false
+	}
+	if embyMediaHasStrongEpisodeSignal(m) {
+		return true
+	}
+	return embyLibraryTypeIsEpisodic(libraryTypes[strings.TrimSpace(m.LibraryID)])
 }
 
 type embyLibraryMediaShape struct {
@@ -687,6 +894,10 @@ type embyLatestCacheValue struct {
 	Items []map[string]any `json:"items"`
 }
 
+type embyCountsCacheValue struct {
+	Counts embyMediaCounts `json:"counts"`
+}
+
 func (e *EmbyService) embyItemsCacheKey(kind string, p ItemsParams) string {
 	includeTypes := append([]string(nil), p.IncludeItemTypes...)
 	filters := append([]string(nil), p.Filters...)
@@ -713,6 +924,11 @@ func (e *EmbyService) embyItemsCacheKey(kind string, p ItemsParams) string {
 
 func (e *EmbyService) embyLatestCacheKey(userID, parentID string, limit int) string {
 	sum := sha256.Sum256([]byte(strings.Join([]string{"latest", userID, parentID, strconv.Itoa(limit)}, "|")))
+	return "media:emby:" + hex.EncodeToString(sum[:])
+}
+
+func (e *EmbyService) embyCountsCacheKey(userID, parentID string) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{"counts", userID, parentID}, "|")))
 	return "media:emby:" + hex.EncodeToString(sum[:])
 }
 
@@ -1062,9 +1278,9 @@ func (e *EmbyService) Item(ctx context.Context, mediaID, userID string) (map[str
 			return nil, nil
 		}
 		if kind == "shows" {
-			return e.libraryAsViewWith(&libs[0], mediaID, libs[0].Name+" · 剧集", "tvshows"), nil
+			return e.libraryAsViewWith(ctx, userID, &libs[0], mediaID, libs[0].Name+" · 剧集", "tvshows"), nil
 		}
-		return e.libraryAsViewWith(&libs[0], mediaID, libs[0].Name+" · 电影", "movies"), nil
+		return e.libraryAsViewWith(ctx, userID, &libs[0], mediaID, libs[0].Name+" · 电影", "movies"), nil
 	}
 	if lib, err := e.repo.Library.FindByID(ctx, mediaID); err != nil {
 		return nil, err
@@ -1077,7 +1293,7 @@ func (e *EmbyService) Item(ctx context.Context, mediaID, userID string) (map[str
 		if !e.libraryVisibleFromCachedVisibility(libs[0], visibility) {
 			return nil, nil
 		}
-		return e.libraryAsView(ctx, &libs[0]), nil
+		return e.libraryAsViewWith(ctx, userID, &libs[0], libs[0].ID, libs[0].Name, e.libraryCollectionType(ctx, &libs[0])), nil
 	}
 	if strings.HasPrefix(mediaID, embyVirtualSeasonPrefix) {
 		if season, ok, err := e.findSeasonGroup(ctx, mediaID, userID); err != nil {

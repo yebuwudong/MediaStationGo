@@ -146,9 +146,9 @@ export const sitesAPI = {
       .get<SiteBrowseResponse>('/sites/browse', { params })
       .then((r) => r.data),
 
-  detail: (siteID: string, id: string) =>
+  detail: (siteID: string, id: string, signal?: AbortSignal) =>
     api
-      .get('/sites/detail', { params: { site_id: siteID, id } })
+      .get('/sites/detail', { params: { site_id: siteID, id }, signal })
       .then((r) => r.data),
 
   download: (input: SiteDownloadInput) => api.post('/sites/download', input).then((r) => r.data),
@@ -170,6 +170,8 @@ export const sitesAPI = {
     name: string
     keyword: string
     filter?: string
+    original_title?: string
+    year?: number
     media_type?: string
     media_category?: string
     poster_url?: string

@@ -24,7 +24,7 @@ type MTeamAdapter struct {
 // NewMTeamAdapter 创建 MTeam 适配器。
 func NewMTeamAdapter() *MTeamAdapter {
 	return &MTeamAdapter{
-		client: &http.Client{Timeout: 30 * time.Second},
+		client: &http.Client{Timeout: 60 * time.Second},
 	}
 }
 

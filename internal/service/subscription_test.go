@@ -84,6 +84,19 @@ func TestSelectSiteSearchCandidatesDoesNotWashByDefault(t *testing.T) {
 	}
 }
 
+func TestSelectSiteSearchCandidatesPrefersOriginalTitleAndYearMatch(t *testing.T) {
+	sub := &model.Subscription{Name: "请求救援 自动订阅", OriginalTitle: "Request Rescue", Year: 2026, Filter: "请求救援 2026", MediaType: "movie"}
+	results := []SearchResult{
+		{Title: "Some Other Movie 2026 1080p", DownloadURL: "https://pt/download/other", Seeders: 500},
+		{Title: "Request Rescue 2026 1080p WEB-DL", DownloadURL: "https://pt/download/request-rescue", Seeders: 20},
+	}
+
+	got := selectSiteSearchCandidates(results, sub, map[string]struct{}{})
+	if len(got) != 1 || got[0].Download != "https://pt/download/request-rescue" {
+		t.Fatalf("selected %#v, want original title/year match", got)
+	}
+}
+
 func TestSelectSiteSearchCandidatesAppliesQualityRules(t *testing.T) {
 	sub := &model.Subscription{
 		Name:         "Dune 自动订阅",

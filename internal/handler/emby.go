@@ -886,8 +886,24 @@ func embyResumeItemsHandler(svc *service.Container) gin.HandlerFunc {
 	}
 }
 
-func embyItemsCountsHandler(_ *service.Container) gin.HandlerFunc {
+func embyItemsCountsHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if svc != nil && svc.Emby != nil {
+			uid := c.Param("userId")
+			if uid == "" {
+				uid = firstQueryValue(c, "UserId", "userId", "userid")
+			}
+			if uid == "" {
+				uid = embyUserID(c)
+			}
+			out, err := svc.Emby.ItemsCounts(c.Request.Context(), uid, firstQueryValue(c, "ParentId", "parentId", "parentid"))
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, out)
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"MovieCount":   0,
 			"SeriesCount":  0,

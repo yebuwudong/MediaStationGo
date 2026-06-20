@@ -682,10 +682,16 @@ func ensurePerformanceIndexes(db *gorm.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_media_library_created_active ON media(library_id, created_at DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_media_library_episode_active ON media(library_id, season_num, episode_num, created_at DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_media_series_active ON media(series_id, season_num, episode_num) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_media_no_series_episode_active ON media(season_num, episode_num, created_at DESC) WHERE deleted_at IS NULL AND (series_id IS NULL OR series_id = '') AND (season_num > 0 OR episode_num > 0)`,
 		`CREATE INDEX IF NOT EXISTS idx_favorites_user_media_active ON favorites(user_id, media_id) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_playback_histories_user_media_active ON playback_histories(user_id, media_id, watched_at DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_playback_histories_resume_active ON playback_histories(user_id, completed, watched_at DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_play_profiles_user_created_active ON play_profiles(user_id, created_at DESC) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_download_tasks_identity_status_active ON download_tasks(identity_key, status, created_at DESC) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_download_tasks_status_created_active ON download_tasks(status, created_at DESC) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_download_tasks_subscription_status_active ON download_tasks(subscription_id, status, created_at DESC) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_subscriptions_source_enabled_active ON subscriptions(source, enabled, archived_at) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_subscriptions_user_enabled_active ON subscriptions(user_id, enabled, archived_at) WHERE deleted_at IS NULL`,
 	}
 	if isSQLite(db) {
 		statements = append(statements,

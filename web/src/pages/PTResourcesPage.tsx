@@ -125,6 +125,8 @@ function ptImageURL(remote?: string): string {
 
 const listVisualStorageKey = 'mediastation.pt.listVisuals.v1'
 const maxStoredListVisuals = 600
+const listVisualPrefetchLimit = 50
+const listVisualPrefetchConcurrency = 3
 
 function loadStoredListVisuals(): Record<string, string> {
   if (typeof window === 'undefined') return {}
@@ -183,6 +185,23 @@ function detailToSearchResult(detail: Record<string, unknown>, fallbackSiteID = 
     adult: Boolean(detail.adult),
     upload_time: typeof detail.upload_time === 'string' ? detail.upload_time : undefined,
   }
+}
+
+function parseYearHint(...values: Array<string | undefined>): number | undefined {
+  for (const value of values) {
+    const match = (value || '').match(/(?:^|[^\d])((?:19|20)\d{2})(?:[^\d]|$)/)
+    if (!match) continue
+    const year = Number.parseInt(match[1], 10)
+    if (Number.isFinite(year) && year > 0) return year
+  }
+  return undefined
+}
+
+function resourceOriginalTitle(item: SiteSearchResult): string | undefined {
+  const subtitle = (item.subtitle || '').trim()
+  if (!subtitle) return undefined
+  const first = subtitle.split(' · ')[0]?.trim() || subtitle
+  return first.slice(0, 180) || undefined
 }
 
 function ResourceThumb({
@@ -270,6 +289,7 @@ export function PTResourcesPage() {
   const [selectedDownloadFiles, setSelectedDownloadFiles] = useState<Set<number>>(new Set())
   const [categoryGroup, setCategoryGroup] = useState('')
   const listVisualsRef = useRef<Record<string, string>>(loadStoredListVisuals())
+  const visualPrefetchingRef = useRef<Set<string>>(new Set())
   const [listVisuals, setListVisuals] = useState<Record<string, string>>(() => listVisualsRef.current)
 
   const loadSites = async () => {
@@ -350,6 +370,47 @@ export function PTResourcesPage() {
     for (const item of items) {
       const visual = resourceVisual(item)
       if (visual) cacheListVisual(item, visual)
+    }
+  }, [cacheListVisual, items])
+
+  useEffect(() => {
+    const missing = items
+      .filter((item) => item.id && item.site_id && !resourceVisual(item) && !listVisualsRef.current[itemVisualKey(item)])
+      .slice(0, listVisualPrefetchLimit)
+    if (missing.length === 0) return undefined
+
+    let cancelled = false
+    let cursor = 0
+    const controller = new AbortController()
+
+    const worker = async () => {
+      while (!cancelled) {
+        const item = missing[cursor]
+        cursor += 1
+        if (!item) return
+        const key = itemVisualKey(item)
+        if (!key || visualPrefetchingRef.current.has(key) || listVisualsRef.current[key] || resourceVisual(item)) {
+          continue
+        }
+        visualPrefetchingRef.current.add(key)
+        try {
+          const data = await sitesAPI.detail(item.site_id, item.id || '', controller.signal)
+          const merged = mergeDetail(item, data as Record<string, unknown>)
+          const visual = detailVisual(merged)
+          if (!cancelled && visual) cacheListVisual(item, visual)
+        } catch {
+          // Background visual fill is best-effort; the row still opens normally.
+        } finally {
+          visualPrefetchingRef.current.delete(key)
+        }
+      }
+    }
+
+    const workers = Array.from({ length: Math.min(listVisualPrefetchConcurrency, missing.length) }, () => worker())
+    void Promise.allSettled(workers)
+    return () => {
+      cancelled = true
+      controller.abort()
     }
   }, [cacheListVisual, items])
 
@@ -469,6 +530,8 @@ export function PTResourcesPage() {
         name: item.title,
         keyword: item.title,
         filter: item.title,
+        original_title: resourceOriginalTitle(item),
+        year: parseYearHint(item.title, item.subtitle),
         media_category: item.adult ? '成人' : undefined,
         poster_url: item.poster_url,
         backdrop_url: item.backdrop_url,

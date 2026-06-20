@@ -59,6 +59,16 @@ type DownloadService struct {
 	pollInitialized bool
 	organizeQueue   chan QBitTorrent
 	organizeQueued  map[string]struct{}
+
+	preparedMu        sync.Mutex
+	preparedDownloads map[string]preparedDownloadEntry
+}
+
+type preparedDownloadEntry struct {
+	URL       string
+	SavePath  string
+	Meta      DownloadTaskMeta
+	ExpiresAt time.Time
 }
 
 func (d *DownloadService) SetScanner(scanner *ScannerService) {
@@ -84,6 +94,8 @@ const settingDownloadClientsManaged = "download_clients.managed"
 const completedTorrentOrganizeQueueSize = 64
 
 var completedTorrentOrganizeCooldown = 3 * time.Second
+
+const preparedDownloadTTL = 30 * time.Minute
 
 // ErrDownloadAlreadyExists tells callers that the requested resource is already
 // tracked locally or present in qBittorrent. Subscriptions treat this as a
@@ -385,6 +397,7 @@ func (d *DownloadService) PrepareDownloadWithMeta(ctx context.Context, userID, u
 			if err != nil {
 				return nil, err
 			}
+			d.rememberPreparedDownload(hash, urlStr, savePath, meta)
 			return &PreparedDownload{Hash: hash, Files: files}, nil
 		} else {
 			siteFetchErr = err
@@ -397,6 +410,7 @@ func (d *DownloadService) PrepareDownloadWithMeta(ctx context.Context, userID, u
 		}
 		return nil, err
 	}
+	d.rememberPreparedDownload(hash, urlStr, savePath, meta)
 	return &PreparedDownload{Hash: hash, Files: files}, nil
 }
 
@@ -404,6 +418,15 @@ func (d *DownloadService) ConfirmPreparedDownload(ctx context.Context, userID, h
 	hash = strings.TrimSpace(hash)
 	if hash == "" {
 		return nil, errors.New("hash is required")
+	}
+	if prepared, ok := d.takePreparedDownload(hash); ok {
+		if strings.TrimSpace(urlStr) == "" {
+			urlStr = prepared.URL
+		}
+		if strings.TrimSpace(savePath) == "" {
+			savePath = prepared.SavePath
+		}
+		meta = mergePreparedDownloadMeta(meta, prepared.Meta)
 	}
 	_, _, savePath, meta, err := d.normalizeDownloadRequest(ctx, urlStr, savePath, meta)
 	if err != nil {
@@ -432,7 +455,109 @@ func (d *DownloadService) CancelPreparedDownload(ctx context.Context, hash strin
 	if !d.qb.IsConfigured() {
 		return errors.New("no default downloader configured")
 	}
+	d.forgetPreparedDownload(hash)
 	return d.qb.Delete(ctx, hash, false)
+}
+
+func (d *DownloadService) rememberPreparedDownload(hash, urlStr, savePath string, meta DownloadTaskMeta) {
+	hash = strings.ToLower(strings.TrimSpace(hash))
+	if d == nil || hash == "" {
+		return
+	}
+	d.preparedMu.Lock()
+	defer d.preparedMu.Unlock()
+	d.prunePreparedDownloadsLocked(time.Now())
+	if d.preparedDownloads == nil {
+		d.preparedDownloads = map[string]preparedDownloadEntry{}
+	}
+	d.preparedDownloads[hash] = preparedDownloadEntry{
+		URL:       urlStr,
+		SavePath:  savePath,
+		Meta:      meta,
+		ExpiresAt: time.Now().Add(preparedDownloadTTL),
+	}
+}
+
+func (d *DownloadService) takePreparedDownload(hash string) (preparedDownloadEntry, bool) {
+	hash = strings.ToLower(strings.TrimSpace(hash))
+	if d == nil || hash == "" {
+		return preparedDownloadEntry{}, false
+	}
+	d.preparedMu.Lock()
+	defer d.preparedMu.Unlock()
+	d.prunePreparedDownloadsLocked(time.Now())
+	entry, ok := d.preparedDownloads[hash]
+	if ok {
+		delete(d.preparedDownloads, hash)
+	}
+	return entry, ok
+}
+
+func (d *DownloadService) forgetPreparedDownload(hash string) {
+	hash = strings.ToLower(strings.TrimSpace(hash))
+	if d == nil || hash == "" {
+		return
+	}
+	d.preparedMu.Lock()
+	defer d.preparedMu.Unlock()
+	delete(d.preparedDownloads, hash)
+}
+
+func (d *DownloadService) prunePreparedDownloadsLocked(now time.Time) {
+	if len(d.preparedDownloads) == 0 {
+		return
+	}
+	for hash, entry := range d.preparedDownloads {
+		if now.After(entry.ExpiresAt) {
+			delete(d.preparedDownloads, hash)
+		}
+	}
+}
+
+func mergePreparedDownloadMeta(current, prepared DownloadTaskMeta) DownloadTaskMeta {
+	if strings.TrimSpace(current.SubscriptionID) == "" {
+		current.SubscriptionID = prepared.SubscriptionID
+	}
+	if strings.TrimSpace(current.Title) == "" {
+		current.Title = prepared.Title
+	}
+	if strings.TrimSpace(current.IdentityTitle) == "" {
+		current.IdentityTitle = prepared.IdentityTitle
+	}
+	if strings.TrimSpace(current.PosterURL) == "" {
+		current.PosterURL = prepared.PosterURL
+	}
+	if strings.TrimSpace(current.BackdropURL) == "" {
+		current.BackdropURL = prepared.BackdropURL
+	}
+	if strings.TrimSpace(current.Overview) == "" {
+		current.Overview = prepared.Overview
+	}
+	if strings.TrimSpace(current.IMDBID) == "" {
+		current.IMDBID = prepared.IMDBID
+	}
+	if current.TMDbID <= 0 {
+		current.TMDbID = prepared.TMDbID
+	}
+	if strings.TrimSpace(current.DoubanID) == "" {
+		current.DoubanID = prepared.DoubanID
+	}
+	if strings.TrimSpace(current.MediaType) == "" {
+		current.MediaType = prepared.MediaType
+	}
+	if strings.TrimSpace(current.MediaCategory) == "" {
+		current.MediaCategory = prepared.MediaCategory
+	}
+	if strings.TrimSpace(current.SourceCategory) == "" {
+		current.SourceCategory = prepared.SourceCategory
+	}
+	if len(current.SelectedFiles) == 0 {
+		current.SelectedFiles = append([]string(nil), prepared.SelectedFiles...)
+	}
+	if !current.AllowExistingLibrary {
+		current.AllowExistingLibrary = prepared.AllowExistingLibrary
+	}
+	return current
 }
 
 func (d *DownloadService) resolveDownloadSavePath(ctx context.Context, explicitSavePath string, meta DownloadTaskMeta, autoClassify bool) (string, string) {
@@ -557,24 +682,53 @@ func (d *DownloadService) findExistingDownloadTask(ctx context.Context, title st
 	if key == "" || d == nil || d.repo == nil || d.repo.Download == nil {
 		return nil, false
 	}
-	rows, err := d.repo.Download.List(ctx)
+	terminalStatuses := downloadTaskNonBlockingStatuses(allowDeletedReadd)
+	if d.repo.DB != nil && d.repo.DB.Migrator().HasColumn(&model.DownloadTask{}, "identity_key") {
+		var row model.DownloadTask
+		err := d.repo.DB.WithContext(ctx).
+			Where("identity_key = ? AND LOWER(status) NOT IN ?", key, terminalStatuses).
+			Order("created_at desc").
+			First(&row).Error
+		if err == nil {
+			return &row, true
+		}
+	}
+	rows, err := d.findExistingDownloadTaskFallbackRows(ctx, terminalStatuses)
 	if err != nil {
 		return nil, false
 	}
 	for i := range rows {
-		if allowDeletedReadd {
-			if !downloadTaskBlocksReadd(rows[i].Status) {
-				continue
-			}
-		} else if !downloadTaskBlocksDuplicate(rows[i].Status) {
-			continue
+		current := strings.TrimSpace(rows[i].IdentityKey)
+		if current == "" {
+			current = downloadTaskIdentityKey(rows[i].Title)
 		}
-		current := downloadTaskIdentityKey(rows[i].Title)
 		if current == key || strings.Contains(current, key) || strings.Contains(key, current) {
 			return &rows[i], true
 		}
 	}
 	return nil, false
+}
+
+func (d *DownloadService) findExistingDownloadTaskFallbackRows(ctx context.Context, terminalStatuses []string) ([]model.DownloadTask, error) {
+	if d == nil || d.repo == nil || d.repo.DB == nil {
+		return nil, nil
+	}
+	q := d.repo.DB.WithContext(ctx).Model(&model.DownloadTask{}).
+		Where("LOWER(status) NOT IN ?", terminalStatuses).
+		Order("created_at desc").
+		Limit(500)
+	if d.repo.DB.Migrator().HasColumn(&model.DownloadTask{}, "identity_key") {
+		q = q.Where("identity_key = '' OR identity_key IS NULL")
+	}
+	var rows []model.DownloadTask
+	if err := q.Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func downloadTaskNonBlockingStatuses(_ bool) []string {
+	return []string{"failed", "error", "deleted", "removed", "cancelled", "canceled"}
 }
 
 func downloadTaskBlocksDuplicate(status string) bool {
@@ -689,6 +843,7 @@ func (d *DownloadService) createTask(ctx context.Context, userID, urlStr, savePa
 		Source:               "qbittorrent",
 		URL:                  urlStr,
 		Title:                title,
+		IdentityKey:          downloadTaskIdentityKey(firstNonEmpty(meta.IdentityTitle, title)),
 		PosterURL:            meta.PosterURL,
 		BackdropURL:          meta.BackdropURL,
 		Overview:             meta.Overview,
@@ -1346,7 +1501,10 @@ func (d *DownloadService) syncDownloadTaskProgress(ctx context.Context, torrent 
 func tasksByIdentity(rows []model.DownloadTask) map[string]model.DownloadTask {
 	out := make(map[string]model.DownloadTask, len(rows))
 	for _, row := range rows {
-		key := downloadTaskIdentityKey(row.Title)
+		key := strings.TrimSpace(row.IdentityKey)
+		if key == "" {
+			key = downloadTaskIdentityKey(row.Title)
+		}
 		if key != "" {
 			out[key] = row
 		}

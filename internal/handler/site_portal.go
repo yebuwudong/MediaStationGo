@@ -239,14 +239,19 @@ func siteDownloadConfirmHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		downloadReq := req.downloadReq()
-		realURL, err := siteRealDownloadURL(c.Request.Context(), svc, downloadReq)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
 		uid, _ := c.Get(middleware.CtxUserID)
-		meta := siteDownloadMeta(c.Request.Context(), svc, downloadReq, realURL)
-		task, err := svc.Downloads.ConfirmPreparedDownload(c.Request.Context(), uid.(string), req.Hash, realURL, req.SavePath, meta, req.SelectedFileIndexes)
+		meta := service.DownloadTaskMeta{
+			IdentityTitle:  downloadReq.Title,
+			Title:          downloadReq.Title,
+			PosterURL:      downloadReq.PosterURL,
+			BackdropURL:    downloadReq.BackdropURL,
+			Overview:       downloadReq.Overview,
+			MediaType:      downloadReq.MediaType,
+			MediaCategory:  downloadReq.MediaCategory,
+			SourceCategory: downloadReq.SourceCategory,
+		}
+		rawURL := firstNonEmptyString(downloadReq.DownloadURL, downloadReq.TorrentURL)
+		task, err := svc.Downloads.ConfirmPreparedDownload(c.Request.Context(), uid.(string), req.Hash, rawURL, req.SavePath, meta, req.SelectedFileIndexes)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -283,6 +288,8 @@ type siteSubscribeReq struct {
 	Name          string `json:"name"`
 	Keyword       string `json:"keyword"`
 	Filter        string `json:"filter"`
+	OriginalTitle string `json:"original_title"`
+	Year          int    `json:"year"`
 	MediaType     string `json:"media_type"`
 	MediaCategory string `json:"media_category"`
 	PosterURL     string `json:"poster_url"`
@@ -322,6 +329,8 @@ func siteSubscribeHandler(svc *service.Container) gin.HandlerFunc {
 			PosterURL:     req.PosterURL,
 			BackdropURL:   req.BackdropURL,
 			Overview:      req.Overview,
+			OriginalTitle: strings.TrimSpace(req.OriginalTitle),
+			Year:          req.Year,
 			SavePath:      req.SavePath,
 			SearchMode:    "keyword",
 			Source:        "site_search",

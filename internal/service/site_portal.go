@@ -68,15 +68,19 @@ const siteBrowsePageSize = 50
 const (
 	sitePortalDefaultCacheTTL    = 45 * time.Second
 	sitePortalRateLimitCacheTTL  = 2 * time.Minute
+	sitePortalDetailCacheTTL     = 10 * time.Minute
+	sitePortalDetailStaleTTL     = 2 * time.Hour
 	sitePortalStaleCacheTTL      = 15 * time.Minute
 	sitePortalRateLimitCooldown  = 3 * time.Minute
 	sitePortalMTeamMinInterval   = 10 * time.Second
+	sitePortalMTeamMinTimeout    = 60 * time.Second
 	sitePortalGenericMinInterval = 1500 * time.Millisecond
 )
 
 type sitePortalCacheEntry struct {
 	Result    *SiteSearchResult
 	Cats      []SiteCategory
+	Detail    *TorrentDetail
 	ExpiresAt time.Time
 	StaleAt   time.Time
 }
@@ -130,13 +134,9 @@ func (s *SiteService) originalCategoriesForSite(ctx context.Context, site model.
 	adapter := NewSiteAdapter(&site)
 	if provider, ok := adapter.(siteCategoryProvider); ok {
 		cfg := s.siteModelToConfig(&site)
-		timeout := time.Duration(site.Timeout) * time.Second
-		if timeout <= 0 {
-			timeout = 30 * time.Second
-		}
-		reqCtx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-		if err := s.waitSitePortalRequest(reqCtx, site); err != nil {
+		timeout := siteRequestTimeout(site)
+		cfg.Timeout = timeout
+		if err := s.waitSitePortalRequest(ctx, site); err != nil {
 			s.log.Warn("site categories throttled", zap.String("site", site.Name), zap.String("type", site.Type), zap.Error(err))
 			if cats, ok := s.getCachedSiteCategories(site, true); ok {
 				return cats
@@ -144,6 +144,8 @@ func (s *SiteService) originalCategoriesForSite(ctx context.Context, site model.
 			cats := normalizeSiteCategories(site, siteCategoriesForSite(site))
 			return cats
 		}
+		reqCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
 		cats, err := provider.Categories(reqCtx, cfg)
 		if err == nil && len(cats) > 0 {
 			cats = normalizeSiteCategories(site, cats)
@@ -199,14 +201,9 @@ func (s *SiteService) Browse(ctx context.Context, p SiteBrowseParams) (*SiteBrow
 				return
 			}
 			cfg := s.siteModelToConfig(&site)
-			timeout := time.Duration(site.Timeout) * time.Second
-			if timeout <= 0 {
-				timeout = 30 * time.Second
-			}
-			reqCtx, cancel := context.WithTimeout(ctx, timeout)
-			defer cancel()
+			cfg.Timeout = siteRequestTimeout(site)
 
-			result, err := s.cachedBrowseSiteResources(reqCtx, site, adapter, cfg, p.Keyword, p.Category, p.Page, p.IncludeAdult)
+			result, err := s.cachedBrowseSiteResources(ctx, site, adapter, cfg, p.Keyword, p.Category, p.Page, p.IncludeAdult)
 			if err != nil {
 				mu.Lock()
 				failed++
@@ -322,7 +319,11 @@ func (s *SiteService) cachedBrowseSiteResources(ctx context.Context, site model.
 		return nil, err
 	}
 
-	result, err := browseSiteResources(ctx, adapter, cfg, keyword, category, page, includeAdult)
+	timeout := siteRequestTimeout(site)
+	cfg.Timeout = timeout
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	result, err := browseSiteResources(reqCtx, adapter, cfg, keyword, category, page, includeAdult)
 	if err != nil {
 		if isSitePortalRateLimitError(err) {
 			s.markSitePortalCooldown(site, err)
@@ -405,6 +406,41 @@ func (s *SiteService) getCachedSiteCategories(site model.Site, allowStale bool) 
 	return cloneSiteCategories(entry.Cats), true
 }
 
+func (s *SiteService) getCachedSiteDetail(site model.Site, torrentID string, allowStale bool) (*TorrentDetail, bool) {
+	if s == nil {
+		return nil, false
+	}
+	key := sitePortalCacheKey("detail", site, "", torrentID, 0)
+	now := time.Now()
+	s.portalMu.Lock()
+	defer s.portalMu.Unlock()
+	entry, ok := s.portalCache[key]
+	if !ok || entry.Detail == nil {
+		return nil, false
+	}
+	if now.After(entry.ExpiresAt) && (!allowStale || now.After(entry.StaleAt)) {
+		return nil, false
+	}
+	return cloneTorrentDetail(entry.Detail), true
+}
+
+func (s *SiteService) storeSiteDetail(site model.Site, torrentID string, detail *TorrentDetail) {
+	if s == nil || detail == nil {
+		return
+	}
+	key := sitePortalCacheKey("detail", site, "", torrentID, 0)
+	now := time.Now()
+	s.portalMu.Lock()
+	defer s.portalMu.Unlock()
+	s.ensureSitePortalStateLocked()
+	s.portalCache[key] = sitePortalCacheEntry{
+		Detail:    cloneTorrentDetail(detail),
+		ExpiresAt: now.Add(sitePortalDetailCacheTTL),
+		StaleAt:   now.Add(sitePortalDetailStaleTTL),
+	}
+	s.pruneSitePortalCacheLocked(now)
+}
+
 func (s *SiteService) storeSiteCategories(site model.Site, cats []SiteCategory) {
 	if s == nil || len(cats) == 0 {
 		return
@@ -461,6 +497,17 @@ func sitePortalMinInterval(site model.Site) time.Duration {
 		return sitePortalGenericMinInterval
 	}
 	return 0
+}
+
+func siteRequestTimeout(site model.Site) time.Duration {
+	timeout := time.Duration(site.Timeout) * time.Second
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	if strings.EqualFold(site.Type, "mteam") && timeout < sitePortalMTeamMinTimeout {
+		return sitePortalMTeamMinTimeout
+	}
+	return timeout
 }
 
 func (s *SiteService) sitePortalCooldownError(site model.Site) error {
@@ -573,6 +620,30 @@ func cloneSiteCategories(in []SiteCategory) []SiteCategory {
 	return append([]SiteCategory(nil), in...)
 }
 
+func cloneTorrentDetail(in *TorrentDetail) *TorrentDetail {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	if in.FreeEndAt != nil {
+		t := *in.FreeEndAt
+		out.FreeEndAt = &t
+	}
+	if in.Genres != nil {
+		out.Genres = append([]string(nil), in.Genres...)
+	}
+	if in.Tags != nil {
+		out.Tags = append([]string(nil), in.Tags...)
+	}
+	if in.Images != nil {
+		out.Images = append([]string(nil), in.Images...)
+	}
+	if in.Files != nil {
+		out.Files = append([]string(nil), in.Files...)
+	}
+	return &out
+}
+
 func (s *SiteService) Detail(ctx context.Context, siteID, torrentID string) (*TorrentDetail, error) {
 	siteID = strings.TrimSpace(siteID)
 	torrentID = strings.TrimSpace(torrentID)
@@ -586,22 +657,36 @@ func (s *SiteService) Detail(ctx context.Context, siteID, torrentID string) (*To
 		}
 		return nil, errors.New("site not found")
 	}
+	if detail, ok := s.getCachedSiteDetail(*site, torrentID, false); ok {
+		return detail, nil
+	}
+	if err := s.sitePortalCooldownError(*site); err != nil {
+		if detail, ok := s.getCachedSiteDetail(*site, torrentID, true); ok {
+			return detail, nil
+		}
+		return nil, err
+	}
 	adapter := NewSiteAdapter(site)
 	if adapter == nil {
 		return nil, errors.New("site adapter unavailable")
 	}
 	cfg := s.siteModelToConfig(site)
-	timeout := cfg.Timeout
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
+	timeout := siteRequestTimeout(*site)
+	cfg.Timeout = timeout
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	detail, err := adapter.GetDetail(reqCtx, cfg, torrentID)
 	if err != nil || detail == nil {
+		if isSitePortalRateLimitError(err) {
+			s.markSitePortalCooldown(*site, err)
+		}
+		if cached, ok := s.getCachedSiteDetail(*site, torrentID, true); ok {
+			return cached, nil
+		}
 		return detail, err
 	}
 	detail.Category = siteCategoryDisplayName(s.cachedOrFallbackSiteCategories(*site), detail.Category)
+	s.storeSiteDetail(*site, torrentID, detail)
 	return detail, nil
 }
 
@@ -633,10 +718,8 @@ func (s *SiteService) DownloadURL(ctx context.Context, siteID, torrentID, fallba
 		return "", errors.New("site adapter unavailable")
 	}
 	cfg := s.siteModelToConfig(site)
-	timeout := cfg.Timeout
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
+	timeout := siteRequestTimeout(*site)
+	cfg.Timeout = timeout
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	resolved, err := adapter.GetDownloadURL(reqCtx, cfg, torrentID)
