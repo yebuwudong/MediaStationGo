@@ -1050,7 +1050,7 @@ func TestEmbyLowercasePlaybackInfoRouteReturnsJSON(t *testing.T) {
 	}
 }
 
-func TestEmbyPlaybackInfoTokenizesCloudPath(t *testing.T) {
+func TestEmbyPlaybackInfoDoesNotExposeTokenInCloudPath(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
@@ -1109,8 +1109,11 @@ func TestEmbyPlaybackInfoTokenizesCloudPath(t *testing.T) {
 	}
 	source := body["MediaSources"].([]any)[0].(map[string]any)
 	pathURL, _ := source["Path"].(string)
-	if !strings.HasPrefix(pathURL, "/api/stream/cloud-1") || !strings.Contains(pathURL, "api_key=") {
-		t.Fatalf("cloud Path should be tokenized stream URL, got %#v", source)
+	if pathURL != "/api/stream/cloud-1" {
+		t.Fatalf("cloud Path should stay as non-tokenized display stream URL, got %#v", source)
+	}
+	if strings.Contains(pathURL, "api_key=") || strings.Contains(pathURL, "token=") {
+		t.Fatalf("cloud Path must not expose auth key/token: %#v", source)
 	}
 	if strings.Contains(pathURL, "/api/cloud/play/") {
 		t.Fatalf("cloud Path should not expose naked cloud play URL: %#v", source)
@@ -1127,7 +1130,7 @@ func TestEmbyPlaybackInfoTokenizesCloudPath(t *testing.T) {
 	}
 }
 
-func TestEmbyItemsTokenizesEmbeddedCloudMediaSources(t *testing.T) {
+func TestEmbyItemsDoNotExposeTokenInEmbeddedCloudPath(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
@@ -1190,8 +1193,11 @@ func TestEmbyItemsTokenizesEmbeddedCloudMediaSources(t *testing.T) {
 	}
 	source := items[0].(map[string]any)["MediaSources"].([]any)[0].(map[string]any)
 	pathURL, _ := source["Path"].(string)
-	if !strings.HasPrefix(pathURL, "/api/stream/cloud-1") || !strings.Contains(pathURL, "api_key=") {
-		t.Fatalf("embedded cloud Path should be tokenized stream URL, got %#v", source)
+	if pathURL != "/api/stream/cloud-1" {
+		t.Fatalf("embedded cloud Path should stay as non-tokenized display stream URL, got %#v", source)
+	}
+	if strings.Contains(pathURL, "api_key=") || strings.Contains(pathURL, "token=") {
+		t.Fatalf("embedded cloud Path must not expose auth key/token: %#v", source)
 	}
 }
 

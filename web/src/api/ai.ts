@@ -14,6 +14,7 @@ export interface ExternalMediaResult {
   source: string
   media_type?: string
   title: string
+  original_name?: string
   overview?: string
   poster_url?: string
   backdrop_url?: string

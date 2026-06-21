@@ -37,6 +37,7 @@ type SiteService struct {
 	portalNext      map[string]time.Time
 	portalCache     map[string]sitePortalCacheEntry
 	portalCooldown  map[string]sitePortalCooldownEntry
+	apiRateLimiter  siteAPIRateLimiter
 }
 
 // ResolveDownloadURL converts tracker-specific search result URLs into a URL
@@ -72,13 +73,32 @@ func (s *SiteService) ResolveDownloadURL(ctx context.Context, raw string) string
 	defer cancel()
 	resolved, err := adapter.GetDownloadURL(resolveCtx, cfg, id)
 	if err != nil || resolved == "" {
-		s.log.Warn("resolve PT download URL failed",
-			zap.String("site", matched.Name),
-			zap.String("raw", raw),
-			zap.Error(err))
+		if s.log != nil {
+			s.log.Warn("resolve PT download URL failed",
+				zap.String("site", matched.Name),
+				zap.String("raw", redactSensitiveDownloadURL(raw)),
+				zap.Error(err))
+		}
 		return raw
 	}
 	return resolved
+}
+
+func redactSensitiveDownloadURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(raw), "magnet:") {
+		return "magnet:?xt=***"
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "[redacted-download-url]"
+	}
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
 }
 
 func (s *SiteService) FetchTorrentFile(ctx context.Context, raw string) ([]byte, string, error) {
@@ -184,6 +204,7 @@ func NewSiteService(log *zap.Logger, repo *repository.Container, flareSolverrURL
 		portalNext:      map[string]time.Time{},
 		portalCache:     map[string]sitePortalCacheEntry{},
 		portalCooldown:  map[string]sitePortalCooldownEntry{},
+		apiRateLimiter:  newPersistentSiteAPIRateLimiter(repo),
 	}
 }
 
@@ -316,7 +337,7 @@ func (s *SiteService) TestConnection(ctx context.Context, id string) (bool, stri
 				}).Error
 			return true, "连接成功", nil
 		} else {
-			if site.Type == "mteam" {
+			if site.Type == "mteam" || site.Type == "yemapt" || isYemaPTURL(site.URL) {
 				s.log.Warn("site adapter authenticate failed",
 					zap.String("site", site.Name),
 					zap.String("type", site.Type),
@@ -401,15 +422,18 @@ func (s *SiteService) Search(ctx context.Context, keyword string) ([]SearchResul
 	}
 
 	var (
-		mu      sync.Mutex
-		wg      sync.WaitGroup
-		results []SearchResult
+		mu           sync.Mutex
+		wg           sync.WaitGroup
+		enabledCount int
+		failedCount  int
+		results      []SearchResult
 	)
 
 	for i := range sites {
 		if !sites[i].Enabled {
 			continue
 		}
+		enabledCount++
 		wg.Add(1)
 		go func(site model.Site) {
 			defer wg.Done()
@@ -428,10 +452,15 @@ func (s *SiteService) Search(ctx context.Context, keyword string) ([]SearchResul
 
 			result, err := adapter.Search(ctxWithTimeout, cfg, keyword, 1)
 			if err != nil {
+				mu.Lock()
+				failedCount++
+				mu.Unlock()
 				s.log.Warn("site search failed",
 					zap.String("site", site.Name),
 					zap.String("type", site.Type),
 					zap.String("url", site.URL),
+					zap.String("keyword", keyword),
+					zap.Duration("timeout", timeout),
 					zap.Error(err))
 				return
 			}
@@ -462,6 +491,13 @@ func (s *SiteService) Search(ctx context.Context, keyword string) ([]SearchResul
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Seeders > results[j].Seeders
 	})
+	if s.log != nil {
+		s.log.Info("site search completed",
+			zap.String("keyword", keyword),
+			zap.Int("enabled_sites", enabledCount),
+			zap.Int("failed_sites", failedCount),
+			zap.Int("results_count", len(results)))
+	}
 	return results, nil
 }
 
@@ -489,6 +525,7 @@ func (svc *SiteService) siteModelToConfig(s *model.Site) SiteConfig {
 	}
 
 	return SiteConfig{
+		SiteID:          s.ID,
 		Name:            s.Name,
 		Type:            s.Type,
 		URL:             s.URL,
@@ -501,5 +538,7 @@ func (svc *SiteService) siteModelToConfig(s *model.Site) SiteConfig {
 		Extra:           extra,
 		FlareSolverrURL: flareSolverrURL,
 		UseProxy:        s.UseProxy,
+		RateLimit:       s.RateLimit,
+		rateLimiter:     svc.apiRateLimiter,
 	}
 }

@@ -71,6 +71,49 @@ func TestSelectSiteSearchCandidatesKeepsMovieSingleBest(t *testing.T) {
 	}
 }
 
+func TestSelectSiteSearchCandidatesRejectsUnrelatedHighSeederResult(t *testing.T) {
+	sub := &model.Subscription{Name: "Inception 自动订阅", Filter: "Inception 2010", MediaType: "movie", WashPriority: "seeders"}
+	results := []SearchResult{
+		{Title: "Unrelated Movie 2026 2160p", DownloadURL: "https://pt/download/wrong", Seeders: 999},
+		{Title: "Inception 2010 1080p", DownloadURL: "https://pt/download/right", Seeders: 90},
+	}
+
+	got := selectSiteSearchCandidates(results, sub, map[string]struct{}{})
+	if len(got) != 1 || got[0].Download != "https://pt/download/right" {
+		t.Fatalf("selected %#v, want title-matched result only", got)
+	}
+}
+
+func TestSelectSiteSearchCandidatesMatchesTranslatedSubtitle(t *testing.T) {
+	sub := &model.Subscription{Name: "真人快打2 自动订阅", Filter: "真人快打2 2026", MediaType: "movie", WashPriority: "seeders"}
+	results := []SearchResult{
+		{Title: "Unrelated Movie 2026 2160p", DownloadURL: "https://pt/download/wrong", Seeders: 999},
+		{Title: "Mortal Kombat II 2026 1080p WEB-DL", Subtitle: "真人快打2", DownloadURL: "https://pt/download/right", Seeders: 90},
+	}
+
+	got := selectSiteSearchCandidates(results, sub, map[string]struct{}{})
+	if len(got) != 1 || got[0].Download != "https://pt/download/right" {
+		t.Fatalf("selected %#v, want translated subtitle match", got)
+	}
+}
+
+func TestSelectSiteSearchCandidatesMatchesFeedAlias(t *testing.T) {
+	sub := &model.Subscription{
+		Name:      "真人快打2 自动订阅",
+		FeedURL:   "site-search://search?keyword=%E7%9C%9F%E4%BA%BA%E5%BF%AB%E6%89%932%202026&alias=Mortal%20Kombat%20II%202026",
+		Filter:    "真人快打2 2026",
+		MediaType: "movie",
+	}
+	results := []SearchResult{
+		{Title: "Mortal Kombat II 2026 1080p WEB-DL", DownloadURL: "https://pt/download/right", Seeders: 90},
+	}
+
+	got := selectSiteSearchCandidates(results, sub, map[string]struct{}{})
+	if len(got) != 1 || got[0].Download != "https://pt/download/right" {
+		t.Fatalf("selected %#v, want alias-matched result", got)
+	}
+}
+
 func TestSelectSiteSearchCandidatesDoesNotWashByDefault(t *testing.T) {
 	sub := &model.Subscription{Name: "Inception 自动订阅", Filter: "Inception 2010", MediaType: "movie", WashPriority: "resolution"}
 	results := []SearchResult{
@@ -182,6 +225,33 @@ func TestSiteSearchKeywordsIncludeOriginalTitleForSubscriptionCenter(t *testing.
 	}
 }
 
+func TestSiteSearchKeywordsIncludeAliasesAndCleanedKeywords(t *testing.T) {
+	sub := &model.Subscription{
+		Name:    "真人快打2 自动订阅",
+		FeedURL: "site-search://search?keyword=%E7%9C%9F%E4%BA%BA%E5%BF%AB%E6%89%932%202026&alias=Mortal%20Kombat%20II%202026",
+		Filter:  "真人快打2 2026",
+	}
+
+	got := siteSearchKeywords(sub)
+	for _, want := range []string{"真人快打2 2026", "Mortal Kombat II 2026", "真人快打2", "Mortal Kombat II"} {
+		if !containsString(got, want) {
+			t.Fatalf("keywords = %#v, missing %q", got, want)
+		}
+	}
+	if got[0] != "真人快打2 2026" {
+		t.Fatalf("primary keyword = %q, want feed keyword first", got[0])
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestStableSiteSearchGUIDIgnoresPrivateTokenChanges(t *testing.T) {
 	item := SearchResult{
 		SiteID:   "mteam",
@@ -196,6 +266,33 @@ func TestStableSiteSearchGUIDIgnoresPrivateTokenChanges(t *testing.T) {
 	}
 	if strings.Contains(first, "passkey") || strings.Contains(first, "old") || strings.Contains(first, "new") {
 		t.Fatalf("stableSiteSearchGUID leaked private token: %q", first)
+	}
+}
+
+func TestSelectSiteSearchCandidatesWithStatsExplainsFiltering(t *testing.T) {
+	sub := &model.Subscription{Name: "Stats Show 自动订阅", Filter: "Stats Show", MediaType: "tv"}
+	seenItem := SearchResult{Title: "Stats Show S01E02 1080p", DownloadURL: "https://pt/download/seen", Seeders: 50}
+	seenGUID := stableSiteSearchGUID(seenItem, seenItem.DownloadURL)
+	results := []SearchResult{
+		{Title: "Different Show S01E01 1080p", DownloadURL: "https://pt/download/wrong", Seeders: 90},
+		{Title: "Stats Show S01E01 CAM", DownloadURL: "https://pt/download/cam", Seeders: 80},
+		{Title: "Stats Show S01E02 1080p", Seeders: 70},
+		seenItem,
+		{Title: "Stats Show S01E03 1080p", DownloadURL: "https://pt/download/right", Seeders: 60},
+	}
+
+	got, stats := selectSiteSearchCandidatesWithStats(results, sub, map[string]struct{}{seenGUID: {}}, LocalAvailability{})
+	if len(got) != 1 || got[0].Download != "https://pt/download/right" {
+		t.Fatalf("selected %#v, want only unfiltered candidate", got)
+	}
+	if stats.Total != 5 ||
+		stats.QueryMismatch != 1 ||
+		stats.RuleMismatch != 1 ||
+		stats.MissingDownload != 1 ||
+		stats.Seen != 1 ||
+		stats.Prepared != 1 ||
+		stats.Selected != 1 {
+		t.Fatalf("unexpected stats: %#v", stats)
 	}
 }
 
@@ -375,6 +472,100 @@ func TestSelectSiteSearchCandidatesFullPackUsedAsFallbackWhenLibraryPartiallyExi
 	}
 }
 
+func TestSelectSiteSearchCandidatesMissingEpisodeCanMatchSubtitleAlias(t *testing.T) {
+	sub := &model.Subscription{Name: "躲在超市后门抽烟的两人 自动订阅", Filter: "躲在超市后门抽烟的两人", MediaType: "tv", TotalEpisodes: 12}
+	results := []SearchResult{
+		{Title: "Smoking Behind the Supermarket with You S01E01 1080p", Subtitle: "躲在超市后门抽烟的两人", DownloadURL: "https://pt/download/1", Seeders: 100},
+		{Title: "Smoking Behind the Supermarket with You S01E12 1080p", Subtitle: "躲在超市后门抽烟的两人", DownloadURL: "https://pt/download/12", Seeders: 80},
+	}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 11; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	availability := LocalAvailability{
+		TotalEpisodes:       12,
+		LocalMediaCount:     11,
+		MissingEpisodes:     []int{12},
+		ExistingEpisodeKeys: existing,
+	}
+
+	got := selectSiteSearchCandidates(results, sub, map[string]struct{}{}, availability)
+	if len(got) != 1 || got[0].Episode != 12 || got[0].Download != "https://pt/download/12" {
+		t.Fatalf("selected %#v, want subtitle-matched missing episode 12", got)
+	}
+}
+
+func TestSelectSiteSearchCandidatesRelaxesQueryForExistingSeriesMissingEpisodes(t *testing.T) {
+	sub := &model.Subscription{Name: "翘楚 S01E06 自动订阅", Filter: "翘楚 S01E06", MediaType: "tv", TotalEpisodes: 24}
+	results := []SearchResult{
+		{Title: "Qiao Chu 2026 S01E06 2160p WEB-DL", DownloadURL: "https://pt/download/6", Seeders: 10},
+		{Title: "Ashes to Crown 2026 S01E21 2160p WEB-DL", DownloadURL: "https://pt/download/21", Seeders: 8},
+		{Title: "Ashes to Crown 2026 S01E99 2160p WEB-DL", DownloadURL: "https://pt/download/99", Seeders: 99},
+	}
+	availability := LocalAvailability{
+		TotalEpisodes:       24,
+		LocalMediaCount:     1,
+		MissingEpisodes:     []int{21},
+		ExistingEpisodeKeys: map[string]struct{}{episodeKey(1, 6): {}},
+	}
+
+	got, stats := selectSiteSearchCandidatesWithStats(results, sub, map[string]struct{}{}, availability)
+	if len(got) != 1 || got[0].Episode != 21 || got[0].Download != "https://pt/download/21" {
+		t.Fatalf("selected %#v, want relaxed alias-like missing episode 21 only", got)
+	}
+	if stats.QueryMismatch != 3 || stats.RelaxedQueryMatch != 3 || stats.ExistingEpisodeSkipped != 1 || stats.NotMissingEpisodeSkipped != 1 {
+		t.Fatalf("unexpected relaxed stats: %#v", stats)
+	}
+}
+
+func TestAddSiteSearchCandidateAvailabilityTracksRelaxedAliasCandidate(t *testing.T) {
+	sub := &model.Subscription{Name: "翘楚 S01E06 自动订阅", Filter: "翘楚 S01E06", MediaType: "tv", TotalEpisodes: 24}
+	availability := LocalAvailability{
+		TotalEpisodes:       24,
+		LocalMediaCount:     1,
+		MissingEpisodes:     []int{21},
+		ExistingEpisodeKeys: map[string]struct{}{episodeKey(1, 6): {}},
+		MissingEpisodeKeys:  map[string]struct{}{episodeKey(1, 21): {}},
+	}
+	candidate := siteSearchCandidate{
+		Item: SearchResult{
+			Title:       "Ashes to Crown 2026 S01E21 2160p WEB-DL",
+			DownloadURL: "https://pt/download/21",
+		},
+		Download: "https://pt/download/21",
+		GUID:     "site|m-team|ashes-to-crown-21",
+		Season:   1,
+		Episode:  21,
+	}
+
+	addSiteSearchCandidateAvailability(candidate, &availability)
+	availability = NewSubscriptionService(nil, nil, nil, nil, nil, nil).finalizePendingAvailability(sub, availability)
+
+	if _, ok := availability.ExistingEpisodeKeys[episodeKey(1, 21)]; !ok {
+		t.Fatalf("missing relaxed alias candidate E21 key: %#v", availability.ExistingEpisodeKeys)
+	}
+	got := selectSiteSearchCandidates([]SearchResult{candidate.Item}, sub, map[string]struct{}{}, availability)
+	if len(got) != 0 {
+		t.Fatalf("selected %#v, want relaxed alias candidate skipped after dedup availability update", got)
+	}
+}
+
+func TestSelectSiteSearchCandidatesDoesNotRelaxQueryForMovies(t *testing.T) {
+	sub := &model.Subscription{Name: "玩具总动员 5 自动订阅", Filter: "玩具总动员 5 2026", MediaType: "movie"}
+	results := []SearchResult{
+		{Title: "Toy Story 4 2019 2160p WEB-DL", DownloadURL: "https://pt/download/wrong", Seeders: 100},
+	}
+	availability := LocalAvailability{}
+
+	got, stats := selectSiteSearchCandidatesWithStats(results, sub, map[string]struct{}{}, availability)
+	if len(got) != 0 {
+		t.Fatalf("selected %#v, want no relaxed movie match", got)
+	}
+	if stats.QueryMismatch != 1 || stats.RelaxedQueryMatch != 0 {
+		t.Fatalf("unexpected stats: %#v", stats)
+	}
+}
+
 func TestSelectSiteSearchCandidatesSingleExistingMovieIsSkippedWhenNotWashing(t *testing.T) {
 	sub := &model.Subscription{Name: "Inception 自动订阅", Filter: "Inception 2010", MediaType: "movie"}
 	results := []SearchResult{
@@ -485,6 +676,47 @@ func TestSubscriptionPendingDownloadAvailabilityIncludesQueuedTasks(t *testing.T
 	got := selectSiteSearchCandidates(results, sub, map[string]struct{}{}, availability)
 	if len(got) != 1 || got[0].Episode != 3 {
 		t.Fatalf("selected %#v, want only not-yet-downloaded episode 3", got)
+	}
+}
+
+func TestSubscriptionPendingDownloadAvailabilityIncludesLinkedAliasTask(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.DownloadTask{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	sub := &model.Subscription{
+		Base:          model.Base{ID: "sub-qiao-chu"},
+		Name:          "翘楚 S01E06 自动订阅",
+		Filter:        "翘楚 S01E06",
+		MediaType:     "tv",
+		SavePath:      "/downloads/tv",
+		TotalEpisodes: 24,
+	}
+	if err := repos.Download.Create(t.Context(), &model.DownloadTask{
+		SubscriptionID: sub.ID,
+		Source:         "qbittorrent",
+		URL:            "https://pt/download/21",
+		Title:          "Ashes to Crown 2026 S01E21 2160p WEB-DL",
+		SavePath:       "/downloads/tv",
+		Status:         "queued",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewSubscriptionService(nil, nil, repos, nil, nil, nil)
+
+	availability := svc.pendingDownloadAvailability(t.Context(), sub)
+	if _, ok := availability.ExistingEpisodeKeys[episodeKey(1, 21)]; !ok {
+		t.Fatalf("missing linked alias E21 key: %#v", availability.ExistingEpisodeKeys)
+	}
+	got := selectSiteSearchCandidates([]SearchResult{
+		{Title: "Ashes to Crown 2026 S01E21 2160p WEB-DL", DownloadURL: "https://pt/download/21", Seeders: 80},
+	}, sub, map[string]struct{}{}, availability)
+	if len(got) != 0 {
+		t.Fatalf("selected %#v, want linked alias task to satisfy E21", got)
 	}
 }
 
@@ -803,6 +1035,13 @@ func TestInferSubscriptionTotalEpisodesFromSearchAndRSS(t *testing.T) {
 	}
 	if got := inferSearchTotalEpisodes(results, sub); got != 12 {
 		t.Fatalf("search inferred total = %d, want 12", got)
+	}
+	subtitleResults := []SearchResult{
+		{Title: "Smoking Behind the Supermarket with You", Subtitle: "躲在超市后门抽烟的两人 S01E12"},
+	}
+	subtitleSub := &model.Subscription{Name: "躲在超市后门抽烟的两人 自动订阅", Filter: "躲在超市后门抽烟的两人", MediaType: "tv"}
+	if got := inferSearchTotalEpisodes(subtitleResults, subtitleSub); got != 12 {
+		t.Fatalf("subtitle search inferred total = %d, want 12", got)
 	}
 	items := []rssItem{
 		{Title: "Some Show S01E02 WEB-DL"},

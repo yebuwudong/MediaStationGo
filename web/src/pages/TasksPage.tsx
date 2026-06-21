@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Activity } from 'lucide-react'
+import toast from 'react-hot-toast'
+import { Activity, Copy } from 'lucide-react'
 
 import { tasksAPI, type BackgroundTask, type TasksSnapshot } from '../api/tasks'
 
@@ -55,14 +56,48 @@ function formatMetrics(metrics?: Record<string, number>): string {
     .join(' · ')
 }
 
+function hasTaskIssues(task: BackgroundTask): boolean {
+  return Boolean(task.metrics?.errors || task.metrics?.scan_errors || task.metrics?.scrape_errors)
+}
+
 function statusBadge(task: BackgroundTask) {
   if (task.status === 'failed') {
     return <span className="rounded-lg border border-red-400/40 px-1.5 py-0.5 text-xs text-red-500">failed</span>
+  }
+  if (hasTaskIssues(task)) {
+    return <span className="rounded-lg border border-orange-400/40 px-1.5 py-0.5 text-xs text-orange-500">issues</span>
   }
   if (task.status === 'completed') {
     return <span className="rounded-lg border border-emerald-400/40 px-1.5 py-0.5 text-xs text-emerald-500">done</span>
   }
   return <span className="rounded-lg border border-yellow-400/40 px-1.5 py-0.5 text-xs text-yellow-500">running</span>
+}
+
+function taskCopyText(task: BackgroundTask): string {
+  const lines = [
+    `任务: ${task.name}`,
+    `状态: ${task.status}${hasTaskIssues(task) ? ' (issues)' : ''}`,
+    `阶段: ${task.stage || '-'}`,
+    `来源: ${task.source_path || '-'}`,
+    `目标: ${task.dest_path || '-'}`,
+    `消息: ${task.error || task.message || '-'}`,
+  ]
+  const metrics = formatMetrics(task.metrics)
+  if (metrics) lines.push(`指标: ${metrics}`)
+  if (task.details?.length) {
+    lines.push('详情:')
+    lines.push(...task.details)
+  }
+  return lines.join('\n')
+}
+
+async function copyTask(task: BackgroundTask) {
+  try {
+    await navigator.clipboard.writeText(taskCopyText(task))
+    toast.success('任务详情已复制')
+  } catch {
+    toast.error('复制失败，请手动选中详情文本')
+  }
 }
 
 function BackgroundTaskTable({ tasks, empty }: { tasks: BackgroundTask[]; empty: string }) {
@@ -90,14 +125,24 @@ function BackgroundTaskTable({ tasks, empty }: { tasks: BackgroundTask[]; empty:
             <td className="text-ink-100">{task.stage || '-'}</td>
             <td>{statusBadge(task)}</td>
             <td className="max-w-md text-ink-100">
-              <div>{task.error || task.message || '-'}</div>
+              <div className="flex items-start gap-2">
+                <div className="min-w-0 flex-1 select-text break-words">{task.error || task.message || '-'}</div>
+                <button
+                  type="button"
+                  className="rounded-lg border border-gray-200 bg-white p-1 text-sand-500 hover:border-primary-400/40 hover:text-brand-500"
+                  title="复制任务详情"
+                  onClick={() => void copyTask(task)}
+                >
+                  <Copy size={14} />
+                </button>
+              </div>
               {formatMetrics(task.metrics) && (
-                <div className="mt-1 text-xs text-sand-500">{formatMetrics(task.metrics)}</div>
+                <div className="mt-1 select-text text-xs text-sand-500">{formatMetrics(task.metrics)}</div>
               )}
               {task.details && task.details.length > 0 && (
-                <div className="mt-2 max-h-28 overflow-auto rounded-lg border border-gray-200 bg-gray-50 p-2 font-mono text-[11px] text-sand-600">
+                <div className="mt-2 max-h-64 select-text overflow-auto rounded-lg border border-gray-200 bg-gray-50 p-2 font-mono text-[11px] leading-relaxed text-sand-600">
                   {task.details.map((line, index) => (
-                    <div key={`${task.id}-detail-${index}`} className="break-all">
+                    <div key={`${task.id}-detail-${index}`} className="whitespace-pre-wrap break-words">
                       {line}
                     </div>
                   ))}

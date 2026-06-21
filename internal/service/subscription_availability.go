@@ -67,7 +67,12 @@ func (s *SubscriptionService) addDownloadTaskAvailability(ctx context.Context, s
 		if !downloadTaskBlocksReadd(row.Status) {
 			continue
 		}
-		if baseSavePath != "" && row.SavePath != "" && !sameOrChildPath(row.SavePath, baseSavePath) && !sameOrChildPath(baseSavePath, row.SavePath) {
+		linkedToSubscription := sub != nil && strings.TrimSpace(row.SubscriptionID) != "" && row.SubscriptionID == sub.ID
+		if !linkedToSubscription && baseSavePath != "" && row.SavePath != "" && !sameOrChildPath(row.SavePath, baseSavePath) && !sameOrChildPath(baseSavePath, row.SavePath) {
+			continue
+		}
+		if linkedToSubscription {
+			addTrustedAvailabilityTitle(row.Title, 0, 0, false, out)
 			continue
 		}
 		addAvailabilityTitle(row.Title, query, out)
@@ -101,6 +106,33 @@ func addAvailabilityTitle(title, query string, out *LocalAvailability) {
 		return
 	}
 	if isSeriesPackTitle(title) {
+		out.HasSeriesPack = true
+	}
+}
+
+func addSiteSearchCandidateAvailability(candidate siteSearchCandidate, out *LocalAvailability) {
+	addTrustedAvailabilityTitle(subscriptionSearchResultText(candidate.Item), candidate.Season, candidate.Episode, candidate.Pack, out)
+}
+
+func addTrustedAvailabilityTitle(title string, season, episode int, pack bool, out *LocalAvailability) {
+	if out == nil {
+		return
+	}
+	if strings.TrimSpace(title) == "" && episode <= 0 && !pack {
+		return
+	}
+	out.LocalMediaCount++
+	if episode <= 0 {
+		season, episode = ParseEpisode(title)
+	}
+	if episode > 0 {
+		if out.ExistingEpisodeKeys == nil {
+			out.ExistingEpisodeKeys = map[string]struct{}{}
+		}
+		out.ExistingEpisodeKeys[episodeKey(season, episode)] = struct{}{}
+		return
+	}
+	if pack || isSeriesPackTitle(title) {
 		out.HasSeriesPack = true
 	}
 }

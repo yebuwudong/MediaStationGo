@@ -3,11 +3,19 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+
+	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
 func TestMTeamAuthenticateRequiresAPIKey(t *testing.T) {
@@ -74,4 +82,205 @@ func TestMTeamAuthenticateReportsAPIMessage(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "key無效") {
 		t.Fatalf("Authenticate error = %v, want key invalid message", err)
 	}
+}
+
+func TestYemaPTAuthenticateUsesAuthorizationHeader(t *testing.T) {
+	var gotPath string
+	var gotAuth string
+	var gotXAPIKey string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotXAPIKey = r.Header.Get("x-api-key")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"showType":0,"data":{"id":10,"name":"tester"}}`))
+	}))
+	defer server.Close()
+
+	adapter := NewYemaPTAdapter()
+	err := adapter.Authenticate(context.Background(), SiteConfig{
+		Type:     "yemapt",
+		URL:      server.URL,
+		AuthType: "api_key",
+		APIKey:   "auth-123",
+		Timeout:  5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Authenticate returned error: %v", err)
+	}
+	if gotPath != "/openApi/user/fetchBasicInfo.json" {
+		t.Fatalf("path = %q, want /openApi/user/fetchBasicInfo.json", gotPath)
+	}
+	if gotAuth != "auth-123" {
+		t.Fatalf("Authorization = %q, want auth-123", gotAuth)
+	}
+	if gotXAPIKey != "" {
+		t.Fatalf("x-api-key = %q, want empty", gotXAPIKey)
+	}
+}
+
+func TestYemaPTAuthenticateReportsAPIMessage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":false,"errorCode":403,"errorMessage":"need api auth"}`))
+	}))
+	defer server.Close()
+
+	adapter := NewYemaPTAdapter()
+	err := adapter.Authenticate(context.Background(), SiteConfig{
+		Type:     "yemapt",
+		URL:      server.URL,
+		AuthType: "api_key",
+		APIKey:   "bad-auth",
+		Timeout:  5 * time.Second,
+	})
+	if err == nil || !strings.Contains(err.Error(), "need api auth") {
+		t.Fatalf("Authenticate error = %v, want need api auth", err)
+	}
+}
+
+func TestNewSiteAdapterDetectsYemaPTURL(t *testing.T) {
+	adapter := NewSiteAdapter(&model.Site{
+		Type: "nexusphp",
+		URL:  "https://www.yemapt.org",
+	})
+	if _, ok := adapter.(*YemaPTAdapter); !ok {
+		t.Fatalf("adapter = %T, want *YemaPTAdapter", adapter)
+	}
+}
+
+func TestBuildRequestAPIKeyHeaderBySite(t *testing.T) {
+	yemaReq, err := buildRequest(context.Background(), http.MethodGet, "https://www.yemapt.org/openApi/user/fetchBasicInfo.json", SiteConfig{
+		Type:     "yemapt",
+		URL:      "https://www.yemapt.org",
+		AuthType: "api_key",
+		APIKey:   "yema-auth",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := yemaReq.Header.Get("Authorization"); got != "yema-auth" {
+		t.Fatalf("YemaPT Authorization = %q, want yema-auth", got)
+	}
+	if got := yemaReq.Header.Get("x-api-key"); got != "" {
+		t.Fatalf("YemaPT x-api-key = %q, want empty", got)
+	}
+
+	mteamReq, err := buildRequest(context.Background(), http.MethodGet, "https://api.m-team.cc/api/torrent/search", SiteConfig{
+		Type:     "mteam",
+		URL:      "https://api.m-team.cc",
+		AuthType: "api_key",
+		APIKey:   "mteam-auth",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mteamReq.Header.Get("x-api-key"); got != "mteam-auth" {
+		t.Fatalf("M-Team x-api-key = %q, want mteam-auth", got)
+	}
+	if got := mteamReq.Header.Get("Authorization"); got != "" {
+		t.Fatalf("M-Team Authorization = %q, want empty", got)
+	}
+}
+
+func TestMTeamPublishedAPIRateLimits(t *testing.T) {
+	search := mteamAPIRateLimits(mteamAPIEndpointSearch)
+	if len(search) != 1 || search[0].Limit != 1000 || search[0].Window != 24*time.Hour {
+		t.Fatalf("search limits = %#v, want 1000/24h", search)
+	}
+	detail := mteamAPIRateLimits(mteamAPIEndpointDetail)
+	if len(detail) != 1 || detail[0].Limit != 100 || detail[0].Window != time.Hour {
+		t.Fatalf("detail limits = %#v, want 100/1h", detail)
+	}
+	download := mteamAPIRateLimits(mteamAPIEndpointDownload)
+	if len(download) != 2 ||
+		download[0].Limit != 100 || download[0].Window != time.Hour ||
+		download[1].Limit != 1000 || download[1].Window != 24*time.Hour {
+		t.Fatalf("download limits = %#v, want 100/1h and 1000/24h", download)
+	}
+}
+
+func TestPersistentSiteAPIRateLimiterPersistsSlidingWindow(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Setting{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	now := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)
+	limiter := newPersistentSiteAPIRateLimiter(repos)
+	limiter.now = func() time.Time { return now }
+	limit := siteAPIRateLimit{Bucket: "test_1h", Limit: 2, Window: time.Hour}
+
+	if err := limiter.Allow(t.Context(), "mteam:test", limit); err != nil {
+		t.Fatalf("first allow: %v", err)
+	}
+	if err := limiter.Allow(t.Context(), "mteam:test", limit); err != nil {
+		t.Fatalf("second allow: %v", err)
+	}
+	err = limiter.Allow(t.Context(), "mteam:test", limit)
+	var limited *siteAPIRateLimitError
+	if !errors.As(err, &limited) {
+		t.Fatalf("third allow error = %v, want siteAPIRateLimitError", err)
+	}
+	if limited.RetryAfter != time.Hour {
+		t.Fatalf("retry_after = %v, want 1h", limited.RetryAfter)
+	}
+
+	restarted := newPersistentSiteAPIRateLimiter(repos)
+	restarted.now = func() time.Time { return now.Add(30 * time.Minute) }
+	if err := restarted.Allow(t.Context(), "mteam:test", limit); !errors.As(err, &limited) {
+		t.Fatalf("restarted allow error = %v, want persisted limit", err)
+	}
+
+	restarted.now = func() time.Time { return now.Add(time.Hour + time.Second) }
+	if err := restarted.Allow(t.Context(), "mteam:test", limit); err != nil {
+		t.Fatalf("allow after window: %v", err)
+	}
+}
+
+func TestMTeamRateLimitStopsRequestBeforeHTTP(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":"0","message":"SUCCESS","data":{"total":"0","data":[]}}`))
+	}))
+	defer server.Close()
+
+	adapter := NewMTeamAdapter()
+	limiter := &staticSiteAPIRateLimiter{err: &siteAPIRateLimitError{
+		Bucket:     "torrent_search_24h",
+		Limit:      1000,
+		Window:     24 * time.Hour,
+		RetryAfter: time.Hour,
+	}}
+	_, err := adapter.Search(t.Context(), SiteConfig{
+		URL:         server.URL,
+		AuthType:    "api_key",
+		APIKey:      "token-123",
+		Timeout:     5 * time.Second,
+		rateLimiter: limiter,
+	}, "show", 1)
+	if err == nil || !strings.Contains(err.Error(), "rate limit") {
+		t.Fatalf("Search error = %v, want rate limit", err)
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("HTTP requests = %d, want 0", got)
+	}
+	if limiter.calls != 1 {
+		t.Fatalf("limiter calls = %d, want 1", limiter.calls)
+	}
+}
+
+type staticSiteAPIRateLimiter struct {
+	err   error
+	calls int
+}
+
+func (l *staticSiteAPIRateLimiter) Allow(context.Context, string, ...siteAPIRateLimit) error {
+	l.calls++
+	return l.err
 }

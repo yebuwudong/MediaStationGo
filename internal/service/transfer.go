@@ -69,7 +69,7 @@ func transferFile(src, dst string, mode TransferMode) error {
 			// 即使在宿主机上同属一块盘，容器内 os.Link 也会因跨文件系统
 			// (EXDEV) 失败。hardlink 模式必须保持零额外数据占用语义，不能
 			// 自动降级为复制；需要复制时请显式选择 copy。
-			return fmt.Errorf("hardlink failed: %w; source and target must be on the same filesystem, choose copy if you want to duplicate data", err)
+			return fmt.Errorf("hardlink failed: %w; source and target must be on the same filesystem/subvolume from inside the container. If you selected move, disable keep_seeding first because keep_seeding upgrades move to hardlink; choose copy if you want to keep seeding across mounts", err)
 		}
 		return nil
 	case TransferSymlink:

@@ -71,6 +71,7 @@ func (d *DiscoverService) TMDbSectionPage(ctx context.Context, key string, page,
 			MediaType:        mediaType,
 			Title:            item.Title,
 			OriginalTitle:    item.OriginalName,
+			OriginalName:     item.OriginalName,
 			OriginalLanguage: strings.Join(item.Languages, ","),
 			Overview:         item.Overview,
 			PosterURL:        item.PosterURL,
@@ -123,15 +124,17 @@ func (d *DiscoverService) FetchPage(ctx context.Context, path string, pageNum in
 	u := base + path + "?" + q.Encode()
 
 	type result struct {
-		ID           int     `json:"id"`
-		Title        string  `json:"title"`
-		Name         string  `json:"name"`
-		Overview     string  `json:"overview"`
-		PosterPath   string  `json:"poster_path"`
-		BackdropPath string  `json:"backdrop_path"`
-		ReleaseDate  string  `json:"release_date"`
-		FirstAirDate string  `json:"first_air_date"`
-		VoteAverage  float32 `json:"vote_average"`
+		ID            int     `json:"id"`
+		Title         string  `json:"title"`
+		Name          string  `json:"name"`
+		OriginalTitle string  `json:"original_title"`
+		OriginalName  string  `json:"original_name"`
+		Overview      string  `json:"overview"`
+		PosterPath    string  `json:"poster_path"`
+		BackdropPath  string  `json:"backdrop_path"`
+		ReleaseDate   string  `json:"release_date"`
+		FirstAirDate  string  `json:"first_air_date"`
+		VoteAverage   float32 `json:"vote_average"`
 	}
 	type page struct {
 		Results []result `json:"results"`
@@ -160,10 +163,11 @@ func (d *DiscoverService) FetchPage(ctx context.Context, path string, pageNum in
 			title = r.Name
 		}
 		m := Match{
-			TMDbID:   r.ID,
-			Title:    title,
-			Overview: r.Overview,
-			Rating:   r.VoteAverage,
+			TMDbID:       r.ID,
+			Title:        title,
+			OriginalName: firstNonEmpty(r.OriginalTitle, r.OriginalName),
+			Overview:     r.Overview,
+			Rating:       r.VoteAverage,
 		}
 		if r.PosterPath != "" {
 			m.PosterURL = d.tmdb.imgCDN + "/w500" + r.PosterPath
@@ -467,6 +471,7 @@ func (b *BangumiProvider) CalendarPage(ctx context.Context, pageNum, limit int) 
 				Source:           "bangumi",
 				MediaType:        "anime",
 				Title:            title,
+				OriginalName:     item.Name,
 				Overview:         item.Summary,
 				PosterURL:        poster,
 				Year:             year,

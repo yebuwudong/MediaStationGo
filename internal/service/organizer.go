@@ -638,6 +638,9 @@ func (o *OrganizerService) isSmartClassifyEnabled(ctx context.Context) bool {
 		}
 	}
 	// Fallback to config.yaml
+	if o == nil || o.cfg == nil {
+		return false
+	}
 	return o.cfg.Organizer.SmartClassify
 }
 

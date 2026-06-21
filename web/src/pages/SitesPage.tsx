@@ -15,6 +15,12 @@ import {
 import { SiteCard } from "./SiteCard";
 import { SiteFormModal } from "./SiteFormModal";
 
+function apiErrorMessage(err: unknown, fallback: string): string {
+  const data = (err as { response?: { data?: { message?: string; error?: string } } })
+    ?.response?.data;
+  return data?.message || data?.error || (err instanceof Error ? err.message : fallback);
+}
+
 export function SitesPage() {
   const [sites, setSites] = useState<Site[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,8 +71,10 @@ export function SitesPage() {
     setEditingId(null);
   };
 
-  const silentSave = async (): Promise<boolean> => {
-    if (!form.name.trim() || !form.url.trim()) return false;
+  const silentSave = async (): Promise<{ ok: boolean; message?: string }> => {
+    if (!form.name.trim() || !form.url.trim()) {
+      return { ok: false, message: "站点名称和地址不能为空" };
+    }
     const payload = siteFormToPayload(form, !editingId);
     try {
       if (editingId) {
@@ -75,22 +83,22 @@ export function SitesPage() {
         const response = await sitesAPI.create(payload);
         setEditingId((response.data as Site)?.id ?? null);
       }
-      return true;
-    } catch {
-      return false;
+      return { ok: true };
+    } catch (err: unknown) {
+      return { ok: false, message: apiErrorMessage(err, "保存失败") };
     }
   };
 
   const handleSave = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setSaving(true);
-    const ok = await silentSave();
-    if (ok) {
+    const result = await silentSave();
+    if (result.ok) {
       toast.success(editingId ? "站点已更新" : "站点已添加");
       closeModal();
       await loadSites();
     } else {
-      toast.error("保存失败");
+      toast.error(result.message || "保存失败");
     }
     setSaving(false);
   };
@@ -98,10 +106,10 @@ export function SitesPage() {
   const handleTest = async (id: string) => {
     if (editingId === id) {
       setSaving(true);
-      const ok = await silentSave();
+      const result = await silentSave();
       setSaving(false);
-      if (!ok) {
-        toast.error("保存失败，无法测试");
+      if (!result.ok) {
+        toast.error(result.message || "保存失败，无法测试");
         return;
       }
     }
@@ -111,10 +119,7 @@ export function SitesPage() {
       const response = await sitesAPI.test(id);
       toast.success(response?.message || "连接测试成功");
     } catch (err: unknown) {
-      const message =
-        (err as { response?: { data?: { message?: string } } })?.response?.data
-          ?.message ?? "连接测试失败";
-      toast.error(message);
+      toast.error(apiErrorMessage(err, "连接测试失败"));
     } finally {
       setTestingId(null);
     }
@@ -141,7 +146,7 @@ export function SitesPage() {
     setForm((current) => ({
       ...current,
       type,
-      auth_type: type === "mteam" ? "api_key" : current.auth_type,
+      auth_type: type === "mteam" || type === "yemapt" ? "api_key" : current.auth_type,
     }));
   };
 

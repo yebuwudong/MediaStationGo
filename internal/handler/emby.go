@@ -1140,14 +1140,29 @@ func embyAttachTokenToMediaSourcesMap(out map[string]any, token string) {
 
 func embyAttachTokenToMediaSources(sources []map[string]any, token string) {
 	for _, source := range sources {
-		for _, key := range []string{"DirectStreamUrl", "TranscodingUrl", "Path"} {
+		for _, key := range []string{"DirectStreamUrl", "TranscodingUrl"} {
 			raw, ok := source[key].(string)
 			if !ok {
 				continue
 			}
 			source[key] = embyAppendAPIKey(raw, token)
 		}
+		if raw, ok := source["Path"].(string); ok && embyMediaSourcePathNeedsAPIKey(raw) {
+			source["Path"] = embyAppendAPIKey(raw, token)
+		}
 	}
+}
+
+func embyMediaSourcePathNeedsAPIKey(raw string) bool {
+	path := strings.TrimSpace(raw)
+	if path == "" || strings.HasPrefix(path, "//") {
+		return false
+	}
+	u, err := url.Parse(path)
+	if err != nil || u.IsAbs() {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimPrefix(u.Path, "/"), "Videos/")
 }
 
 func embyRequestToken(c *gin.Context) string {
