@@ -6,6 +6,7 @@ export const SITE_TYPE_LABELS: Record<string, string> = {
   gazelle: "Gazelle",
   unit3d: "UNIT3D",
   mteam: "M-Team",
+  yemapt: "YemaPT",
   discuz: "Discuz",
   custom_rss: "自定义 RSS",
 };
@@ -15,6 +16,7 @@ export const SITE_TYPE_ABBR: Record<string, string> = {
   gazelle: "GZ",
   unit3d: "U3",
   mteam: "MT",
+  yemapt: "YM",
   discuz: "DZ",
   custom_rss: "RS",
 };
@@ -24,6 +26,7 @@ export const SITE_TYPE_COLORS: Record<string, string> = {
   gazelle: "bg-purple-500/15 text-purple-400",
   unit3d: "bg-orange-500/15 text-orange-400",
   mteam: "bg-green-500/15 text-green-400",
+  yemapt: "bg-cyan-500/15 text-cyan-400",
   discuz: "bg-yellow-500/15 text-yellow-400",
   custom_rss: "bg-sand-500/15 text-ink-50",
 };

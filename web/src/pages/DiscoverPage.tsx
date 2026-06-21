@@ -4,7 +4,7 @@ import { AlertTriangle, Download, Info, Rss, Sparkles, X } from 'lucide-react'
 
 import { discoverAPI, type DiscoverItem, type DiscoverSection } from '../api/discover'
 import { imageURL } from '../api/client'
-import { subscriptionsAPI } from '../api/subscriptions'
+import { buildSiteSearchFeedURL, subscriptionsAPI } from '../api/subscriptions'
 
 const defaultSections = [
   'tmdb_trending_day',
@@ -258,7 +258,7 @@ function DiscoverDetailModal({ item, onClose }: { item: DiscoverItem; onClose: (
 
   const submit = async () => {
     const finalKeyword = form.keyword.trim() || keyword
-    const feed = `site-search://search?keyword=${encodeURIComponent(finalKeyword)}&source=${encodeURIComponent(source)}`
+    const feed = buildSiteSearchFeedURL(finalKeyword, source, [item.title, item.original_name || ''])
     setBusy(true)
     try {
       const sub = await subscriptionsAPI.create({

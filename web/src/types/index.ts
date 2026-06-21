@@ -376,7 +376,7 @@ export interface SchedulerStatus {
 export interface Site {
   id: string
   name: string
-  type: string          // nexusphp / gazelle / unit3d / mteam / discuz / custom_rss
+  type: string          // nexusphp / gazelle / unit3d / mteam / yemapt / discuz / custom_rss
   url: string
   auth_type: string     // cookie / api_key / auth_header
   cookie?: string       // decrypted only in detail view

@@ -33,6 +33,9 @@ func (a *MTeamAdapter) Authenticate(ctx context.Context, cfg SiteConfig) error {
 	// 与旧版参考实现对齐：
 	// 用 camelCase 参数（pageNumber / pageSize），同时接受 code 为字符串 "0"
 	// 或数值 0；兼容 M-Team v3 API 不同版本的返回。
+	if err := reserveMTeamAPIQuota(ctx, cfg, mteamAPIEndpointSearch); err != nil {
+		return fmt.Errorf("authenticate: %w", err)
+	}
 	u := cfg.URL + "/api/torrent/search"
 	payload := `{"pageNumber":1,"pageSize":1,"mode":"all"}`
 	data, status, err := doRequestJSON(ctx, a.client, "POST", u, cfg, []byte(payload))
@@ -78,6 +81,9 @@ func (a *MTeamAdapter) Search(ctx context.Context, cfg SiteConfig, keyword strin
 	}
 	body, _ := json.Marshal(payload)
 
+	if err := reserveMTeamAPIQuota(ctx, cfg, mteamAPIEndpointSearch); err != nil {
+		return nil, err
+	}
 	u := cfg.URL + "/api/torrent/search"
 	data, status, err := doRequestJSON(ctx, a.client, "POST", u, cfg, body)
 	if err != nil {
@@ -104,6 +110,9 @@ func (a *MTeamAdapter) Browse(ctx context.Context, cfg SiteConfig, category stri
 	}
 	body, _ := json.Marshal(payload)
 
+	if err := reserveMTeamAPIQuota(ctx, cfg, mteamAPIEndpointSearch); err != nil {
+		return nil, err
+	}
 	u := cfg.URL + "/api/torrent/search"
 	data, status, err := doRequestJSON(ctx, a.client, "POST", u, cfg, body)
 	if err != nil {
@@ -117,6 +126,9 @@ func (a *MTeamAdapter) Browse(ctx context.Context, cfg SiteConfig, category stri
 }
 
 func (a *MTeamAdapter) GetDetail(ctx context.Context, cfg SiteConfig, id string) (*TorrentDetail, error) {
+	if err := reserveMTeamAPIQuota(ctx, cfg, mteamAPIEndpointDetail); err != nil {
+		return nil, err
+	}
 	u := cfg.URL + "/api/torrent/detail?id=" + url.QueryEscape(id)
 	data, status, err := doRequestJSON(ctx, a.client, "POST", u, cfg, nil)
 	if err != nil {
@@ -184,6 +196,9 @@ func (a *MTeamAdapter) GetDetail(ctx context.Context, cfg SiteConfig, id string)
 // 拿到的 sign URL 可被任何下载客户端无认证地直接 GET。这是旧版参考实现
 // _download_torrent_file 方法的子集。
 func (a *MTeamAdapter) GetDownloadURL(ctx context.Context, cfg SiteConfig, id string) (string, error) {
+	if err := reserveMTeamAPIQuota(ctx, cfg, mteamAPIEndpointDownload); err != nil {
+		return "", err
+	}
 	u := cfg.URL + "/api/torrent/genDlToken?id=" + id
 	// genDlToken 是 POST 但参数走 query string；body 留空。
 	data, status, err := doRequestJSON(ctx, a.client, "POST", u, cfg, []byte("{}"))

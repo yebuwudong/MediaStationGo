@@ -66,6 +66,7 @@ func (d *DiscoverService) TMDbSection(ctx context.Context, key string) ([]Extern
 			Source:           "tmdb",
 			MediaType:        mediaType,
 			Title:            item.Title,
+			OriginalName:     item.OriginalName,
 			Overview:         item.Overview,
 			PosterURL:        item.PosterURL,
 			BackdropURL:      item.BackdropURL,
@@ -106,15 +107,17 @@ func (d *DiscoverService) Fetch(ctx context.Context, path string) ([]Match, erro
 	u := base + path + "?" + q.Encode()
 
 	type result struct {
-		ID           int     `json:"id"`
-		Title        string  `json:"title"`
-		Name         string  `json:"name"`
-		Overview     string  `json:"overview"`
-		PosterPath   string  `json:"poster_path"`
-		BackdropPath string  `json:"backdrop_path"`
-		ReleaseDate  string  `json:"release_date"`
-		FirstAirDate string  `json:"first_air_date"`
-		VoteAverage  float32 `json:"vote_average"`
+		ID            int     `json:"id"`
+		Title         string  `json:"title"`
+		Name          string  `json:"name"`
+		OriginalTitle string  `json:"original_title"`
+		OriginalName  string  `json:"original_name"`
+		Overview      string  `json:"overview"`
+		PosterPath    string  `json:"poster_path"`
+		BackdropPath  string  `json:"backdrop_path"`
+		ReleaseDate   string  `json:"release_date"`
+		FirstAirDate  string  `json:"first_air_date"`
+		VoteAverage   float32 `json:"vote_average"`
 	}
 	type page struct {
 		Results []result `json:"results"`
@@ -143,10 +146,11 @@ func (d *DiscoverService) Fetch(ctx context.Context, path string) ([]Match, erro
 			title = r.Name
 		}
 		m := Match{
-			TMDbID:   r.ID,
-			Title:    title,
-			Overview: r.Overview,
-			Rating:   r.VoteAverage,
+			TMDbID:       r.ID,
+			Title:        title,
+			OriginalName: firstNonEmpty(r.OriginalTitle, r.OriginalName),
+			Overview:     r.Overview,
+			Rating:       r.VoteAverage,
 		}
 		if r.PosterPath != "" {
 			m.PosterURL = d.tmdb.imgCDN + "/w500" + r.PosterPath
@@ -309,6 +313,7 @@ func (b *BangumiProvider) Calendar(ctx context.Context) ([]ExternalMediaResult, 
 				Source:           "bangumi",
 				MediaType:        "anime",
 				Title:            title,
+				OriginalName:     item.Name,
 				Overview:         item.Summary,
 				PosterURL:        poster,
 				Year:             year,

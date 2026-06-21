@@ -3,8 +3,8 @@
 // SchedulerService runs five recurring background jobs that keep the
 // library up-to-date without operator intervention:
 //
-//	library_scan      every 60 min — re-scan every enabled library so
-//	                                  newly-copied files are picked up.
+//	library_scan      every 24 h  — optional full re-scan for local libraries;
+//	                                  filesystem watchers handle normal changes.
 //	subscription_pull every 30 min — re-poll RSS feeds (in addition to
 //	                                  the existing SubscriptionService
 //	                                  internal timer).
@@ -87,6 +87,7 @@ const (
 	cloudAutoSyncEnabledKey        = "cloud.auto_sync_enabled"
 	cloudSyncIntervalSecondsKey    = "cloud.sync_interval_seconds"
 	cloudLastAutoSyncDateKey       = "cloud.last_auto_sync_date"
+	localLastPeriodicScanDateKey   = "scan.last_periodic_date"
 	cloudAutoSyncWindowStartHour   = 23
 	cloudAutoSyncWindowEndHour     = 5
 	cloudAutoSyncCompletedDateForm = "2006-01-02"
@@ -122,7 +123,7 @@ func (s *SchedulerService) Start(ctx context.Context) {
 	s.jobs = []*scheduledJob{
 		{
 			name:     "library_scan",
-			interval: 60 * time.Minute,
+			interval: 24 * time.Hour,
 			run:      s.jobScanLibraries,
 		},
 		{
@@ -337,7 +338,9 @@ func (s *SchedulerService) runReserved(ctx context.Context, j *scheduledJob) err
 // 仅当用户在设置中显式开启 scan.periodic_enabled 时才执行整库重扫，
 // 避免对硬盘的高频反复读取造成损伤（用户明确要求）。
 func (s *SchedulerService) jobScanLibraries(ctx context.Context) error {
-	if !s.periodicScanEnabled(ctx) {
+	manual, _ := ctx.Value(schedulerManualRunKey{}).(bool)
+	now := s.currentTime()
+	if !manual && !s.periodicScanDue(ctx, now) {
 		return nil
 	}
 	libs, err := s.repo.Library.List(ctx)
@@ -359,6 +362,9 @@ func (s *SchedulerService) jobScanLibraries(ctx context.Context) error {
 			s.log.Warn("scheduled scan failed",
 				zap.String("library", l.ID), zap.Error(err))
 		}
+	}
+	if !manual {
+		_ = s.markPeriodicScanCompleted(ctx, now)
 	}
 	return nil
 }
@@ -565,6 +571,27 @@ func (s *SchedulerService) periodicScanEnabled(ctx context.Context) bool {
 		return false
 	}
 	return parseBoolSetting(v, false)
+}
+
+func (s *SchedulerService) periodicScanDue(ctx context.Context, now time.Time) bool {
+	if !s.periodicScanEnabled(ctx) {
+		return false
+	}
+	if s.repo == nil || s.repo.Setting == nil {
+		return true
+	}
+	last, err := s.repo.Setting.Get(ctx, localLastPeriodicScanDateKey)
+	if err != nil {
+		return true
+	}
+	return strings.TrimSpace(last) != now.In(time.Local).Format(cloudAutoSyncCompletedDateForm)
+}
+
+func (s *SchedulerService) markPeriodicScanCompleted(ctx context.Context, now time.Time) error {
+	if s.repo == nil || s.repo.Setting == nil {
+		return nil
+	}
+	return s.repo.Setting.Set(ctx, localLastPeriodicScanDateKey, now.In(time.Local).Format(cloudAutoSyncCompletedDateForm))
 }
 
 // jobOrganizeSource periodically organizes the configured staging/download

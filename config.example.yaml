@@ -49,9 +49,9 @@ secrets:
   fanart_tv_api_key: ""
 
 logging:
-  level: warn          # production clamps file/stdout logs to warn or above
+  level: warn          # warn by default; set info/debug temporarily for detailed diagnosis
   format: console      # console | json
-  output_path: ""      # empty = {data_dir}/logs; use stdout/stderr to disable file logs
+  output_path: ""      # empty = {data_dir}/logs/app.log + warn.log + error.log; stdout/stderr disables file logs
   enable_rotation: true
   max_size_mb: 20
   max_age_days: 30

@@ -1,6 +1,23 @@
 import { api } from './client'
 import type { Subscription } from '../types'
 
+export function buildSiteSearchFeedURL(keyword: string, source?: string, aliases: string[] = []) {
+  const params = new URLSearchParams()
+  params.set('keyword', keyword)
+  if (source) params.set('source', source)
+  const seen = new Set([keyword.trim().toLowerCase()])
+  aliases
+    .map((alias) => alias.trim())
+    .filter(Boolean)
+    .forEach((alias) => {
+      const key = alias.toLowerCase()
+      if (seen.has(key)) return
+      seen.add(key)
+      params.append('alias', alias)
+    })
+  return `site-search://search?${params.toString()}`
+}
+
 export const subscriptionsAPI = {
   list: () =>
     api.get<{ items: Subscription[] }>('/subscriptions').then((r) => r.data.items),

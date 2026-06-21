@@ -27,6 +27,25 @@ type siteSearchCandidate struct {
 	Score    int
 }
 
+type siteSearchSelectionStats struct {
+	Total                    int
+	QueryMismatch            int
+	RelaxedQueryMatch        int
+	RuleMismatch             int
+	MissingDownload          int
+	Seen                     int
+	Prepared                 int
+	Selected                 int
+	LocalAlreadySatisfied    bool
+	LocalSeriesPackPresent   bool
+	SeriesComplete           bool
+	ExistingEpisodeSkipped   int
+	NotMissingEpisodeSkipped int
+	NoEpisodeSkipped         int
+	PackFallbackAvailable    bool
+	PackFallbackUsed         bool
+}
+
 // SubscriptionPlanner owns release selection decisions for subscriptions:
 // rule matching, candidate scoring, and filtering against known availability.
 type SubscriptionPlanner struct{}
@@ -46,13 +65,51 @@ func (SubscriptionPlanner) SelectSiteSearchCandidates(results []SearchResult, su
 	if len(availability) > 0 {
 		local = availability[0]
 	}
-	return selectSiteSearchCandidatesWithAvailability(results, sub, seenSet, local)
+	candidates, _ := selectSiteSearchCandidatesWithStats(results, sub, seenSet, local)
+	return candidates
 }
 
 func selectSiteSearchCandidatesWithAvailability(results []SearchResult, sub *model.Subscription, seenSet map[string]struct{}, local LocalAvailability) []siteSearchCandidate {
+	candidates, _ := selectSiteSearchCandidatesWithStats(results, sub, seenSet, local)
+	return candidates
+}
+
+func selectSiteSearchCandidatesWithStats(results []SearchResult, sub *model.Subscription, seenSet map[string]struct{}, local LocalAvailability) ([]siteSearchCandidate, siteSearchSelectionStats) {
+	stats := siteSearchSelectionStats{Total: len(results)}
+	if sub == nil {
+		return nil, stats
+	}
+	if seenSet == nil {
+		seenSet = map[string]struct{}{}
+	}
+	candidates := collectSiteSearchCandidates(results, sub, seenSet, false, &stats)
+	if len(candidates) == 0 && shouldRelaxSiteSearchQueryMatch(sub, local) && stats.QueryMismatch > 0 {
+		relaxedStats := siteSearchSelectionStats{Total: len(results)}
+		candidates = collectSiteSearchCandidates(results, sub, seenSet, true, &relaxedStats)
+		stats.RuleMismatch = relaxedStats.RuleMismatch
+		stats.MissingDownload = relaxedStats.MissingDownload
+		stats.Seen = relaxedStats.Seen
+		stats.Prepared = relaxedStats.Prepared
+		stats.RelaxedQueryMatch = relaxedStats.RelaxedQueryMatch
+	}
+	selected := selectPreparedSubscriptionCandidatesWithStats(candidates, sub, local, &stats)
+	return selected, stats
+}
+
+func collectSiteSearchCandidates(results []SearchResult, sub *model.Subscription, seenSet map[string]struct{}, allowQueryMismatch bool, stats *siteSearchSelectionStats) []siteSearchCandidate {
 	candidates := make([]siteSearchCandidate, 0, len(results))
 	for _, item := range results {
-		if !matchesSubscriptionRules(sub, item.Title) {
+		matchText := subscriptionSearchResultText(item)
+		if !subscriptionTitleMatchesQuery(sub, matchText) {
+			if allowQueryMismatch {
+				stats.RelaxedQueryMatch++
+			} else {
+				stats.QueryMismatch++
+				continue
+			}
+		}
+		if !matchesSubscriptionRules(sub, matchText) {
+			stats.RuleMismatch++
 			continue
 		}
 		download := strings.TrimSpace(item.DownloadURL)
@@ -60,14 +117,17 @@ func selectSiteSearchCandidatesWithAvailability(results []SearchResult, sub *mod
 			download = strings.TrimSpace(item.TorrentURL)
 		}
 		if download == "" {
+			stats.MissingDownload++
 			continue
 		}
 		guid := stableSiteSearchGUID(item, download)
 		if _, ok := seenSet[guid]; ok {
+			stats.Seen++
 			continue
 		}
-		season, episode := ParseEpisode(item.Title)
+		season, episode := ParseEpisode(matchText)
 		score := subscriptionCandidateScore(sub, item)
+		stats.Prepared++
 		candidates = append(candidates, siteSearchCandidate{
 			Item:     item,
 			Download: download,
@@ -78,7 +138,25 @@ func selectSiteSearchCandidatesWithAvailability(results []SearchResult, sub *mod
 			Score:    score,
 		})
 	}
-	return selectPreparedSubscriptionCandidates(candidates, sub, local)
+	return candidates
+}
+
+func shouldRelaxSiteSearchQueryMatch(sub *model.Subscription, local LocalAvailability) bool {
+	if sub == nil {
+		return false
+	}
+	mediaType := normalizeMediaType(sub.MediaType, sub.Name+" "+sub.Filter, "")
+	if !isSubscriptionSeriesType(mediaType) {
+		return false
+	}
+	if local.LocalMediaCount == 0 && len(local.ExistingEpisodeKeys) == 0 {
+		return false
+	}
+	return local.TotalEpisodes > 0 || len(local.MissingEpisodes) > 0
+}
+
+func subscriptionSearchResultText(item SearchResult) string {
+	return strings.TrimSpace(strings.Join([]string{item.Title, item.Subtitle}, " "))
 }
 
 func selectRSSSubscriptionCandidates(items []rssItem, sub *model.Subscription, filter *regexp.Regexp, seenSet map[string]struct{}, local LocalAvailability) []siteSearchCandidate {
@@ -124,6 +202,10 @@ func selectRSSSubscriptionCandidates(items []rssItem, sub *model.Subscription, f
 }
 
 func selectPreparedSubscriptionCandidates(candidates []siteSearchCandidate, sub *model.Subscription, local LocalAvailability) []siteSearchCandidate {
+	return selectPreparedSubscriptionCandidatesWithStats(candidates, sub, local, nil)
+}
+
+func selectPreparedSubscriptionCandidatesWithStats(candidates []siteSearchCandidate, sub *model.Subscription, local LocalAvailability, stats *siteSearchSelectionStats) []siteSearchCandidate {
 	if len(candidates) > 1 {
 		sort.SliceStable(candidates, func(i, j int) bool {
 			if candidates[i].Score != candidates[j].Score {
@@ -136,24 +218,33 @@ func selectPreparedSubscriptionCandidates(candidates []siteSearchCandidate, sub 
 		})
 	}
 	if len(candidates) == 0 {
-		return nil
+		return recordPreparedSelection(nil, stats)
 	}
 
 	mediaType := normalizeMediaType(sub.MediaType, sub.Name+" "+sub.Filter, "")
 	if !isSubscriptionSeriesType(mediaType) {
 		// 非洗版订阅成功下载一次即满足，媒体库/下载中已存在则不再重复下载。
 		if (sub == nil || !sub.WashEnabled) && local.LocalMediaCount > 0 {
-			return nil
+			if stats != nil {
+				stats.LocalAlreadySatisfied = true
+			}
+			return recordPreparedSelection(nil, stats)
 		}
-		return candidates[:1]
+		return recordPreparedSelection(candidates[:1], stats)
 	}
 
 	if local.HasSeriesPack {
-		return nil
+		if stats != nil {
+			stats.LocalSeriesPackPresent = true
+		}
+		return recordPreparedSelection(nil, stats)
 	}
 	if local.LocalMediaCount > 0 {
 		if local.TotalEpisodes > 0 && len(local.MissingEpisodes) == 0 {
-			return nil
+			if stats != nil {
+				stats.SeriesComplete = true
+			}
+			return recordPreparedSelection(nil, stats)
 		}
 		missingSet := missingEpisodeSet(local)
 		onlyMissing := make([]siteSearchCandidate, 0, len(candidates))
@@ -164,8 +255,14 @@ func selectPreparedSubscriptionCandidates(candidates []siteSearchCandidate, sub 
 				// 整季/全集包(无单集号)。剧集完结后站点常只挂全集包,
 				// 这里记下来作兜底:当单集候选不足以补齐缺失集时启用,
 				// 否则"补全缺失集"在站点只有全集包时永远匹配为空。
+				if stats != nil {
+					stats.NoEpisodeSkipped++
+				}
 				if candidate.Pack && packFallback == nil {
 					packFallback = &candidates[i]
+					if stats != nil {
+						stats.PackFallbackAvailable = true
+					}
 				}
 				continue
 			}
@@ -174,10 +271,16 @@ func selectPreparedSubscriptionCandidates(candidates []siteSearchCandidate, sub 
 				season = 1
 			}
 			if _, exists := local.ExistingEpisodeKeys[episodeKey(season, candidate.Episode)]; exists {
+				if stats != nil {
+					stats.ExistingEpisodeSkipped++
+				}
 				continue
 			}
 			if local.TotalEpisodes > 0 {
 				if _, missing := missingSet[candidate.Episode]; !missing {
+					if stats != nil {
+						stats.NotMissingEpisodeSkipped++
+					}
 					continue
 				}
 			}
@@ -187,22 +290,32 @@ func selectPreparedSubscriptionCandidates(candidates []siteSearchCandidate, sub 
 		if len(selected) == 0 && packFallback != nil {
 			// 没有可用的单集候选,但站点有整季/全集包 → 用包兜底补缺集。
 			// 代价是会重下已有集,但用户主动触发补全时这是可接受的。
-			return []siteSearchCandidate{*packFallback}
+			if stats != nil {
+				stats.PackFallbackUsed = true
+			}
+			return recordPreparedSelection([]siteSearchCandidate{*packFallback}, stats)
 		}
-		return selected
+		return recordPreparedSelection(selected, stats)
 	}
 
 	for _, candidate := range candidates {
 		if candidate.Pack {
-			return []siteSearchCandidate{candidate}
+			return recordPreparedSelection([]siteSearchCandidate{candidate}, stats)
 		}
 	}
 
 	selected := sortedEpisodeCandidates(candidates)
 	if len(selected) == 0 {
-		return candidates[:1]
+		return recordPreparedSelection(candidates[:1], stats)
 	}
-	return selected
+	return recordPreparedSelection(selected, stats)
+}
+
+func recordPreparedSelection(candidates []siteSearchCandidate, stats *siteSearchSelectionStats) []siteSearchCandidate {
+	if stats != nil {
+		stats.Selected = len(candidates)
+	}
+	return candidates
 }
 
 func stableRSSItemGUID(title, guid, link, enclosureURL string) string {
@@ -298,7 +411,7 @@ func matchesSubscriptionRules(sub *model.Subscription, title string) bool {
 }
 
 func subscriptionCandidateScore(sub *model.Subscription, item SearchResult) int {
-	title := strings.ToLower(item.Title)
+	title := strings.ToLower(subscriptionSearchResultText(item))
 	score := item.Seeders
 	if sub == nil || !sub.WashEnabled {
 		if item.Free {

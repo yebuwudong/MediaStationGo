@@ -321,7 +321,11 @@ func ApplySiteAuthHeaders(req *http.Request, site *model.Site) {
 		}
 	case "api_key":
 		if site.APIKey != "" {
-			req.Header.Set("x-api-key", site.APIKey)
+			if isYemaPTSite(site) {
+				req.Header.Set("Authorization", site.APIKey)
+			} else {
+				req.Header.Set("x-api-key", site.APIKey)
+			}
 		}
 	case "auth_header":
 		if site.AuthHeader != "" {
@@ -333,6 +337,21 @@ func ApplySiteAuthHeaders(req *http.Request, site *model.Site) {
 	if site.UserAgent != "" {
 		req.Header.Set("User-Agent", site.UserAgent)
 	}
+}
+
+func isYemaPTSite(site *model.Site) bool {
+	if site == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(site.Type), "yemapt") {
+		return true
+	}
+	u, err := url.Parse(strings.TrimSpace(site.URL))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "yemapt.org" || strings.HasSuffix(host, ".yemapt.org")
 }
 
 // GetPageSource fetches a page with browser-like headers.

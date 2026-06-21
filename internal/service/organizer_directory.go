@@ -147,30 +147,14 @@ func (o *OrganizerService) OrganizeDirectory(ctx context.Context, opts OrganizeO
 		if skipped, reason := shouldSkipOrganizeSourceVideo(source, filepath.Dir(source)); skipped {
 			res.Skipped++
 			res.Items = append(res.Items, OrganizePreviewItem{Source: source, Action: "skip", Reason: reason})
-			o.log.Info("organize file finished",
-				zap.String("source", source),
-				zap.String("dest", dest),
-				zap.String("mode", string(mode)),
-				zap.Int("organized", res.Organized),
-				zap.Int("replaced", res.Replaced),
-				zap.Int("skipped", res.Skipped),
-				zap.Any("skip_reasons", OrganizeSkipReasonCounts(res)),
-			)
+			o.logOrganizeDirectoryResult("organize file finished", res, mode)
 			return res, nil
 		}
 		if err := o.organizeSourceFile(ctx, source, filepath.Dir(source), dest, mode, opts.MediaType, opts.MediaCategory, opts.DryRun, opts.AllowReplaceExisting, metadataCache, res); err != nil {
 			res.Errors = append(res.Errors, fmt.Sprintf("%s: %s", filepath.Base(source), err.Error()))
 			res.Items = append(res.Items, OrganizePreviewItem{Source: source, Action: "error", Reason: err.Error()})
 		}
-		o.log.Info("organize file finished",
-			zap.String("source", source),
-			zap.String("dest", dest),
-			zap.String("mode", string(mode)),
-			zap.Int("organized", res.Organized),
-			zap.Int("replaced", res.Replaced),
-			zap.Int("skipped", res.Skipped),
-			zap.Any("skip_reasons", OrganizeSkipReasonCounts(res)),
-		)
+		o.logOrganizeDirectoryResult("organize file finished", res, mode)
 		return res, nil
 	}
 	walkErr := walk(source, func(path string, wi walkInfo) error {
@@ -195,16 +179,30 @@ func (o *OrganizerService) OrganizeDirectory(ctx context.Context, opts OrganizeO
 	if walkErr != nil {
 		return res, walkErr
 	}
-	o.log.Info("organize directory finished",
-		zap.String("source", source),
-		zap.String("dest", dest),
+	o.logOrganizeDirectoryResult("organize directory finished", res, mode)
+	return res, nil
+}
+
+func (o *OrganizerService) logOrganizeDirectoryResult(message string, res *OrganizeResult, mode TransferMode) {
+	if o == nil || o.log == nil || res == nil {
+		return
+	}
+	fields := []zap.Field{
+		zap.String("source", res.SourcePath),
+		zap.String("dest", res.DestPath),
 		zap.String("mode", string(mode)),
 		zap.Int("organized", res.Organized),
 		zap.Int("replaced", res.Replaced),
 		zap.Int("skipped", res.Skipped),
+		zap.Int("errors", len(res.Errors)),
 		zap.Any("skip_reasons", OrganizeSkipReasonCounts(res)),
-	)
-	return res, nil
+	}
+	if len(res.Errors) > 0 {
+		fields = append(fields, zap.Strings("error_samples", organizeErrorSamples(res.Errors, 5)))
+		o.log.Warn(message, fields...)
+		return
+	}
+	o.log.Info(message, fields...)
 }
 
 func ensureOrganizeDestinationWritable(dest string) error {

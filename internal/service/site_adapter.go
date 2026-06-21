@@ -17,6 +17,7 @@ import (
 
 // SiteConfig 站点配置（从 model.Site 解密后的纯文本）。
 type SiteConfig struct {
+	SiteID          string
 	Name            string
 	Type            string
 	URL             string
@@ -29,6 +30,8 @@ type SiteConfig struct {
 	Extra           map[string]string // JSON 扩展配置
 	FlareSolverrURL string            // FlareSolverr 服务地址（用于浏览器模拟绕过 Cloudflare/WAF）
 	UseProxy        bool              // 通过 HTTP(S)_PROXY 环境变量出站
+	RateLimit       bool
+	rateLimiter     siteAPIRateLimiter
 }
 
 // SiteSearchResult 站点搜索结果（按站点分组的批量搜索结果）。
@@ -119,11 +122,13 @@ func buildRequest(ctx context.Context, method, rawURL string, cfg SiteConfig, bo
 			req.Header.Set("Cookie", cfg.Cookie)
 		}
 	case "api_key":
-		// 与旧版参考实现的 ApplySiteAuthHeaders 对齐：
-		// M-Team / UNIT3D 等开放 API 的 PT 站点都使用 `x-api-key` 头部，
-		// 不要再为 mteam 单独走 Authorization: Bearer，否则服务端会 401。
 		if cfg.APIKey != "" {
-			req.Header.Set("x-api-key", cfg.APIKey)
+			if isYemaPTConfig(cfg) {
+				req.Header.Set("Authorization", cfg.APIKey)
+			} else {
+				// M-Team / UNIT3D 等开放 API 的 PT 站点使用 `x-api-key`。
+				req.Header.Set("x-api-key", cfg.APIKey)
+			}
 		}
 	case "auth_header":
 		if cfg.AuthHeader != "" {
@@ -278,6 +283,8 @@ func GetAdapterForType(siteType string) SiteAdapter {
 		return NewUNIT3DAdapter()
 	case "mteam":
 		return NewMTeamAdapter()
+	case "yemapt":
+		return NewYemaPTAdapter()
 	case "discuz":
 		return NewDiscuzAdapter()
 	case "custom_rss":
@@ -289,5 +296,11 @@ func GetAdapterForType(siteType string) SiteAdapter {
 
 // NewSiteAdapter 根据站点模型创建对应的适配器。
 func NewSiteAdapter(site *model.Site) SiteAdapter {
+	if site == nil {
+		return nil
+	}
+	if isYemaPTURL(site.URL) {
+		return NewYemaPTAdapter()
+	}
 	return GetAdapterForType(site.Type)
 }

@@ -95,6 +95,7 @@ export function SiteFormModal({
                 <option value="gazelle">Gazelle（HDBits等）</option>
                 <option value="unit3d">UNIT3D（BeyondHD等）</option>
                 <option value="mteam">馒头 M-Team（专用API）</option>
+                <option value="yemapt">YemaPT（API Auth）</option>
                 <option value="discuz">Discuz 论坛型</option>
                 <option value="custom_rss">自定义 RSS</option>
               </select>
@@ -151,6 +152,27 @@ export function SiteFormModal({
                   2. 点击「创建令牌」，复制生成的 Token
                   <br />
                   3. 将 Token 填入下方「令牌」输入框
+                </div>
+              </div>
+            </div>
+          )}
+
+          {form.type === "yemapt" && (
+            <div className="p-3 rounded-xl border border-cyan-500/30 bg-cyan-500/5">
+              <div className="text-sm font-medium text-cyan-400 mb-1">
+                YemaPT 配置指南
+              </div>
+              <div className="text-xs text-ink-50 space-y-1">
+                <div>
+                  <b>站点地址：</b>
+                  <code className="text-cyan-300">https://www.yemapt.org</code>
+                </div>
+                <div>
+                  <b>认证方式：</b>使用个人详情页创建的第三方对接专用 auth
+                </div>
+                <div className="pl-3 text-sand-500">
+                  填入下方 API Key；后端会按 Wiki 要求通过 Authorization
+                  请求头原样发送。
                 </div>
               </div>
             </div>
@@ -229,6 +251,8 @@ export function SiteFormModal({
                 <p className="text-xs text-sand-500 mt-1">
                   {form.type === "mteam"
                     ? "馒头：控制台 → 实验室 → 存取令牌；第三方工具通过 x-api-key 请求头访问"
+                    : form.type === "yemapt"
+                      ? "YemaPT：个人详情页 → 第三方对接专用 auth；通过 Authorization 请求头原样访问"
                     : "站点的访问 API Key"}
                 </p>
               </div>

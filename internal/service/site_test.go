@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -50,5 +53,76 @@ func TestSiteUpdateKeepsSecretsWhenPatchIsBlank(t *testing.T) {
 	}
 	if got.URL != "https://api.m-team.cc" {
 		t.Fatalf("URL = %q, want trimmed URL", got.URL)
+	}
+}
+
+func TestYemaPTTestConnectionDoesNotFallbackAfterAuthFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":false,"errorCode":403,"errorMessage":"need api auth"}`))
+	}))
+	defer server.Close()
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Site{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	svc := NewSiteService(zap.NewNop(), repos, "")
+	site := &model.Site{
+		Name:     "YemaPT",
+		Type:     "yemapt",
+		URL:      server.URL,
+		AuthType: "api_key",
+		APIKey:   "bad-auth",
+		Enabled:  true,
+	}
+	if err := svc.Create(context.Background(), site); err != nil {
+		t.Fatal(err)
+	}
+
+	ok, msg, err := svc.TestConnection(context.Background(), site.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("TestConnection succeeded after YemaPT auth failure")
+	}
+	if !strings.Contains(msg, "need api auth") {
+		t.Fatalf("message = %q, want need api auth", msg)
+	}
+}
+
+func TestRedactSensitiveDownloadURL(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "query secrets",
+			raw:  "https://pt.example/download.php?id=123&passkey=secret#frag",
+			want: "https://pt.example/download.php",
+		},
+		{
+			name: "magnet",
+			raw:  "magnet:?xt=urn:btih:abc&dn=movie",
+			want: "magnet:?xt=***",
+		},
+		{
+			name: "invalid",
+			raw:  "not a url",
+			want: "[redacted-download-url]",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := redactSensitiveDownloadURL(tt.raw); got != tt.want {
+				t.Fatalf("redactSensitiveDownloadURL() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

@@ -335,18 +335,55 @@ func (s *SubscriptionService) runOne(ctx context.Context, sub *model.Subscriptio
 
 func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subscription) (int, error) {
 	if s.site == nil {
+		if s.log != nil {
+			s.log.Warn("site-search subscription service unavailable", subscriptionSiteSearchLogFields(sub, "")...)
+		}
 		return 0, errors.New("site search service unavailable")
 	}
-	keyword := siteSearchKeyword(sub)
+	keywords := siteSearchKeywords(sub)
+	keyword := ""
+	if len(keywords) > 0 {
+		keyword = keywords[0]
+	}
 	if keyword == "" {
+		if s.log != nil {
+			s.log.Warn("site-search subscription keyword missing", subscriptionSiteSearchLogFields(sub, "")...)
+		}
 		return 0, errors.New("site-search subscription keyword required")
 	}
+	if s.log != nil {
+		s.log.Info("site-search subscription run started", subscriptionSiteSearchLogFields(sub, keyword)...)
+	}
 
-	results, err := s.site.Search(ctx, keyword)
-	if err != nil {
-		return 0, err
+	var (
+		results       []SearchResult
+		lastSearchErr error
+		searchErrors  int
+	)
+	for _, searchKeyword := range keywords {
+		found, err := s.site.Search(ctx, searchKeyword)
+		if err != nil {
+			lastSearchErr = err
+			searchErrors++
+			if s.log != nil {
+				fields := subscriptionSiteSearchLogFields(sub, searchKeyword)
+				fields = append(fields, zap.Error(err))
+				s.log.Warn("site-search subscription search failed", fields...)
+			}
+			continue
+		}
+		results = append(results, found...)
+	}
+	results = dedupeSiteSearchResults(results)
+	if len(results) == 0 && lastSearchErr != nil && searchErrors == len(keywords) {
+		return 0, lastSearchErr
 	}
 	if len(results) == 0 {
+		if s.log != nil {
+			fields := subscriptionSiteSearchLogFields(sub, keyword)
+			fields = append(fields, zap.Int("results_count", 0))
+			s.log.Info("site-search subscription no results", fields...)
+		}
 		now := time.Now()
 		_ = s.repo.DB.Model(sub).Updates(map[string]any{"last_run_at": &now}).Error
 		return 0, nil
@@ -365,25 +402,64 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 		SubscriptionLocalAvailability(ctx, s.repo, sub),
 		s.pendingDownloadAvailability(ctx, sub),
 	)
-	candidates := selectSiteSearchCandidates(results, sub, seenSet, availability)
+	candidates, selectionStats := selectSiteSearchCandidatesWithStats(results, sub, seenSet, availability)
+	if s.log != nil {
+		fields := subscriptionSiteSearchLogFields(sub, keyword)
+		fields = appendSiteSearchSelectionLogFields(fields, selectionStats)
+		fields = appendAvailabilityLogFields(fields, availability)
+		s.log.Info("site-search subscription selection summary", fields...)
+	}
 	var lastEnqueueErr error
 	queued := 0
 	var resources []string
 	for _, candidate := range candidates {
 		item := candidate.Item
-		mediaType, mediaCategory := s.classifySubscriptionItem(ctx, sub, item.Title, item.Category)
+		matchText := subscriptionSearchResultText(item)
+		mediaType, mediaCategory := s.classifySubscriptionItem(ctx, sub, matchText, item.Category)
 		if s.shouldSkipExistingTorrent(ctx, mediaType, candidate) {
-			addAvailabilityTitle(item.Title, availabilityQuery(subscriptionName(sub), subscriptionFilter(sub)), &availability)
+			addSiteSearchCandidateAvailability(candidate, &availability)
 			seen = append(seen, candidate.GUID)
 			seenSet[candidate.GUID] = struct{}{}
+			if s.log != nil {
+				fields := subscriptionSiteSearchLogFields(sub, keyword)
+				fields = append(fields,
+					zap.String("reason", "existing_torrent"),
+					zap.String("title", item.Title),
+					zap.String("subtitle", item.Subtitle),
+					zap.String("site", firstNonEmpty(item.SiteName, item.SiteID)),
+					zap.String("site_category", item.Category),
+					zap.Int("season", candidate.Season),
+					zap.Int("episode", candidate.Episode),
+					zap.Bool("pack", candidate.Pack),
+					zap.String("media_type", mediaType),
+				)
+				s.log.Info("site-search subscription candidate skipped", fields...)
+			}
 			continue
 		}
 		realURL := s.site.ResolveDownloadURL(ctx, candidate.Download)
 		savePath := s.resolveSubscriptionSavePath(ctx, sub, mediaType, mediaCategory)
-		if s.downloadPathHasCandidate(ctx, sub, candidate.Item.Title, savePath) {
-			addAvailabilityTitle(item.Title, availabilityQuery(subscriptionName(sub), subscriptionFilter(sub)), &availability)
+		if s.downloadPathHasCandidate(ctx, sub, matchText, savePath) {
+			addSiteSearchCandidateAvailability(candidate, &availability)
 			seen = append(seen, candidate.GUID)
 			seenSet[candidate.GUID] = struct{}{}
+			if s.log != nil {
+				fields := subscriptionSiteSearchLogFields(sub, keyword)
+				fields = append(fields,
+					zap.String("reason", "download_path_has_candidate"),
+					zap.String("title", item.Title),
+					zap.String("subtitle", item.Subtitle),
+					zap.String("site", firstNonEmpty(item.SiteName, item.SiteID)),
+					zap.String("site_category", item.Category),
+					zap.Int("season", candidate.Season),
+					zap.Int("episode", candidate.Episode),
+					zap.Bool("pack", candidate.Pack),
+					zap.String("media_type", mediaType),
+					zap.String("media_category", mediaCategory),
+					zap.String("save_path", savePath),
+				)
+				s.log.Info("site-search subscription candidate skipped", fields...)
+			}
 			continue
 		}
 		if _, err := s.downloads.AddDownloadWithMeta(ctx, sub.UserID, realURL, savePath, DownloadTaskMeta{
@@ -398,15 +474,36 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 			AllowExistingLibrary: sub.WashEnabled,
 		}); err != nil {
 			if IsDownloadDedupError(err) {
-				addAvailabilityTitle(item.Title, availabilityQuery(subscriptionName(sub), subscriptionFilter(sub)), &availability)
+				addSiteSearchCandidateAvailability(candidate, &availability)
 				seen = append(seen, candidate.GUID)
 				seenSet[candidate.GUID] = struct{}{}
+				if s.log != nil {
+					fields := subscriptionSiteSearchLogFields(sub, keyword)
+					fields = append(fields,
+						zap.String("reason", "download_dedup"),
+						zap.String("title", item.Title),
+						zap.String("subtitle", item.Subtitle),
+						zap.String("site", firstNonEmpty(item.SiteName, item.SiteID)),
+						zap.String("site_category", item.Category),
+						zap.Int("season", candidate.Season),
+						zap.Int("episode", candidate.Episode),
+						zap.Bool("pack", candidate.Pack),
+						zap.String("media_type", mediaType),
+						zap.String("media_category", mediaCategory),
+						zap.String("save_path", savePath),
+					)
+					s.log.Info("site-search subscription candidate skipped", fields...)
+				}
 				continue
 			}
 			lastEnqueueErr = err
 			s.log.Warn("site-search subscription enqueue failed",
+				zap.String("subscription_id", sub.ID),
 				zap.String("subscription", sub.Name),
+				zap.String("keyword", keyword),
 				zap.String("title", item.Title),
+				zap.String("subtitle", item.Subtitle),
+				zap.String("site", firstNonEmpty(item.SiteName, item.SiteID)),
 				zap.String("site_category", item.Category),
 				zap.String("media_type", mediaType),
 				zap.String("media_category", mediaCategory),
@@ -415,10 +512,27 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 			continue
 		}
 		queued++
-		addAvailabilityTitle(item.Title, availabilityQuery(subscriptionName(sub), subscriptionFilter(sub)), &availability)
+		addSiteSearchCandidateAvailability(candidate, &availability)
 		resources = append(resources, item.Title)
 		seen = append(seen, candidate.GUID)
 		seenSet[candidate.GUID] = struct{}{}
+		if s.log != nil {
+			fields := subscriptionSiteSearchLogFields(sub, keyword)
+			fields = append(fields,
+				zap.String("title", item.Title),
+				zap.String("subtitle", item.Subtitle),
+				zap.String("site", firstNonEmpty(item.SiteName, item.SiteID)),
+				zap.String("site_category", item.Category),
+				zap.Int("season", candidate.Season),
+				zap.Int("episode", candidate.Episode),
+				zap.Bool("pack", candidate.Pack),
+				zap.Int("score", candidate.Score),
+				zap.String("media_type", mediaType),
+				zap.String("media_category", mediaCategory),
+				zap.String("save_path", savePath),
+			)
+			s.log.Info("site-search subscription candidate queued", fields...)
+		}
 	}
 	availability = s.finalizePendingAvailability(sub, availability)
 	if len(seen) > 200 {
@@ -442,7 +556,81 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 	if lastEnqueueErr != nil {
 		return 0, fmt.Errorf("找到 PT 资源但加入下载器失败: %w", lastEnqueueErr)
 	}
+	if s.log != nil {
+		fields := subscriptionSiteSearchLogFields(sub, keyword)
+		fields = appendSiteSearchSelectionLogFields(fields, selectionStats)
+		fields = appendAvailabilityLogFields(fields, availability)
+		fields = append(fields, zap.Int("queued", queued))
+		s.log.Info("site-search subscription no candidate queued", fields...)
+	}
 	return 0, nil
+}
+
+func subscriptionSiteSearchLogFields(sub *model.Subscription, keyword string) []zap.Field {
+	fields := []zap.Field{zap.String("keyword", keyword), zap.Strings("search_keywords", siteSearchKeywords(sub))}
+	if sub == nil {
+		return fields
+	}
+	fields = append(fields,
+		zap.String("subscription_id", sub.ID),
+		zap.String("subscription", sub.Name),
+		zap.String("filter", sub.Filter),
+		zap.String("media_type", sub.MediaType),
+		zap.String("media_category", sub.MediaCategory),
+		zap.String("search_mode", sub.SearchMode),
+		zap.String("imdb_id", sub.IMDBID),
+		zap.Bool("wash_enabled", sub.WashEnabled),
+		zap.String("wash_priority", sub.WashPriority),
+		zap.Int("total_episodes", sub.TotalEpisodes),
+	)
+	return fields
+}
+
+func appendSiteSearchSelectionLogFields(fields []zap.Field, stats siteSearchSelectionStats) []zap.Field {
+	return append(fields,
+		zap.Int("results_count", stats.Total),
+		zap.Int("query_mismatch_count", stats.QueryMismatch),
+		zap.Int("relaxed_query_match_count", stats.RelaxedQueryMatch),
+		zap.Int("rule_mismatch_count", stats.RuleMismatch),
+		zap.Int("missing_download_count", stats.MissingDownload),
+		zap.Int("seen_count", stats.Seen),
+		zap.Int("prepared_count", stats.Prepared),
+		zap.Int("selected_count", stats.Selected),
+		zap.Bool("local_already_satisfied", stats.LocalAlreadySatisfied),
+		zap.Bool("local_series_pack_present", stats.LocalSeriesPackPresent),
+		zap.Bool("series_complete", stats.SeriesComplete),
+		zap.Int("existing_episode_skipped_count", stats.ExistingEpisodeSkipped),
+		zap.Int("not_missing_episode_skipped_count", stats.NotMissingEpisodeSkipped),
+		zap.Int("no_episode_skipped_count", stats.NoEpisodeSkipped),
+		zap.Bool("pack_fallback_available", stats.PackFallbackAvailable),
+		zap.Bool("pack_fallback_used", stats.PackFallbackUsed),
+	)
+}
+
+func appendAvailabilityLogFields(fields []zap.Field, availability LocalAvailability) []zap.Field {
+	missingSample, missingMore := limitedEpisodeSample(availability.MissingEpisodes, 20)
+	return append(fields,
+		zap.Int("local_media_count", availability.LocalMediaCount),
+		zap.Bool("in_library", availability.InLibrary),
+		zap.Bool("has_series_pack", availability.HasSeriesPack),
+		zap.Int("downloaded_episodes", availability.DownloadedEpisodes),
+		zap.Int("availability_total_episodes", availability.TotalEpisodes),
+		zap.Int("missing_episode_count", len(availability.MissingEpisodes)),
+		zap.Ints("missing_episodes", missingSample),
+		zap.Int("missing_episodes_more", missingMore),
+	)
+}
+
+func limitedEpisodeSample(values []int, limit int) ([]int, int) {
+	if limit <= 0 || len(values) == 0 {
+		return nil, len(values)
+	}
+	if len(values) <= limit {
+		out := append([]int(nil), values...)
+		return out, 0
+	}
+	out := append([]int(nil), values[:limit]...)
+	return out, len(values) - limit
 }
 
 func (s *SubscriptionService) notifySubscriptionHit(sub *model.Subscription, queued int, resources []string) {
@@ -618,13 +806,14 @@ func inferSearchTotalEpisodes(results []SearchResult, sub *model.Subscription) i
 	}
 	maxEpisode := 0
 	for _, item := range results {
-		if !subscriptionTitleMatchesQuery(sub, item.Title) {
+		matchText := subscriptionSearchResultText(item)
+		if !subscriptionTitleMatchesQuery(sub, matchText) {
 			continue
 		}
-		if !matchesSubscriptionRules(sub, item.Title) {
+		if !matchesSubscriptionRules(sub, matchText) {
 			continue
 		}
-		_, episode := ParseEpisode(item.Title)
+		_, episode := ParseEpisode(matchText)
 		if episode > maxEpisode {
 			maxEpisode = episode
 		}
@@ -778,11 +967,15 @@ func subscriptionTitleMatchQueries(sub *model.Subscription) []string {
 	if sub == nil {
 		return nil
 	}
-	return compactUniqueStrings(
+	values := []string{
 		availabilityQuery(subscriptionName(sub), subscriptionFilter(sub)),
 		cleanAvailabilityTitle(subscriptionFilter(sub)),
 		cleanAvailabilityTitle(subscriptionName(sub)),
-	)
+	}
+	for _, alias := range subscriptionFeedAliases(sub) {
+		values = append(values, alias, cleanAvailabilityTitle(alias))
+	}
+	return compactUniqueStrings(values...)
 }
 
 func subscriptionEpisodeMetadataQueries(sub *model.Subscription) []string {
@@ -879,22 +1072,82 @@ func (s *SubscriptionService) shouldSkipExistingTorrent(ctx context.Context, med
 	return s.downloads.TorrentExistsByName(ctx, candidate.Item.Title)
 }
 
-func siteSearchKeyword(sub *model.Subscription) string {
+func siteSearchKeywords(sub *model.Subscription) []string {
 	if sub == nil {
-		return ""
+		return nil
 	}
+	values := make([]string, 0, 8)
 	if strings.EqualFold(strings.TrimSpace(sub.SearchMode), "imdb") && strings.TrimSpace(sub.IMDBID) != "" {
-		return strings.TrimSpace(sub.IMDBID)
+		values = append(values, strings.TrimSpace(sub.IMDBID))
 	}
 	if u, err := url.Parse(sub.FeedURL); err == nil {
 		if keyword := strings.TrimSpace(u.Query().Get("keyword")); keyword != "" {
-			return keyword
+			values = append(values, keyword)
 		}
 	}
-	if keyword := strings.TrimSpace(sub.Filter); keyword != "" {
-		return keyword
+	if strings.TrimSpace(sub.Filter) != "" {
+		values = append(values, sub.Filter)
 	}
-	return strings.TrimSpace(sub.Name)
+	if len(values) == 0 && strings.TrimSpace(sub.Name) != "" {
+		values = append(values, sub.Name)
+	}
+	values = append(values, subscriptionFeedAliases(sub)...)
+	for _, value := range append([]string(nil), values...) {
+		if cleaned := cleanAvailabilityTitle(value); cleaned != "" {
+			values = append(values, cleaned)
+		}
+	}
+	return compactUniqueStrings(values...)
+}
+
+func siteSearchKeyword(sub *model.Subscription) string {
+	keywords := siteSearchKeywords(sub)
+	if len(keywords) == 0 {
+		return ""
+	}
+	return keywords[0]
+}
+
+func subscriptionFeedAliases(sub *model.Subscription) []string {
+	if sub == nil {
+		return nil
+	}
+	u, err := url.Parse(sub.FeedURL)
+	if err != nil {
+		return nil
+	}
+	q := u.Query()
+	values := make([]string, 0, len(q["alias"])+2)
+	values = append(values, q["alias"]...)
+	for _, raw := range q["aliases"] {
+		for _, part := range strings.FieldsFunc(raw, func(r rune) bool {
+			return r == '|' || r == '\n' || r == '\r' || r == '\t'
+		}) {
+			values = append(values, part)
+		}
+	}
+	return compactUniqueStrings(values...)
+}
+
+func dedupeSiteSearchResults(results []SearchResult) []SearchResult {
+	if len(results) < 2 {
+		return results
+	}
+	seen := make(map[string]struct{}, len(results))
+	out := make([]SearchResult, 0, len(results))
+	for _, item := range results {
+		download := strings.TrimSpace(item.DownloadURL)
+		if download == "" {
+			download = strings.TrimSpace(item.TorrentURL)
+		}
+		key := stableSiteSearchGUID(item, download)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, item)
+	}
+	return out
 }
 
 func (s *SubscriptionService) fetch(ctx context.Context, feedURL string) (*rssFeed, error) {

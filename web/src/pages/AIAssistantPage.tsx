@@ -5,7 +5,7 @@ import toast from 'react-hot-toast'
 
 import { aiAPI, type ExternalMediaResult, type SearchIntent } from '../api/ai'
 import { imageURL } from '../api/client'
-import { subscriptionsAPI } from '../api/subscriptions'
+import { buildSiteSearchFeedURL, subscriptionsAPI } from '../api/subscriptions'
 import { MediaCard } from '../components/MediaCard'
 import type { Media } from '../types'
 import { groupSeries, seriesCardLink } from '../utils/groupSeries'
@@ -238,7 +238,7 @@ export function AIAssistantPage() {
                         onClick={async () => {
                           setSubscribing(key)
                           try {
-                            const feed = `site-search://search?keyword=${encodeURIComponent(keyword)}&source=${encodeURIComponent(item.source)}`
+                            const feed = buildSiteSearchFeedURL(keyword, item.source, [item.title, item.original_name || ''])
                             const sub = await subscriptionsAPI.create({
                               name: `${item.title} 自动订阅`,
                               feed_url: feed,

@@ -8,41 +8,41 @@ import (
 // Site PT 站点配置。
 type Site struct {
 	Base
-	Name        string     `gorm:"size:128;not null" json:"name"`
-	Type        string     `gorm:"size:32;not null" json:"type"`          // nexusphp / gazelle / unit3d / mteam / discuz / custom_rss
-	URL         string     `gorm:"size:512;not null" json:"url"`
-	AuthType    string     `gorm:"size:32;not null" json:"auth_type"`     // cookie / api_key / auth_header
-	Cookie      string     `gorm:"type:text" json:"-"`                    // AES 加密
-	APIKey      string     `gorm:"type:text" json:"-"`                    // AES 加密
-	AuthHeader  string     `gorm:"type:text" json:"-"`                    // AES 加密
+	Name       string `gorm:"size:128;not null" json:"name"`
+	Type       string `gorm:"size:32;not null" json:"type"` // nexusphp / gazelle / unit3d / mteam / yemapt / discuz / custom_rss
+	URL        string `gorm:"size:512;not null" json:"url"`
+	AuthType   string `gorm:"size:32;not null" json:"auth_type"` // cookie / api_key / auth_header
+	Cookie     string `gorm:"type:text" json:"-"`                // AES 加密
+	APIKey     string `gorm:"type:text" json:"-"`                // AES 加密
+	AuthHeader string `gorm:"type:text" json:"-"`                // AES 加密
 
 	// ── 高级设置 ──────────────────────────────────────────────────────────
-	UserAgent         string `gorm:"size:500" json:"user_agent"`                      // 自定义 User-Agent
-	RSSURL            string `gorm:"size:1000" json:"rss_url"`                        // RSS 订阅地址
-	Timeout           int    `gorm:"default:15" json:"timeout"`                       // 请求超时(秒), 0=不限制
-	Priority          int    `gorm:"default:50" json:"priority"`                      // 优先级, 越小越优先
-	UseProxy          bool   `gorm:"default:false" json:"use_proxy"`                  // 是否使用代理
-	RateLimit         bool   `gorm:"default:false" json:"rate_limit"`                 // 是否限制访问频率
-	BrowserEmulation  bool   `gorm:"default:false" json:"browser_emulation"`          // 浏览器仿真(防爬)
+	UserAgent        string `gorm:"size:500" json:"user_agent"`             // 自定义 User-Agent
+	RSSURL           string `gorm:"size:1000" json:"rss_url"`               // RSS 订阅地址
+	Timeout          int    `gorm:"default:15" json:"timeout"`              // 请求超时(秒), 0=不限制
+	Priority         int    `gorm:"default:50" json:"priority"`             // 优先级, 越小越优先
+	UseProxy         bool   `gorm:"default:false" json:"use_proxy"`         // 是否使用代理
+	RateLimit        bool   `gorm:"default:false" json:"rate_limit"`        // 是否限制访问频率
+	BrowserEmulation bool   `gorm:"default:false" json:"browser_emulation"` // 浏览器仿真(防爬)
 
 	// ── 状态与统计 ────────────────────────────────────────────────────────
-	LoginStatus   string `gorm:"size:20;default:unknown" json:"login_status"`         // unknown / ok / fail
-	UploadBytes   int64  `gorm:"default:0" json:"upload_bytes"`                       // 上传字节统计
-	DownloadBytes int64  `gorm:"default:0" json:"download_bytes"`                     // 下载字节统计
+	LoginStatus   string `gorm:"size:20;default:unknown" json:"login_status"` // unknown / ok / fail
+	UploadBytes   int64  `gorm:"default:0" json:"upload_bytes"`               // 上传字节统计
+	DownloadBytes int64  `gorm:"default:0" json:"download_bytes"`             // 下载字节统计
 
 	// ── 关联下载器 ────────────────────────────────────────────────────────
-	Downloader string `gorm:"size:50" json:"downloader"`                              // qbittorrent / transmission / aria2
+	Downloader string `gorm:"size:50" json:"downloader"` // qbittorrent / transmission / aria2
 
 	Enabled     bool       `gorm:"default:true" json:"enabled"`
 	IsDefault   bool       `gorm:"default:false" json:"is_default"`
-	Extra       string     `gorm:"type:text" json:"-"`                                // JSON 扩展配置, AES 加密
+	Extra       string     `gorm:"type:text" json:"-"` // JSON 扩展配置, AES 加密
 	LastError   string     `gorm:"size:1024" json:"last_error"`
 	LastCheckAt *time.Time `json:"last_check_at"`
 }
 
 // SiteType 返回支持的站点类型列表。
 func SiteTypes() []string {
-	return []string{"nexusphp", "gazelle", "unit3d", "mteam", "discuz", "custom_rss"}
+	return []string{"nexusphp", "gazelle", "unit3d", "mteam", "yemapt", "discuz", "custom_rss"}
 }
 
 // AuthTypes 返回支持的认证方式列表。

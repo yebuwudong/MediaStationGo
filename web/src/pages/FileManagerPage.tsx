@@ -200,6 +200,8 @@ export function FileManagerPage() {
     () => libraries.filter((library) => !isCloudLibraryPath(library.path)),
     [libraries],
   )
+  const autoMoveKeepsSeeding = autoConfig.transferMode === 'move' && settingOn(autoConfig.keepSeeding)
+  const manualMoveKeepsSeeding = organizeTransferMode === 'move' && settingOn(autoConfig.keepSeeding)
 
   const refresh = useCallback(() => {
     setLoading(true)
@@ -568,7 +570,7 @@ export function FileManagerPage() {
                   onChange={(event) => changeAutoConfig('transferMode', event.target.value)}
                 >
                   <option value="hardlink">硬链接</option>
-                  <option value="move">移动</option>
+                  <option value="move">移动（关闭保种才会移动）</option>
                   <option value="copy">复制</option>
                   <option value="symlink">软链接</option>
                 </select>
@@ -584,6 +586,13 @@ export function FileManagerPage() {
                 />
               </label>
             </div>
+
+            {autoMoveKeepsSeeding && (
+              <div className="rounded-xl border border-orange-300 bg-orange-50 px-3 py-2 text-xs text-orange-700">
+                当前同时选择了“移动”和“保种”。为避免 qB 做种源文件被删除，后端会实际使用硬链接；Docker / NAS
+                多挂载或不同子卷下可能报 invalid cross-device link。需要真正移动时请关闭“保种”，需要保种但硬链接失败时请选择“复制”。
+              </div>
+            )}
 
             <div className="flex flex-wrap items-center gap-3">
               <label className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-2 py-1 text-xs text-ink-100">
@@ -780,12 +789,18 @@ export function FileManagerPage() {
               <span className="text-xs text-ink-50">整理方式</span>
               <select className="input-base w-full" value={organizeTransferMode} onChange={(event) => setOrganizeTransferMode(event.target.value)}>
                 <option value="hardlink">硬链接</option>
-                <option value="move">移动</option>
+                <option value="move">移动（关闭保种才会移动）</option>
                 <option value="copy">复制</option>
                 <option value="symlink">软链接</option>
               </select>
             </label>
           </div>
+
+          {manualMoveKeepsSeeding && (
+            <div className="rounded-xl border border-orange-300 bg-orange-50 px-3 py-2 text-xs text-orange-700">
+              “保种”已开启，选择“移动”时后端会改用硬链接以保留下载源。要执行真正移动，请先在上方自动整理设置里关闭“保种”并保存。
+            </div>
+          )}
 
           <div className="flex flex-wrap items-center gap-2">
             <label className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-2 py-1 text-xs text-ink-100">
