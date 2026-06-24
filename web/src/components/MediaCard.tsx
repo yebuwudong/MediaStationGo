@@ -20,6 +20,7 @@ export const MediaCard = ({
   const href = linkTo ?? `/media/${media.id}`
   const [posterFit, setPosterFit] = useState<'cover' | 'contain'>('cover')
   const posterSrc = imageURL(media.poster_url, media.updated_at)
+  const displayRating = rating ?? media.rating
 
   useEffect(() => {
     setPosterFit('cover')
@@ -78,10 +79,10 @@ export const MediaCard = ({
           )}
 
           {/* Rating Badge */}
-          {(rating || (media as any).rating) && (
+          {displayRating > 0 && (
             <span className="absolute left-3 top-3 inline-flex items-center gap-0.5 rounded-xl border border-white/15 bg-[#111827]/90 px-2 py-1 text-[10px] font-bold text-[#c9954a] shadow-sm">
               <Star size={10} fill="currentColor" />
-              <span>{(rating || (media as any).rating).toFixed(1)}</span>
+              <span>{displayRating.toFixed(1)}</span>
             </span>
           )}
 
