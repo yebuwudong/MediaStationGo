@@ -118,6 +118,33 @@ func TestClassifyMediaCategoryMatchesSmartRules(t *testing.T) {
 			want: "未分类",
 		},
 		{
+			name: "latin tv keeps explicit western source category",
+			input: mediaClassifyInput{
+				MediaType: "tv",
+				Title:     "Blades.of.the.Guardians.S02E01.1080p",
+				Category:  "downloads 欧美剧 Blades.of.the.Guardians",
+			},
+			want: "欧美剧",
+		},
+		{
+			name: "generic tv folder is not treated as chinese category",
+			input: mediaClassifyInput{
+				MediaType: "tv",
+				Title:     "The Last of Us S01E01 1080p",
+				Category:  "downloads 电视剧",
+			},
+			want: "未分类",
+		},
+		{
+			name: "gala title overrides wrong western source category",
+			input: mediaClassifyInput{
+				MediaType: "tv",
+				Title:     "HNTV Spring Festival Gala 2026 2160p WEB-DL",
+				Category:  "欧美剧",
+			},
+			want: "综艺",
+		},
+		{
 			name: "platform token alone does not classify romanized drama",
 			input: mediaClassifyInput{
 				MediaType: "tv",
@@ -178,6 +205,15 @@ func TestClassifyMediaCategoryMatchesSmartRules(t *testing.T) {
 				Genres:    []string{"16"},
 			},
 			want: "国漫",
+		},
+		{
+			name: "western movie source category remains western movie",
+			input: mediaClassifyInput{
+				MediaType: "movie",
+				Title:     "Dune 2021 2160p",
+				Category:  "downloads 欧美电影",
+			},
+			want: "欧美电影",
 		},
 		{
 			name: "jav code is adult",

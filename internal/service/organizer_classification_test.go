@@ -130,6 +130,67 @@ func TestOrganizeDirectoryMetadataCategoryOverridesDownloadFolder(t *testing.T) 
 	}
 }
 
+func TestOrganizeDirectoryRejectedMetadataKeepsExplicitWesternSourceCategory(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/search/tv" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"results": []map[string]any{{
+				"id":                107463,
+				"name":              "镖人",
+				"original_name":     "Biao Ren",
+				"original_language": "zh",
+				"origin_country":    []string{"CN"},
+				"genre_ids":         []int{16, 18},
+				"first_air_date":    "2023-06-01",
+				"vote_average":      8.0,
+			}},
+		})
+	}))
+	defer upstream.Close()
+
+	repos := newOrganizerTestRepo(t)
+	cfg := &config.Config{}
+	cfg.Organizer.SmartClassify = true
+	cfg.Secrets.TMDbAPIKey = "test-key"
+	cfg.Secrets.TMDbAPIProxy = upstream.URL
+	scraper := NewScraperService(cfg, zap.NewNop(), repos, NewTMDbProvider(cfg, zap.NewNop(), nil), nil, nil, nil, NewHub(zap.NewNop()))
+
+	root := t.TempDir()
+	srcRoot := filepath.Join(root, "downloads")
+	dest := filepath.Join(root, "media")
+	sourceFile := filepath.Join(srcRoot, "欧美剧", "Blades.of.the.Guardians.S02.1080p.TX.WEB-DL", "Blades.of.the.Guardians.S02E01.1080p.TX.WEB-DL.mkv")
+	writeOrgFile(t, sourceFile, "episode")
+
+	organizer := NewOrganizerService(cfg, zap.NewNop(), repos)
+	organizer.SetScraper(scraper)
+	res, err := organizer.OrganizeDirectory(t.Context(), OrganizeOptions{
+		SourcePath:   srcRoot,
+		DestPath:     dest,
+		TransferMode: TransferCopy,
+	})
+	if err != nil {
+		t.Fatalf("organize directory: %v", err)
+	}
+	want := filepath.Join(dest, "电视剧", "欧美剧", "Blades Of The Guardians", "Season 02", "Blades Of The Guardians - S02E01.mkv")
+	if res.Organized != 1 {
+		t.Fatalf("organized = %d, want 1; items=%#v errors=%#v", res.Organized, res.Items, res.Errors)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("rejected metadata should fall back to explicit source category at %q: %v; items=%#v", want, err, res.Items)
+	}
+	wrong := filepath.Join(dest, "电视剧", "国产剧", "Blades Of The Guardians")
+	if _, err := os.Stat(wrong); !os.IsNotExist(err) {
+		t.Fatalf("rejected metadata must not fall back to domestic category %q, err=%v", wrong, err)
+	}
+	if len(res.Items) != 1 || res.Items[0].Category != "欧美剧" || res.Items[0].MediaType != "tv" || res.Items[0].Title != "Blades Of The Guardians" {
+		t.Fatalf("organize item = %#v, want Blades Of The Guardians in 欧美剧/tv", res.Items)
+	}
+}
+
 func TestOrganizeDirectoryDoesNotScrapeByDownloadCategoryFolder(t *testing.T) {
 	var queries []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
