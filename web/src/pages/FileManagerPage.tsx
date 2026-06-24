@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import toast from 'react-hot-toast'
 
 import { filesAPI, type FileEntry, type FileListing } from '../api/files'
 import { libraryAPI } from '../api/library'
-import { toolsAPI } from '../api/tools'
-import { confirmAction } from '../components/confirmAction'
 import type { Library } from '../types'
 import { settingOn } from './autoOrganizeModel'
 import { AutoOrganizeSettingsPanel } from './AutoOrganizeSettingsPanel'
@@ -15,13 +12,8 @@ import { FileOperationsPanel } from './FileOperationsPanel'
 import { ManualOrganizePanel } from './ManualOrganizePanel'
 import { useAutoOrganizeSettings } from './useAutoOrganizeSettings'
 import { useFileOperations } from './useFileOperations'
-import {
-  formatScanSummary,
-  formatScrapeSummary,
-  isCloudLibraryPath,
-  summarizeOrganizeResults,
-  type OrganizePreviewItem,
-} from './fileManagerModel'
+import { isCloudLibraryPath } from './fileManagerModel'
+import { useManualOrganize } from './useManualOrganize'
 
 // FileManagerPage provides a focused local storage view:
 // browse allowed roots, optionally recurse, and perform safe local operations.
@@ -32,14 +24,7 @@ export function FileManagerPage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [recursive, setRecursive] = useState(false)
-  const [organizeLibraryID, setOrganizeLibraryID] = useState('')
-  const [organizeDestPath, setOrganizeDestPath] = useState('')
-  const [organizeTransferMode, setOrganizeTransferMode] = useState('hardlink')
-  const [organizeMediaType, setOrganizeMediaType] = useState('auto')
-  const [scanAfter, setScanAfter] = useState(true)
   const [scrapeAfter, setScrapeAfter] = useState(true)
-  const [organizeBusy, setOrganizeBusy] = useState('')
-  const [previewItems, setPreviewItems] = useState<OrganizePreviewItem[]>([])
   const autoOrganize = useAutoOrganizeSettings({ onScrapeAfterChange: setScrapeAfter })
 
   const currentDir = useMemo(() => {
@@ -51,7 +36,6 @@ export function FileManagerPage() {
     [libraries],
   )
   const autoMoveKeepsSeeding = autoOrganize.moveKeepsSeeding
-  const manualMoveKeepsSeeding = organizeTransferMode === 'move' && settingOn(autoOrganize.config.keepSeeding)
 
   const refresh = useCallback(() => {
     setLoading(true)
@@ -77,77 +61,20 @@ export function FileManagerPage() {
   }, [])
 
   const fileOperations = useFileOperations({ currentDir, path, refresh })
-
-  useEffect(() => {
-    if (!organizeLibraryID) return
-    const lib = localLibraries.find((item) => item.id === organizeLibraryID)
-    if (!lib) {
-      setOrganizeLibraryID('')
-      return
-    }
-    setOrganizeDestPath(lib.path)
-    setOrganizeMediaType(lib.type || 'auto')
-  }, [localLibraries, organizeLibraryID])
+  const manualOrganize = useManualOrganize({
+    currentDir,
+    localLibraries,
+    selectedPath: fileOperations.selected?.path,
+    selectedPaths: fileOperations.selectedPaths,
+    scrapeAfter,
+    keepSeeding: settingOn(autoOrganize.config.keepSeeding),
+    onScrapeAfterChange: setScrapeAfter,
+    onClearSelected: () => fileOperations.setSelectedPaths([]),
+    refresh,
+  })
 
   const enter = (e: FileEntry) => {
     if (e.is_dir) setPath(e.path)
-  }
-
-  const organizeSources = fileOperations.selectedPaths.length > 0 ? fileOperations.selectedPaths : [fileOperations.selected?.path || currentDir].filter(Boolean)
-  const organizeSource = organizeSources.length === 1 ? organizeSources[0] : `${organizeSources.length} 个已选项目`
-  const organizeReady = organizeSources.length > 0 && Boolean(organizeDestPath.trim())
-
-  const runManualOrganize = async (dryRun: boolean) => {
-    if (!organizeReady) {
-      toast.error('请选择来源文件/文件夹，并设置目标媒体库或目的路径')
-      return
-    }
-    if (!dryRun) {
-      const ok = await confirmAction({
-        title: '确认整理入库',
-        message: `来源：${organizeSources.join('\n')}\n目标：${organizeDestPath}\n方式：${organizeTransferMode}${scanAfter ? '\n整理完成后会扫描入库。' : ''}${scanAfter && scrapeAfter ? '\n扫描后会自动刮削。' : ''}`,
-        confirmText: '开始整理',
-      })
-      if (!ok) return
-    }
-    setOrganizeBusy(dryRun ? 'preview' : 'run')
-    try {
-      const results = []
-      for (const sourcePath of organizeSources) {
-        results.push(await toolsAPI.organizeDirectory({
-          source_path: sourcePath,
-          dest_path: organizeDestPath.trim(),
-          transfer_mode: organizeTransferMode,
-          media_type: organizeMediaType === 'auto' ? undefined : organizeMediaType,
-          scan_after: !dryRun && scanAfter,
-          scrape_after: !dryRun && scanAfter && scrapeAfter,
-          library_id: !dryRun && scanAfter && organizeLibraryID ? organizeLibraryID : undefined,
-          dry_run: dryRun,
-        }))
-      }
-      const summary = summarizeOrganizeResults(results)
-      setPreviewItems(summary.preview)
-      if (summary.total === 0) {
-        toast(`未发现可整理视频：${organizeSource}`, {
-          icon: '!',
-          duration: 6000,
-        })
-        return
-      }
-      if (dryRun) {
-        toast.success(`预览完成：新增 ${summary.organized} · 替换 ${summary.replaced} · 纠偏 ${summary.reclassified} · 跳过 ${summary.skipped}`)
-        return
-      }
-      const scanText = scanAfter ? formatScanSummary(summary.scans) : ''
-      const scrapeText = scanAfter && scrapeAfter ? formatScrapeSummary(summary.scrapes) : ''
-      toast.success(`整理完成：新增 ${summary.organized} · 替换 ${summary.replaced} · 纠偏 ${summary.reclassified} · 跳过 ${summary.skipped}${scanText}${scrapeText}`)
-      fileOperations.setSelectedPaths([])
-      refresh()
-    } catch (err: unknown) {
-      toast.error((err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? '整理失败')
-    } finally {
-      setOrganizeBusy('')
-    }
   }
 
   return (
@@ -187,28 +114,28 @@ export function FileManagerPage() {
 
       {data?.path && (
         <ManualOrganizePanel
-          organizeSource={organizeSource}
+          organizeSource={manualOrganize.organizeSource}
           selectedCount={fileOperations.selectedPaths.length}
           localLibraries={localLibraries}
-          organizeLibraryID={organizeLibraryID}
-          organizeDestPath={organizeDestPath}
-          organizeMediaType={organizeMediaType}
-          organizeTransferMode={organizeTransferMode}
-          manualMoveKeepsSeeding={manualMoveKeepsSeeding}
-          scanAfter={scanAfter}
+          organizeLibraryID={manualOrganize.organizeLibraryID}
+          organizeDestPath={manualOrganize.organizeDestPath}
+          organizeMediaType={manualOrganize.organizeMediaType}
+          organizeTransferMode={manualOrganize.organizeTransferMode}
+          manualMoveKeepsSeeding={manualOrganize.manualMoveKeepsSeeding}
+          scanAfter={manualOrganize.scanAfter}
           scrapeAfter={scrapeAfter}
-          organizeReady={organizeReady}
-          organizeBusy={organizeBusy}
-          previewItems={previewItems}
+          organizeReady={manualOrganize.organizeReady}
+          organizeBusy={manualOrganize.organizeBusy}
+          previewItems={manualOrganize.previewItems}
           onClearSelected={() => fileOperations.setSelectedPaths([])}
-          onLibraryChange={setOrganizeLibraryID}
-          onDestPathChange={setOrganizeDestPath}
-          onMediaTypeChange={setOrganizeMediaType}
-          onTransferModeChange={setOrganizeTransferMode}
-          onScanAfterChange={setScanAfter}
-          onScrapeAfterChange={setScrapeAfter}
-          onPreview={() => runManualOrganize(true)}
-          onRun={() => runManualOrganize(false)}
+          onLibraryChange={manualOrganize.setOrganizeLibraryID}
+          onDestPathChange={manualOrganize.setOrganizeDestPath}
+          onMediaTypeChange={manualOrganize.setOrganizeMediaType}
+          onTransferModeChange={manualOrganize.setOrganizeTransferMode}
+          onScanAfterChange={manualOrganize.setScanAfter}
+          onScrapeAfterChange={manualOrganize.onScrapeAfterChange}
+          onPreview={manualOrganize.preview}
+          onRun={manualOrganize.run}
         />
       )}
 
