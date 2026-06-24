@@ -96,7 +96,7 @@ func (b *BangumiProvider) Search(ctx context.Context, query string) (*Match, err
 		BangumiID: r.ID,
 		Title:     title,
 		Overview:  r.Summary,
-		PosterURL: r.Images.Large,
+		PosterURL: normalizeBangumiImageURL(r.Images.Large),
 		Rating:    r.Rating.Score,
 	}
 	if len(r.Air) >= 4 {
@@ -141,7 +141,7 @@ func (b *BangumiProvider) GetSubject(ctx context.Context, bangumiID int) (*Match
 		Title:        title,
 		OriginalName: r.Name,
 		Overview:     r.Summary,
-		PosterURL:    firstText(r.Images.Large, r.Images.Common),
+		PosterURL:    normalizeBangumiImageURL(firstText(r.Images.Large, r.Images.Common)),
 		Rating:       r.Rating.Score,
 	}
 	if len(r.Air) >= 4 {
@@ -191,4 +191,27 @@ func (b *BangumiProvider) getJSON(ctx context.Context, u string, out any) error 
 		return fmt.Errorf("bangumi %s: %d", u, resp.StatusCode)
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func normalizeBangumiImageURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if strings.HasPrefix(raw, "//") {
+		raw = "https:" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return raw
+	}
+	host := strings.ToLower(u.Host)
+	if host != "lain.bgm.tv" && host != "bgm.tv" && !strings.HasSuffix(host, ".bgm.tv") {
+		return raw
+	}
+	u.Scheme = "https"
+	if strings.HasPrefix(u.Path, "/pic/cover/") {
+		u.Path = "/r/400" + u.Path
+	}
+	return u.String()
 }

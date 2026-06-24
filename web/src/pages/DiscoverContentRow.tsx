@@ -128,7 +128,8 @@ function DiscoverCard({
           <img
             src={posterSrc}
             alt={item.title}
-            loading="lazy"
+            loading="eager"
+            decoding="async"
             referrerPolicy="no-referrer"
             onError={markPosterUnavailable}
             onLoad={(event) => {

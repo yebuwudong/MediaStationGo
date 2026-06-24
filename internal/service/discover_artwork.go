@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	discoverArtworkPrefetchLimit       = 48
-	discoverArtworkPrefetchConcurrency = 4
-	discoverArtworkPrefetchTimeout     = 45 * time.Second
+	discoverArtworkPrefetchLimit       = 384
+	discoverArtworkPrefetchConcurrency = 8
+	discoverArtworkPrefetchTimeout     = 90 * time.Second
 )
 
 func (d *DiscoverService) SetImageProxy(images *ImageProxy) *DiscoverService {
@@ -23,19 +23,33 @@ func (d *DiscoverService) SetImageProxy(images *ImageProxy) *DiscoverService {
 }
 
 func (d *DiscoverService) WarmMatchArtwork(items []Match) int {
+	return d.warmArtworkURLs(matchArtworkURLs(items))
+}
+
+func matchArtworkURLs(items []Match) []string {
 	urls := make([]string, 0, len(items)*2)
 	for _, item := range items {
-		urls = append(urls, item.PosterURL, item.BackdropURL)
+		urls = append(urls, item.PosterURL)
 	}
-	return d.warmArtworkURLs(urls)
+	for _, item := range items {
+		urls = append(urls, item.BackdropURL)
+	}
+	return urls
 }
 
 func (d *DiscoverService) WarmExternalArtwork(items []ExternalMediaResult) int {
+	return d.warmArtworkURLs(externalArtworkURLs(items))
+}
+
+func externalArtworkURLs(items []ExternalMediaResult) []string {
 	urls := make([]string, 0, len(items)*2)
 	for _, item := range items {
-		urls = append(urls, item.PosterURL, item.BackdropURL)
+		urls = append(urls, item.PosterURL)
 	}
-	return d.warmArtworkURLs(urls)
+	for _, item := range items {
+		urls = append(urls, item.BackdropURL)
+	}
+	return urls
 }
 
 func (d *DiscoverService) warmArtworkURLs(urls []string) int {

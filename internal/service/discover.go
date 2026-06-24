@@ -312,6 +312,7 @@ func (b *BangumiProvider) Calendar(ctx context.Context) ([]ExternalMediaResult, 
 			if poster == "" {
 				poster = item.Images.Common
 			}
+			poster = normalizeBangumiImageURL(poster)
 			year := 0
 			if len(item.AirDate) >= 4 {
 				year, _ = strconv.Atoi(item.AirDate[:4])

@@ -32,6 +32,28 @@ func TestUniqueDiscoverArtworkURLsFiltersDuplicatesAndLimits(t *testing.T) {
 	}
 }
 
+func TestDiscoverArtworkURLsPrioritizePosters(t *testing.T) {
+	items := []ExternalMediaResult{
+		{PosterURL: "https://img.example/a-poster.jpg", BackdropURL: "https://img.example/a-backdrop.jpg"},
+		{PosterURL: "https://img.example/b-poster.jpg", BackdropURL: "https://img.example/b-backdrop.jpg"},
+	}
+	urls := externalArtworkURLs(items)
+	want := []string{
+		"https://img.example/a-poster.jpg",
+		"https://img.example/b-poster.jpg",
+		"https://img.example/a-backdrop.jpg",
+		"https://img.example/b-backdrop.jpg",
+	}
+	if len(urls) != len(want) {
+		t.Fatalf("len = %d, want %d: %v", len(urls), len(want), urls)
+	}
+	for i := range want {
+		if urls[i] != want[i] {
+			t.Fatalf("url[%d] = %q, want %q", i, urls[i], want[i])
+		}
+	}
+}
+
 func TestDiscoverWarmExternalArtworkPrefetchesAndCaches(t *testing.T) {
 	proxy := NewImageProxy(&config.Config{Cache: config.CacheConfig{CacheDir: filepath.Join(t.TempDir(), "cache")}}, zap.NewNop())
 	var calls int32

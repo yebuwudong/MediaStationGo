@@ -10,7 +10,7 @@ export const defaultSections = [
 ]
 
 export const discoverStorageKey = 'mediastation.discover.sections'
-const discoverStorageVersion = 2
+const discoverStorageVersion = 3
 const legacyDefaultAdditions = ['tmdb_latest_movie', 'tmdb_latest_tv']
 
 export const defaultSectionDefs: DiscoverSection[] = [
