@@ -5,7 +5,6 @@ import { discoverAPI, type DiscoverItem, type DiscoverSection } from '../api/dis
 import { ContentRow, DiscoverSkeleton } from './DiscoverContentRow'
 import { DiscoverDetailModal } from './DiscoverDetailModal'
 import {
-  defaultSectionDefs,
   defaultSections,
   discoverStorageKey,
   readSavedSections,
@@ -37,8 +36,8 @@ export function DiscoverPage() {
       })
       .catch(() => {
         if (cancelled) return
-        setSections(defaultSectionDefs)
-        setSelected(defaultSections)
+        setSections([])
+        setSelected([])
         setSectionsReady(true)
       })
     return () => {
@@ -48,6 +47,12 @@ export function DiscoverPage() {
 
   useEffect(() => {
     if (!sectionsReady) return
+    const available = new Set(sections.map((section) => section.key))
+    const activeSelected = selected.filter((key) => available.has(key))
+    if (activeSelected.length !== selected.length) {
+      setSelected(activeSelected)
+      return
+    }
     if (selected.length === 0) {
       setRows({})
       setRowLoading({})
@@ -96,7 +101,7 @@ export function DiscoverPage() {
     return () => {
       cancelled = true
     }
-  }, [sectionsReady, selected])
+  }, [sections, sectionsReady, selected])
 
   const sectionMap = useMemo(
     () => new Map(sections.map((section) => [section.key, section])),

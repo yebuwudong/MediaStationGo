@@ -169,11 +169,13 @@ func compactSeriesKey(raw string) string {
 }
 
 var (
-	seriesYearRE          = regexp.MustCompile(`\s*\((?:19|20)\d{2}\)\s*`)
-	seriesIDRE            = regexp.MustCompile(`(?i)\s*\[(?:tmdb|tmdbid)[=-]\d+\]\s*`)
-	seriesBraceRE         = regexp.MustCompile(`(?i)\s*\{(?:tmdb|tmdbid|douban|bangumi|bgm|thetvdb|tvdb)[\s:=#-]*[a-z0-9_-]+\}\s*`)
-	seriesSpacerRE        = regexp.MustCompile(`[\s._-]+`)
-	seriesSpecialSuffixRE = regexp.MustCompile(`(?i)(?:\s+(?:s0+|season 0+|special episodes?|specials?|sp|ovas?|oads?|extras?|bonus(?:es)?|omake)|\s*(?:特别篇|特別篇|番外篇?|特典|外传|外傳|总集篇|總集篇))$`)
+	seriesYearRE        = regexp.MustCompile(`\s*\((?:19|20)\d{2}\)\s*`)
+	seriesIDRE          = regexp.MustCompile(`(?i)\s*\[(?:tmdb|tmdbid)[=-]\d+\]\s*`)
+	seriesBraceRE       = regexp.MustCompile(`(?i)\s*\{(?:tmdb|tmdbid|douban|bangumi|bgm|thetvdb|tvdb)[\s:=#-]*[a-z0-9_-]+\}\s*`)
+	seriesSpacerRE      = regexp.MustCompile(`[\s._-]+`)
+	seriesSeasonDirRE   = regexp.MustCompile(`(?i)^(?:s\d{1,2}|season[\s._-]*\d{1,2}|第\s*[0-9一二三四五六七八九十百零两]+\s*季|special[\s._-]*episodes?|specials?|sp|ovas?|oads?|extras?|bonus(?:es)?|omake|特别篇|特別篇|番外篇?|特典|外传|外傳|总集篇|總集篇)$`)
+	seriesSpecialCodeRE = regexp.MustCompile(`(?i)\s*[\[(（【]?\s*(?:s0+\s*e?\s*\d+|season\s*0+(?:\s*episode)?\s*\d*|special(?:\s*episode)?s?\s*\d*|sp\s*\d*|ovas?\s*\d*|oads?\s*\d*|extras?\s*\d*|bonus(?:es)?\s*\d*|omake\s*\d*)\s*[\])）】]?$`)
+	seriesSpecialCJKRE  = regexp.MustCompile(`(?i)\s*[\[(（【]?\s*(?:特别篇|特別篇|番外篇?|特典|外传|外傳|总集篇|總集篇)(?:\s*第?\s*[0-9一二三四五六七八九十百零两]+(?:[集话話期])?)?\s*[\])）】]?$`)
 )
 
 func normalizeSeriesTitle(value string) string {
@@ -187,9 +189,19 @@ func normalizeSeriesTitle(value string) string {
 
 func normalizeSeriesPathTitle(value string) string {
 	title := normalizeSeriesTitle(value)
-	stripped := strings.TrimSpace(seriesSpecialSuffixRE.ReplaceAllString(title, ""))
+	stripped := stripSeriesSpecialSuffix(title)
 	if stripped != "" {
 		return stripped
+	}
+	return title
+}
+
+func stripSeriesSpecialSuffix(title string) string {
+	for _, re := range []*regexp.Regexp{seriesSpecialCodeRE, seriesSpecialCJKRE} {
+		stripped := strings.TrimSpace(re.ReplaceAllString(title, ""))
+		if stripped != "" && stripped != title {
+			return stripped
+		}
 	}
 	return title
 }
@@ -203,7 +215,7 @@ func seriesTitleFromMediaPath(path string) string {
 		return ""
 	}
 	dirIndex := len(parts) - 2
-	for dirIndex >= 0 && strictSeasonFolderMatched(filepath.Base(parts[dirIndex])) {
+	for dirIndex >= 0 && seriesSeasonDirRE.MatchString(filepath.Base(parts[dirIndex])) {
 		dirIndex--
 	}
 	if dirIndex < 0 {

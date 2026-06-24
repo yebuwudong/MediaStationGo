@@ -99,3 +99,74 @@ func TestMediaSeriesKeyCollapsesSeasonZeroAndSpecialAliases(t *testing.T) {
 		}
 	}
 }
+
+func TestMediaSeriesKeyCollapsesNumberedSpecialSuffixes(t *testing.T) {
+	main := model.Media{
+		LibraryID:  "lib-tv",
+		Path:       `F:\media\电视剧\欧美剧\Example Show\Season 01\Example Show - S01E01.mkv`,
+		SeasonNum:  1,
+		EpisodeNum: 1,
+	}
+	chineseMain := model.Media{
+		LibraryID:  "lib-tv",
+		Path:       `F:\media\电视剧\欧美剧\示例剧\Season 01\示例剧.S01E01.mkv`,
+		SeasonNum:  1,
+		EpisodeNum: 1,
+	}
+	cases := map[string]struct {
+		item model.Media
+		want model.Media
+	}{
+		"sp number": {
+			item: model.Media{
+				LibraryID:  "lib-tv",
+				Path:       `F:\media\电视剧\欧美剧\Example Show SP01\Example Show.SP01.mkv`,
+				SeasonNum:  0,
+				EpisodeNum: 1,
+			},
+			want: main,
+		},
+		"ova number": {
+			item: model.Media{
+				LibraryID:  "lib-tv",
+				Path:       `F:\media\电视剧\欧美剧\Example Show OVA 1\Example Show.OVA.1.mkv`,
+				SeasonNum:  0,
+				EpisodeNum: 1,
+			},
+			want: main,
+		},
+		"season zero episode": {
+			item: model.Media{
+				LibraryID:  "lib-tv",
+				Path:       `F:\media\电视剧\欧美剧\Example Show S00E01\Example Show.S00E01.mkv`,
+				SeasonNum:  0,
+				EpisodeNum: 1,
+			},
+			want: main,
+		},
+		"wrapped special": {
+			item: model.Media{
+				LibraryID:  "lib-tv",
+				Path:       `F:\media\电视剧\欧美剧\Example Show [Special]\Example Show.Special.mkv`,
+				SeasonNum:  0,
+				EpisodeNum: 1,
+			},
+			want: main,
+		},
+		"chinese numbered special": {
+			item: model.Media{
+				LibraryID:  "lib-tv",
+				Path:       `F:\media\电视剧\欧美剧\示例剧 特别篇 第1集\示例剧.SP01.mkv`,
+				SeasonNum:  0,
+				EpisodeNum: 1,
+			},
+			want: chineseMain,
+		},
+	}
+	for name, tt := range cases {
+		want := mediaSeriesKey(tt.want)
+		if got := mediaSeriesKey(tt.item); got != want {
+			t.Fatalf("%s key=%q, want main key=%q", name, got, want)
+		}
+	}
+}
