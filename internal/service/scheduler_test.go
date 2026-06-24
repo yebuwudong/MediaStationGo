@@ -3,17 +3,13 @@ package service
 import (
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -152,7 +148,18 @@ func TestSchedulerRunNowAsyncSurvivesCallerCancellation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("manual scheduled job did not finish after release")
 	}
-	status := scheduler.Status()
+	var status []JobStatus
+	deadline := time.Now().Add(time.Second)
+	for {
+		status = scheduler.Status()
+		if len(status) == 1 && !status[0].Running {
+			break
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if len(status) != 1 || status[0].Running || status[0].LastErr != "" {
 		t.Fatalf("unexpected status after async run: %+v", status)
 	}
@@ -231,31 +238,23 @@ func TestSchedulerOrganizeSourceSyncsVisibilityWhenTargetAlreadyExists(t *testin
 }
 
 func TestSchedulerCloudSyncImportsMountedCloudLibrary(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/file/sort" || r.URL.Query().Get("pdir_fid") != "0" {
-			t.Fatalf("unexpected cloud list request %s?%s", r.URL.Path, r.URL.RawQuery)
+	upstream := newOpenListAPIServer(t, func(path string, page, perPage int) ([]openListTestEntry, int) {
+		if path != "/" {
+			t.Fatalf("unexpected openlist path %q", path)
 		}
-		_, _ = w.Write([]byte(`{"status":200,"code":0,"data":{"list":[
-			{"fid":"f1","file_name":"Cloud.Movie.2026.mkv","dir":false,"size":1024}
-		]}}`))
-	}))
+		return []openListTestEntry{{Name: "Cloud.Movie.2026.mkv", Size: 1024}}, 1
+	})
 	defer upstream.Close()
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{})
 	repos := repository.New(db)
 	log := zap.NewNop()
 	storage := NewStorageConfigService(log, repos, NewCryptoService("", log))
 	if _, err := storage.Save(t.Context(), StorageInput{
-		Type: "quark",
+		Type: "openlist",
 		Config: map[string]any{
-			"cookie": "kps=test",
-			"base":   upstream.URL,
+			"server": upstream.URL,
+			"token":  "openlist-token",
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -264,7 +263,7 @@ func TestSchedulerCloudSyncImportsMountedCloudLibrary(t *testing.T) {
 	if err := repos.Library.Create(t.Context(), &local); err != nil {
 		t.Fatal(err)
 	}
-	lib := model.Library{Name: "夸克网盘 · 电影", Path: "cloud://quark/0", Type: "movie", Enabled: true}
+	lib := model.Library{Name: "OpenList · 电影", Path: "cloud://openlist", Type: "movie", Enabled: true}
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
 		t.Fatal(err)
 	}
@@ -280,47 +279,39 @@ func TestSchedulerCloudSyncImportsMountedCloudLibrary(t *testing.T) {
 		t.Fatalf("cloud sync: %v", err)
 	}
 	var media model.Media
-	if err := repos.DB.First(&media, "path = ?", "cloud://quark/Cloud.Movie.2026.mkv").Error; err != nil {
+	if err := repos.DB.First(&media, "path = ?", "cloud://openlist/Cloud.Movie.2026.mkv").Error; err != nil {
 		t.Fatalf("cloud media not imported: %v", err)
 	}
-	if media.STRMURL != "/api/cloud/play/quark?ref=f1" {
+	if media.STRMURL != "/api/cloud/play/openlist?ref=%2FCloud.Movie.2026.mkv" {
 		t.Fatalf("strm url = %q", media.STRMURL)
 	}
 }
 
 func TestSchedulerCloudSyncRunsOnlyOnceInsideNightlyWindow(t *testing.T) {
 	var requests atomic.Int32
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := newOpenListAPIServer(t, func(path string, page, perPage int) ([]openListTestEntry, int) {
 		requests.Add(1)
-		if r.URL.Path != "/file/sort" || r.URL.Query().Get("pdir_fid") != "0" {
-			t.Fatalf("unexpected cloud list request %s?%s", r.URL.Path, r.URL.RawQuery)
+		if path != "/" {
+			t.Fatalf("unexpected openlist path %q", path)
 		}
-		_, _ = w.Write([]byte(`{"status":200,"code":0,"data":{"list":[
-			{"fid":"f1","file_name":"Nightly.Cloud.Movie.2026.mkv","dir":false,"size":1024}
-		]}}`))
-	}))
+		return []openListTestEntry{{Name: "Nightly.Cloud.Movie.2026.mkv", Size: 1024}}, 1
+	})
 	defer upstream.Close()
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{})
 	repos := repository.New(db)
 	log := zap.NewNop()
 	storage := NewStorageConfigService(log, repos, NewCryptoService("", log))
 	if _, err := storage.Save(t.Context(), StorageInput{
-		Type: "quark",
+		Type: "openlist",
 		Config: map[string]any{
-			"cookie": "kps=test",
-			"base":   upstream.URL,
+			"server": upstream.URL,
+			"token":  "openlist-token",
 		},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	lib := model.Library{Name: "夸克网盘", Path: "cloud://quark/0", Type: "movie", Enabled: true}
+	lib := model.Library{Name: "OpenList", Path: "cloud://openlist", Type: "movie", Enabled: true}
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
 		t.Fatal(err)
 	}
@@ -378,34 +369,26 @@ func TestSchedulerCloudSyncRunsOnlyOnceInsideNightlyWindow(t *testing.T) {
 
 func TestSchedulerRunNowCloudSyncBypassesNightlyWindow(t *testing.T) {
 	var requests atomic.Int32
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := newOpenListAPIServer(t, func(path string, page, perPage int) ([]openListTestEntry, int) {
 		requests.Add(1)
-		_, _ = w.Write([]byte(`{"status":200,"code":0,"data":{"list":[
-			{"fid":"f1","file_name":"Manual.Cloud.Movie.2026.mkv","dir":false,"size":1024}
-		]}}`))
-	}))
+		return []openListTestEntry{{Name: "Manual.Cloud.Movie.2026.mkv", Size: 1024}}, 1
+	})
 	defer upstream.Close()
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{})
 	repos := repository.New(db)
 	log := zap.NewNop()
 	storage := NewStorageConfigService(log, repos, NewCryptoService("", log))
 	if _, err := storage.Save(t.Context(), StorageInput{
-		Type: "quark",
+		Type: "openlist",
 		Config: map[string]any{
-			"cookie": "kps=test",
-			"base":   upstream.URL,
+			"server": upstream.URL,
+			"token":  "openlist-token",
 		},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	lib := model.Library{Name: "夸克网盘", Path: "cloud://quark/0", Type: "movie", Enabled: true}
+	lib := model.Library{Name: "OpenList", Path: "cloud://openlist", Type: "movie", Enabled: true}
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
 		t.Fatal(err)
 	}
@@ -434,13 +417,7 @@ func TestSchedulerPeriodicLocalScanRunsAtMostOncePerDay(t *testing.T) {
 	libraryPath := filepath.Join(root, "library")
 	writeOrgFile(t, filepath.Join(libraryPath, "Daily.Show.S01E01.mkv"), "episode 1")
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{})
 	repos := repository.New(db)
 	if err := repos.Setting.Set(t.Context(), "scan.periodic_enabled", "true"); err != nil {
 		t.Fatal(err)
@@ -487,13 +464,7 @@ func TestSchedulerManualLocalScanBypassesDailyPeriodicLimit(t *testing.T) {
 	libraryPath := filepath.Join(root, "library")
 	writeOrgFile(t, filepath.Join(libraryPath, "Manual.Show.S01E01.mkv"), "episode 1")
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{})
 	repos := repository.New(db)
 	if err := repos.Setting.Set(t.Context(), "scan.periodic_enabled", "true"); err != nil {
 		t.Fatal(err)
@@ -528,34 +499,26 @@ func TestSchedulerManualLocalScanBypassesDailyPeriodicLimit(t *testing.T) {
 
 func TestSchedulerCloudSyncDisabledByDefault(t *testing.T) {
 	var requests atomic.Int32
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := newOpenListAPIServer(t, func(path string, page, perPage int) ([]openListTestEntry, int) {
 		requests.Add(1)
-		_, _ = w.Write([]byte(`{"status":200,"code":0,"data":{"list":[
-			{"fid":"f1","file_name":"Cloud.Movie.2026.mkv","dir":false,"size":1024}
-		]}}`))
-	}))
+		return []openListTestEntry{{Name: "Cloud.Movie.2026.mkv", Size: 1024}}, 1
+	})
 	defer upstream.Close()
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{})
 	repos := repository.New(db)
 	log := zap.NewNop()
 	storage := NewStorageConfigService(log, repos, NewCryptoService("", log))
 	if _, err := storage.Save(t.Context(), StorageInput{
-		Type: "quark",
+		Type: "openlist",
 		Config: map[string]any{
-			"cookie": "kps=test",
-			"base":   upstream.URL,
+			"server": upstream.URL,
+			"token":  "openlist-token",
 		},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	lib := model.Library{Name: "夸克网盘", Path: "cloud://quark/0", Type: "movie", Enabled: true}
+	lib := model.Library{Name: "OpenList", Path: "cloud://openlist", Type: "movie", Enabled: true}
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
 		t.Fatal(err)
 	}

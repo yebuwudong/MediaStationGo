@@ -25,7 +25,7 @@ const (
 	CloudUploadOverwriteKey        = "cloud.upload_overwrite"
 	CloudUploadTransferModeKey     = "cloud.upload_transfer_mode"
 	CloudUploadIntervalSecondsKey  = "cloud.upload_interval_seconds"
-	CloudUploadUnsupportedProvider = "本地文件直传目前支持 Alist / OpenList / WebDAV / CloudDrive2；115/夸克原生上传需要各自的分片上传私有接口，建议先用 CloudDrive2、OpenList 或 Alist 桥接后转存。"
+	CloudUploadUnsupportedProvider = "本地文件直传目前支持 Alist / OpenList / WebDAV / CloudDrive2；115 原生上传需要分片上传私有接口，建议先用 CloudDrive2、OpenList 或 Alist 桥接后转存。"
 )
 
 type CloudUploadInput struct {
@@ -165,7 +165,7 @@ func (s *StorageConfigService) uploaderForView(typ string, view *StorageView) (s
 		return newWebDAVUploader(view.Config), nil
 	case "s3":
 		return nil, errors.New("s3 local upload is not implemented yet")
-	case "cloud115", "quark":
+	case "cloud115":
 		return nil, errors.New(CloudUploadUnsupportedProvider)
 	default:
 		return nil, fmt.Errorf("unsupported storage type %q", typ)

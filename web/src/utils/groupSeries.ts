@@ -10,14 +10,14 @@ import type { Media } from '../types'
  * 折叠键优先级（命中第一个就分组）：
  *
  * 剧集（有季集号 / 路径像剧集）:
- *   1. library_id + 路径剧名   ← 最稳定:同一部剧的各集都在同一剧目录下
+ *   1. 库标识 + 路径剧名       ← 最稳定:同一部剧的各集都在同一剧目录下
  *   2. tmdb_id / bangumi_id / douban / thetvdb （无路径剧名时兜底）
  *   3. series_id              （后端预聚合,目前仅 Emby 虚拟分组用,DB 一般为空）
- *   4. library_id + title     （最终兜底）
+ *   4. 库标识 + title         （最终兜底）
  * 电影:
  *   1. tmdb_id / bangumi_id
- *   2. library_id + 路径剧名
- *   3. library_id + title
+ *   2. 库标识 + 路径剧名
+ *   3. 库标识 + title
  *
  * 为什么剧集要把「路径剧名」放在 tmdb_id 之前:
  * 本地/网盘按 MoviePilot 整理的剧集每集旁带 episode NFO, 其 <uniqueid type="tmdb">
@@ -25,32 +25,50 @@ import type { Media } from '../types'
  * 张卡(实测「遮天」90 集 = 89 个不同 tmdb_id)。而整剧目录名对全剧一致, 是最可靠的
  * 分组依据, 且对「部分集已刮削、部分未刮削」也能稳定合并。
  *
- * key 必须是「单条 media 的纯函数」且与子集无关——它会被写进卡片链接
- * (seriesCardLink → ?series=KEY), 之后 LibraryPage 用 getSeriesKey(m)===KEY 反查
- * 该剧的所有集。路径剧名优先正好满足:同剧各集的 key 恒等, 跨页面/子集稳定。
+ * key 必须是「单条 media 的纯函数」且与子集无关。最终暴露给 URL/API 的
+ * key 是短 hash，避免把库标识和标题这类内部分类依据塞进地址栏。
  *
  * 同一组内取最早 created_at 的那条作为代表卡片，并带 count 表示集数。
  */
 export type SeriesCard = { key: string; rep: Media; linkMedia: Media; count: number }
 
 export function getSeriesKey(media: Media): string {
+  return compactSeriesKey(getSeriesRawKey(media))
+}
+
+function getSeriesRawKey(media: Media): string {
   const fromPath = seriesTitleFromPath(media.path)
   if (isEpisodeLike(media) || pathLooksEpisodic(media)) {
     // 路径剧名优先:对全剧一致, 不受单集 tmdb 污染影响。
-    if (fromPath) return `lib:${targetLibraryID(media)}|show:${fromPath}`
+    if (fromPath) return seriesFingerprint('library-path', targetLibraryID(media), fromPath)
     // 无路径剧名(扁平目录)时才退而用外部 id;此时各集若共享整剧 id 仍能合并。
     if (media.tmdb_id && media.tmdb_id > 0) return `tmdb:${media.tmdb_id}`
     if (media.bangumi_id && media.bangumi_id > 0) return `bgm:${media.bangumi_id}`
     if (media.douban_id) return `douban:${media.douban_id}`
     if (media.thetvdb_id) return `thetvdb:${media.thetvdb_id}`
     if (media.series_id) return `series:${media.series_id}`
-    return `lib:${targetLibraryID(media)}|show:${normalizeTitle(seriesTitle(media))}`
+    return seriesFingerprint('library-title', targetLibraryID(media), normalizeTitle(seriesTitle(media)))
   }
   if (media.series_id) return `series:${media.series_id}`
   if (media.tmdb_id && media.tmdb_id > 0) return `tmdb:${media.tmdb_id}`
   if (media.bangumi_id && media.bangumi_id > 0) return `bgm:${media.bangumi_id}`
-  if (fromPath) return `lib:${media.library_id}|show:${fromPath}`
-  return `lib:${media.library_id}|${normalizeTitle(media.title)}`
+  if (fromPath) return seriesFingerprint('library-path', media.library_id, fromPath)
+  return seriesFingerprint('library-title', media.library_id, normalizeTitle(media.title))
+}
+
+function seriesFingerprint(...parts: string[]): string {
+  return parts.join('\x1f')
+}
+
+function compactSeriesKey(raw: string): string {
+  const normalized = raw.trim()
+  if (!normalized) return ''
+  let hash = 0x811c9dc5
+  for (const byte of new TextEncoder().encode(normalized)) {
+    hash ^= byte
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return `series:${hash.toString(16).padStart(8, '0')}`
 }
 
 export function isEpisodeLike(media: Media): boolean {
@@ -60,7 +78,10 @@ export function isEpisodeLike(media: Media): boolean {
 // 剧集类目录名(电视剧/动漫及其二级分类)。媒体路径落在这些目录下时, 即便
 // 季集号未识别出来, 也应按剧集对待, 跳转到 /library 分类视图而非 /media 单页。
 const EPISODIC_PATH_RE =
-  /[\\/](?:电视剧|剧集|国产剧|欧美剧|日韩剧|日剧|韩剧|综艺|纪录片|动漫|番剧|国漫|日番|儿童|tv|series|shows?|season[\s._-]*\d|s\d{1,2}(?:[\s._-]|[\\/])|specials?|sp|ova|oad|特别篇|特別篇|番外|特典)[\\/]/i
+  /[\\/](?:电视剧|剧集|国产剧|欧美剧|日韩剧|日剧|韩剧|综艺|纪录片|动漫|番剧|国漫|日番|儿童|tv|series|shows?|season[\s._-]*\d|s\d{1,2}(?:[\s._-]|[\\/])|specials?|sp|ova|oad|extra|extras|特别篇|特別篇|番外|特典)[\\/]/i
+
+const SEASON_FOLDER_RE =
+  /^(?:s\d{1,2}|season[\s._-]*\d{1,2}|第\s*\d{1,2}\s*季|specials?|sp|ova|oad|extra|extras|特别篇|特別篇|番外|特典)$/i
 
 function pathLooksEpisodic(media: Media): boolean {
   const path = (media.path || media.display_library_path || media.library_path || '')
@@ -92,12 +113,12 @@ function normalizeTitle(value?: string): string {
     .trim()
 }
 
-function seriesTitleFromPath(path?: string): string {
+export function seriesTitleFromPath(path?: string): string {
   if (!path) return ''
   const parts = path.split(/[\\/]+/).filter(Boolean)
   if (parts.length < 2) return ''
   let dirIndex = parts.length - 2
-  if (/^(?:s\d{1,2}|season\s*\d{1,2}|第\s*\d{1,2}\s*季)$/i.test(parts[dirIndex])) {
+  while (dirIndex >= 0 && SEASON_FOLDER_RE.test(parts[dirIndex])) {
     dirIndex -= 1
   }
   if (dirIndex < 0) return ''

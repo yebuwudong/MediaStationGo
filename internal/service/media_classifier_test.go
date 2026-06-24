@@ -3,9 +3,7 @@ package service
 import (
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -218,13 +216,7 @@ func TestNormalizeMediaTypeAcceptsChineseLibraryTypes(t *testing.T) {
 }
 
 func TestSubscriptionResolveClassifiedSavePath(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Setting{})
 	repos := repository.New(db)
 	if err := repos.Setting.Set(t.Context(), "organizer.smart_classify", "true"); err != nil {
 		t.Fatal(err)

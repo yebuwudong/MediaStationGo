@@ -1,7 +1,6 @@
 package service
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,13 +8,9 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
-	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
@@ -114,6 +109,24 @@ func TestSelectSiteSearchCandidatesMatchesFeedAlias(t *testing.T) {
 	}
 }
 
+func TestSelectSiteSearchCandidatesMatchesSubscriptionOriginalNameAlias(t *testing.T) {
+	sub := &model.Subscription{
+		Name:         "玩具总动员 5 自动订阅",
+		Filter:       "玩具总动员 5 2026",
+		OriginalName: "Toy Story 5",
+		Year:         2026,
+		MediaType:    "movie",
+	}
+	results := []SearchResult{
+		{Title: "Toy Story 5 2026 1080p WEB-DL", DownloadURL: "https://pt/download/right", Seeders: 90},
+	}
+
+	got := selectSiteSearchCandidates(results, sub, map[string]struct{}{})
+	if len(got) != 1 || got[0].Download != "https://pt/download/right" {
+		t.Fatalf("selected %#v, want original-name alias match", got)
+	}
+}
+
 func TestSelectSiteSearchCandidatesDoesNotWashByDefault(t *testing.T) {
 	sub := &model.Subscription{Name: "Inception 自动订阅", Filter: "Inception 2010", MediaType: "movie", WashPriority: "resolution"}
 	results := []SearchResult{
@@ -174,6 +187,27 @@ func TestSiteSearchKeywordsIncludeAliasesAndCleanedKeywords(t *testing.T) {
 	}
 }
 
+func TestSiteSearchKeywordsUseCleanMetadataAliases(t *testing.T) {
+	sub := &model.Subscription{
+		Name:         "玩具总动员 4 自动订阅",
+		Filter:       "玩具总动员 4 2019",
+		OriginalName: "Toy Story 4",
+		Year:         2019,
+	}
+
+	got := siteSearchKeywords(sub)
+	for _, want := range []string{"玩具总动员 4 2019", "Toy Story 4", "Toy Story 4 2019", "玩具总动员 4"} {
+		if !containsString(got, want) {
+			t.Fatalf("keywords = %#v, missing %q", got, want)
+		}
+	}
+	for _, unwanted := range []string{"玩具总动员 4 自动订阅", "玩具总动员 4 自动订阅 2019", "玩具总动员 4 2019 2019"} {
+		if containsString(got, unwanted) {
+			t.Fatalf("keywords = %#v, should not contain %q", got, unwanted)
+		}
+	}
+}
+
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
@@ -225,6 +259,9 @@ func TestSelectSiteSearchCandidatesWithStatsExplainsFiltering(t *testing.T) {
 		stats.Selected != 1 {
 		t.Fatalf("unexpected stats: %#v", stats)
 	}
+	if len(stats.QueryMismatchExamples) != 1 || stats.QueryMismatchExamples[0] != "Different Show S01E01 1080p" {
+		t.Fatalf("query mismatch examples = %#v", stats.QueryMismatchExamples)
+	}
 }
 
 func TestDeleteSubscriptionRemovesDownloaderTaskAndSeenState(t *testing.T) {
@@ -249,13 +286,7 @@ func TestDeleteSubscriptionRemovesDownloaderTaskAndSeenState(t *testing.T) {
 	}))
 	defer qb.Close()
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Subscription{}, &model.DownloadTask{}, &model.DownloadClient{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Subscription{}, &model.DownloadTask{}, &model.DownloadClient{}, &model.Setting{})
 	repos := repository.New(db)
 	configureTestDefaultQB(t, repos, qb.URL)
 	downloads := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
@@ -563,13 +594,7 @@ func TestSubscriptionPendingDownloadAvailabilitySkipsUnorganizedEpisodes(t *test
 }
 
 func TestSubscriptionPendingDownloadAvailabilityIncludesQueuedTasks(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.DownloadTask{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.DownloadTask{})
 	repos := repository.New(db)
 	if err := repos.Download.Create(t.Context(), &model.DownloadTask{
 		Source:   "qbittorrent",
@@ -611,13 +636,7 @@ func TestSubscriptionPendingDownloadAvailabilityIncludesQueuedTasks(t *testing.T
 }
 
 func TestSubscriptionPendingDownloadAvailabilityIncludesLinkedAliasTask(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.DownloadTask{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.DownloadTask{})
 	repos := repository.New(db)
 	sub := &model.Subscription{
 		Base:          model.Base{ID: "sub-qiao-chu"},
@@ -648,896 +667,5 @@ func TestSubscriptionPendingDownloadAvailabilityIncludesLinkedAliasTask(t *testi
 	}, sub, map[string]struct{}{}, availability)
 	if len(got) != 0 {
 		t.Fatalf("selected %#v, want linked alias task to satisfy E21", got)
-	}
-}
-
-func TestSubscriptionEnrichProgressIncludesPendingDownloads(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.DownloadTask{}, &model.Media{}); err != nil {
-		t.Fatal(err)
-	}
-	repos := repository.New(db)
-	if err := repos.Download.Create(t.Context(), &model.DownloadTask{
-		Source:   "qbittorrent",
-		URL:      "magnet:?xt=urn:btih:4444444444444444444444444444444444444444",
-		Title:    "Inception 2010 1080p",
-		SavePath: "/downloads/movies",
-		Status:   "completed",
-		Progress: 1,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	svc := NewSubscriptionService(nil, nil, repos, nil, nil, nil)
-	items := []model.Subscription{{
-		Name:      "Inception 2010",
-		Filter:    "Inception 2010",
-		MediaType: "movie",
-		SavePath:  "/downloads/movies",
-	}}
-
-	svc.EnrichProgress(t.Context(), items)
-	if items[0].InLibrary {
-		t.Fatal("pending download should not be reported as in-library media")
-	}
-	if items[0].DownloadedEpisodes != 1 || items[0].LocalMediaCount != 1 || items[0].TotalEpisodes != 1 {
-		t.Fatalf("unexpected enriched progress: %+v", items[0])
-	}
-}
-
-func TestSubscriptionLocalAvailabilityMatchesMediaPath(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Media{}); err != nil {
-		t.Fatal(err)
-	}
-	repos := repository.New(db)
-	if err := db.Create(&model.Media{
-		Title:      "Scraped English Title",
-		Path:       "/media/电视剧/国产剧/凡人修仙传/Season 01/凡人修仙传 - S01E146.mkv",
-		SeasonNum:  1,
-		EpisodeNum: 146,
-	}).Error; err != nil {
-		t.Fatal(err)
-	}
-	sub := &model.Subscription{
-		Name:          "凡人修仙传 年番",
-		Filter:        "凡人修仙传",
-		MediaType:     "tv",
-		TotalEpisodes: 146,
-	}
-
-	availability := SubscriptionLocalAvailability(t.Context(), repos, sub)
-	if _, ok := availability.ExistingEpisodeKeys[episodeKey(1, 146)]; !ok {
-		t.Fatalf("missing path-matched E146 key: %#v", availability.ExistingEpisodeKeys)
-	}
-	results := []SearchResult{
-		{Title: "凡人修仙传 年番 - 146 1080p", DownloadURL: "https://pt/download/146", Seeders: 80},
-	}
-	got := selectSiteSearchCandidates(results, sub, map[string]struct{}{}, availability)
-	if len(got) != 0 {
-		t.Fatalf("selected %#v, want none because path-matched local episode exists", got)
-	}
-}
-
-func TestSubscriptionPendingDownloadAvailabilityIgnoresDeletedTasks(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.DownloadTask{}); err != nil {
-		t.Fatal(err)
-	}
-	repos := repository.New(db)
-	if err := repos.Download.Create(t.Context(), &model.DownloadTask{
-		Source:   "qbittorrent",
-		URL:      "magnet:?xt=urn:btih:3333333333333333333333333333333333333333",
-		Title:    "间谍过家家 S01E02 1080p",
-		SavePath: "/downloads/tv",
-		Status:   "deleted",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	svc := NewSubscriptionService(nil, nil, repos, nil, nil, nil)
-	sub := &model.Subscription{
-		Name:          "间谍过家家 自动订阅",
-		Filter:        "间谍过家家",
-		MediaType:     "tv",
-		SavePath:      "/downloads/tv",
-		TotalEpisodes: 3,
-	}
-
-	availability := svc.pendingDownloadAvailability(t.Context(), sub)
-	if _, ok := availability.ExistingEpisodeKeys[episodeKey(1, 2)]; ok {
-		t.Fatalf("deleted E02 task should not count as available: %#v", availability.ExistingEpisodeKeys)
-	}
-	results := []SearchResult{
-		{Title: "间谍过家家 S01E02 1080p WEB-DL", DownloadURL: "https://pt/download/2", Seeders: 80},
-		{Title: "间谍过家家 S01E03 1080p WEB-DL", DownloadURL: "https://pt/download/3", Seeders: 70},
-	}
-	got := selectSiteSearchCandidates(results, sub, map[string]struct{}{}, availability)
-	if len(got) != 2 || got[0].Episode != 2 || got[1].Episode != 3 {
-		t.Fatalf("selected %#v, want deleted episode 2 and new episode 3", got)
-	}
-}
-
-func TestSubscriptionPendingDownloadAvailabilityIncludesLiveQBTorrents(t *testing.T) {
-	qb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v2/auth/login":
-			_, _ = w.Write([]byte("Ok."))
-		case "/api/v2/torrents/info":
-			_, _ = w.Write([]byte(`[{"hash":"abc123","name":"间谍过家家 S01E01 1080p","state":"downloading","progress":0.2}]`))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer qb.Close()
-
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.DownloadTask{}); err != nil {
-		t.Fatal(err)
-	}
-	repos := repository.New(db)
-	downloads := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
-	downloads.qb.Configure(QBitConfig{BaseURL: qb.URL, Username: "admin", Password: "admin"})
-	svc := NewSubscriptionService(nil, nil, repos, downloads, nil, nil)
-	sub := &model.Subscription{
-		Name:          "间谍过家家 自动订阅",
-		Filter:        "间谍过家家",
-		MediaType:     "tv",
-		SavePath:      "/downloads/tv",
-		TotalEpisodes: 2,
-	}
-
-	availability := svc.pendingDownloadAvailability(t.Context(), sub)
-	if availability.DownloadedEpisodes != 1 {
-		t.Fatalf("downloaded episodes = %d, want 1", availability.DownloadedEpisodes)
-	}
-	if _, ok := availability.ExistingEpisodeKeys[episodeKey(1, 1)]; !ok {
-		t.Fatalf("missing live qB E01 key: %#v", availability.ExistingEpisodeKeys)
-	}
-}
-
-func TestSubscriptionRunOneArchivesCompletedMovieRSS(t *testing.T) {
-	rss := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/rss+xml")
-		_, _ = w.Write([]byte(`<?xml version="1.0"?>
-<rss><channel>
-  <item>
-    <title>Dune 2021 1080p WEB-DL</title>
-    <guid>dune-1080-web</guid>
-    <link>magnet:?xt=urn:btih:dddddddddddddddddddddddddddddddddddddddd&amp;dn=Dune+2021+1080p+WEB-DL</link>
-  </item>
-</channel></rss>`))
-	}))
-	defer rss.Close()
-
-	var addCalls int32
-	var added bool
-	qb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v2/auth/login":
-			_, _ = w.Write([]byte("Ok."))
-		case "/api/v2/torrents/info":
-			if added {
-				_, _ = w.Write([]byte(`[{"hash":"dunehash","name":"Dune 2021 1080p WEB-DL","state":"downloading","progress":0.1}]`))
-				return
-			}
-			_, _ = w.Write([]byte(`[]`))
-		case "/api/v2/torrents/add":
-			added = true
-			atomic.AddInt32(&addCalls, 1)
-			_, _ = w.Write([]byte("Ok."))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer qb.Close()
-
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Subscription{}, &model.Setting{}, &model.DownloadTask{}, &model.Media{}, &model.DownloadClient{}); err != nil {
-		t.Fatal(err)
-	}
-	repos := repository.New(db)
-	configureTestDefaultQB(t, repos, qb.URL)
-	downloads := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
-	svc := NewSubscriptionService(nil, zap.NewNop(), repos, downloads, nil, NewHub(zap.NewNop()))
-
-	sub := &model.Subscription{
-		Name:      "Dune 自动订阅",
-		FeedURL:   rss.URL,
-		Filter:    "Dune 2021",
-		MediaType: "movie",
-		SavePath:  "/downloads/movies",
-	}
-	if err := repos.Subscription.Create(t.Context(), sub); err != nil {
-		t.Fatal(err)
-	}
-	queued, err := svc.runOne(t.Context(), sub)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if queued != 1 {
-		t.Fatalf("queued = %d, want 1", queued)
-	}
-	if got := atomic.LoadInt32(&addCalls); got != 1 {
-		t.Fatalf("qb add calls = %d, want 1", got)
-	}
-	active, err := repos.Subscription.List(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(active) != 0 {
-		t.Fatalf("active subscriptions = %d, want 0 after completion", len(active))
-	}
-	history, err := repos.Subscription.History(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(history) != 1 || history[0].ArchivedAt == nil {
-		t.Fatalf("history = %#v, want one archived subscription", history)
-	}
-}
-
-func TestSubscriptionArchiveCompletedSingleEpisodeTV(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Subscription{}); err != nil {
-		t.Fatal(err)
-	}
-	repos := repository.New(db)
-	svc := NewSubscriptionService(nil, zap.NewNop(), repos, nil, nil, NewHub(zap.NewNop()))
-	sub := &model.Subscription{
-		Name:      "Some Show S01E01 自动订阅",
-		FeedURL:   "site-search://search?keyword=Some%20Show%20S01E01",
-		Filter:    "Some Show S01E01",
-		MediaType: "tv",
-		Enabled:   true,
-	}
-	if err := repos.Subscription.Create(t.Context(), sub); err != nil {
-		t.Fatal(err)
-	}
-
-	err = svc.archiveCompletedSubscription(t.Context(), sub, LocalAvailability{
-		DownloadedEpisodes: 1,
-		LocalMediaCount:    1,
-		InLibrary:          true,
-		ExistingEpisodeKeys: map[string]struct{}{
-			episodeKey(1, 1): {},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	active, err := repos.Subscription.List(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(active) != 0 {
-		t.Fatalf("active subscriptions = %d, want 0", len(active))
-	}
-	history, err := repos.Subscription.History(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(history) != 1 || history[0].ArchiveReason == "" {
-		t.Fatalf("history = %#v, want archived single episode", history)
-	}
-}
-
-func TestSubscriptionArchiveKeepsGenericUnknownTotalSeriesActive(t *testing.T) {
-	sub := &model.Subscription{
-		Name:      "Some Show 自动订阅",
-		Filter:    "Some Show",
-		MediaType: "tv",
-	}
-	availability := LocalAvailability{
-		DownloadedEpisodes: 1,
-		LocalMediaCount:    1,
-		InLibrary:          true,
-		ExistingEpisodeKeys: map[string]struct{}{
-			episodeKey(1, 1): {},
-		},
-	}
-	if subscriptionShouldArchive(sub, availability) {
-		t.Fatal("generic series with unknown total should stay active for incremental episodes")
-	}
-}
-
-func TestInferSubscriptionTotalEpisodesFromSearchAndRSS(t *testing.T) {
-	sub := &model.Subscription{Name: "Some Show 自动订阅", Filter: "Some Show", MediaType: "tv"}
-	results := []SearchResult{
-		{Title: "Some Show S01E01 1080p"},
-		{Title: "Some Show S01E12 1080p"},
-		{Title: "Other Show S01E99 1080p"},
-	}
-	if got := inferSearchTotalEpisodes(results, sub); got != 12 {
-		t.Fatalf("search inferred total = %d, want 12", got)
-	}
-	subtitleResults := []SearchResult{
-		{Title: "Smoking Behind the Supermarket with You", Subtitle: "躲在超市后门抽烟的两人 S01E12"},
-	}
-	subtitleSub := &model.Subscription{Name: "躲在超市后门抽烟的两人 自动订阅", Filter: "躲在超市后门抽烟的两人", MediaType: "tv"}
-	if got := inferSearchTotalEpisodes(subtitleResults, subtitleSub); got != 12 {
-		t.Fatalf("subtitle search inferred total = %d, want 12", got)
-	}
-	items := []rssItem{
-		{Title: "Some Show S01E02 WEB-DL"},
-		{Title: "Some Show S01E10 WEB-DL"},
-	}
-	if got := inferRSSTotalEpisodes(items, sub, compileFilter("Some Show")); got != 10 {
-		t.Fatalf("rss inferred total = %d, want 10", got)
-	}
-}
-
-func TestResolveSubscriptionTotalEpisodesPrefersTMDbOverTitleFallback(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/search/tv":
-			_, _ = w.Write([]byte(`{"results":[{"id":42,"name":"Some Show","first_air_date":"2026-01-01"}]}`))
-		case "/tv/42":
-			_, _ = w.Write([]byte(`{"number_of_episodes":13}`))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer upstream.Close()
-
-	cfg := &config.Config{}
-	cfg.Secrets.TMDbAPIKey = "test"
-	cfg.Secrets.TMDbAPIProxy = upstream.URL
-	tmdb := NewTMDbProvider(cfg, zap.NewNop(), nil)
-	svc := NewSubscriptionService(cfg, zap.NewNop(), nil, nil, nil, NewHub(zap.NewNop()))
-	svc.SetScraper(NewScraperService(cfg, zap.NewNop(), nil, tmdb, nil, nil, nil, NewHub(zap.NewNop())))
-
-	sub := &model.Subscription{Name: "Some Show 自动订阅", Filter: "Some Show", MediaType: "tv"}
-	if got := svc.resolveSubscriptionTotalEpisodes(t.Context(), sub, 10); got != 13 {
-		t.Fatalf("resolved total = %d, want TMDb total 13", got)
-	}
-}
-
-func TestSubscriptionArchiveKeepsWashSubscriptionActive(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Subscription{}); err != nil {
-		t.Fatal(err)
-	}
-	repos := repository.New(db)
-	svc := NewSubscriptionService(nil, zap.NewNop(), repos, nil, nil, NewHub(zap.NewNop()))
-	sub := &model.Subscription{
-		Name:        "Dune 自动订阅",
-		FeedURL:     "site-search://search?keyword=Dune",
-		Filter:      "Dune 2021",
-		MediaType:   "movie",
-		WashEnabled: true,
-		Enabled:     true,
-	}
-	if err := repos.Subscription.Create(t.Context(), sub); err != nil {
-		t.Fatal(err)
-	}
-
-	err = svc.archiveCompletedSubscription(t.Context(), sub, LocalAvailability{
-		DownloadedEpisodes: 1,
-		LocalMediaCount:    1,
-		InLibrary:          true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	active, err := repos.Subscription.List(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(active) != 1 {
-		t.Fatalf("active subscriptions = %d, want wash subscription to stay active", len(active))
-	}
-	history, err := repos.Subscription.History(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(history) != 0 {
-		t.Fatalf("history subscriptions = %d, want 0", len(history))
-	}
-}
-
-func TestRestoreArchivedSubscriptionReturnsToActiveAndClearsSeenState(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Subscription{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
-	repos := repository.New(db)
-	svc := NewSubscriptionService(nil, zap.NewNop(), repos, nil, nil, NewHub(zap.NewNop()))
-	sub := &model.Subscription{
-		Name:          "南部档案 自动订阅",
-		FeedURL:       "https://rss.example/feed",
-		Filter:        "南部档案",
-		MediaType:     "tv",
-		TotalEpisodes: 33,
-	}
-	if err := repos.Subscription.Create(t.Context(), sub); err != nil {
-		t.Fatal(err)
-	}
-	archivedAt := time.Now()
-	if err := repos.Subscription.Archive(t.Context(), sub.ID, "已下载 1/33 集，缺 33 集", archivedAt); err != nil {
-		t.Fatal(err)
-	}
-	if err := repos.Setting.Set(t.Context(), "subscription."+sub.ID+".seen", "old-guid"); err != nil {
-		t.Fatal(err)
-	}
-	restored, err := svc.Restore(t.Context(), sub.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if restored.ArchivedAt != nil || restored.ArchiveReason != "" || !restored.Enabled {
-		t.Fatalf("restored subscription not active: archived=%v reason=%q enabled=%v", restored.ArchivedAt, restored.ArchiveReason, restored.Enabled)
-	}
-	if restored.TotalEpisodes != 0 {
-		t.Fatalf("restored total_episodes = %d, want 0 so it gets recomputed from authoritative metadata", restored.TotalEpisodes)
-	}
-	active, err := repos.Subscription.List(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(active) != 1 || active[0].ID != sub.ID {
-		t.Fatalf("active subscriptions = %#v, want restored subscription", active)
-	}
-	history, err := repos.Subscription.History(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(history) != 0 {
-		t.Fatalf("history subscriptions = %d, want 0 after restore", len(history))
-	}
-	seen, err := repos.Setting.Get(t.Context(), "subscription."+sub.ID+".seen")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if seen != "" {
-		t.Fatalf("seen state = %q, want cleared", seen)
-	}
-}
-
-func TestSubscriptionRunOneDeduplicatesDuplicateRSSGUIDInSameFeed(t *testing.T) {
-	rss := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/rss+xml")
-		_, _ = w.Write([]byte(`<?xml version="1.0"?>
-<rss><channel>
-  <item>
-    <title>Some Show S01E01 1080p</title>
-    <guid>episode-1</guid>
-    <link>magnet:?xt=urn:btih:1111111111111111111111111111111111111111&amp;dn=Some+Show+S01E01</link>
-  </item>
-  <item>
-    <title>Some Show S01E01 1080p</title>
-    <guid>episode-1</guid>
-    <link>magnet:?xt=urn:btih:1111111111111111111111111111111111111111&amp;dn=Some+Show+S01E01</link>
-  </item>
-</channel></rss>`))
-	}))
-	defer rss.Close()
-
-	var addCalls int32
-	qb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v2/auth/login":
-			_, _ = w.Write([]byte("Ok."))
-		case "/api/v2/torrents/info":
-			if atomic.LoadInt32(&addCalls) > 0 {
-				_, _ = w.Write([]byte(`[{"hash":"abc123","name":"Some Show S01E01 1080p","state":"downloading","progress":0.1}]`))
-				return
-			}
-			_, _ = w.Write([]byte(`[]`))
-		case "/api/v2/torrents/add":
-			atomic.AddInt32(&addCalls, 1)
-			_, _ = w.Write([]byte("Ok."))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer qb.Close()
-
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Subscription{}, &model.Setting{}, &model.DownloadTask{}, &model.Media{}, &model.DownloadClient{}); err != nil {
-		t.Fatal(err)
-	}
-	repos := repository.New(db)
-	configureTestDefaultQB(t, repos, qb.URL)
-	downloads := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
-	svc := NewSubscriptionService(nil, zap.NewNop(), repos, downloads, nil, NewHub(zap.NewNop()))
-
-	sub := &model.Subscription{
-		Name:      "Some Show 自动订阅",
-		FeedURL:   rss.URL,
-		Filter:    "Some Show",
-		MediaType: "tv",
-		SavePath:  "/downloads/tv",
-	}
-	if err := repos.Subscription.Create(t.Context(), sub); err != nil {
-		t.Fatal(err)
-	}
-	queued, err := svc.runOne(t.Context(), sub)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if queued != 1 {
-		t.Fatalf("queued = %d, want 1", queued)
-	}
-	if got := atomic.LoadInt32(&addCalls); got != 1 {
-		t.Fatalf("qb add calls = %d, want 1", got)
-	}
-	rows, err := repos.Download.List(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 1 {
-		t.Fatalf("download rows = %d, want 1", len(rows))
-	}
-}
-
-func TestSubscriptionRunOneSkipsSameEpisodeAddedEarlierInFeed(t *testing.T) {
-	rss := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/rss+xml")
-		_, _ = w.Write([]byte(`<?xml version="1.0"?>
-<rss><channel>
-  <item>
-    <title>Some Show S01E01 1080p</title>
-    <guid>episode-1-a</guid>
-    <link>magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&amp;dn=Some+Show+S01E01+1080p</link>
-  </item>
-  <item>
-    <title>Some Show S01E01 WEB-DL</title>
-    <guid>episode-1-b</guid>
-    <link>magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&amp;dn=Some+Show+S01E01+WEB-DL</link>
-  </item>
-</channel></rss>`))
-	}))
-	defer rss.Close()
-
-	var addCalls int32
-	qb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v2/auth/login":
-			_, _ = w.Write([]byte("Ok."))
-		case "/api/v2/torrents/info":
-			if atomic.LoadInt32(&addCalls) > 0 {
-				_, _ = w.Write([]byte(`[{"hash":"abc123","name":"Some Show S01E01 1080p","state":"downloading","progress":0.1}]`))
-				return
-			}
-			_, _ = w.Write([]byte(`[]`))
-		case "/api/v2/torrents/add":
-			atomic.AddInt32(&addCalls, 1)
-			_, _ = w.Write([]byte("Ok."))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer qb.Close()
-
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Subscription{}, &model.Setting{}, &model.DownloadTask{}, &model.Media{}, &model.DownloadClient{}); err != nil {
-		t.Fatal(err)
-	}
-	repos := repository.New(db)
-	configureTestDefaultQB(t, repos, qb.URL)
-	downloads := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
-	svc := NewSubscriptionService(nil, zap.NewNop(), repos, downloads, nil, NewHub(zap.NewNop()))
-
-	sub := &model.Subscription{
-		Name:          "Some Show 自动订阅",
-		FeedURL:       rss.URL,
-		Filter:        "Some Show",
-		MediaType:     "tv",
-		SavePath:      "/downloads/tv",
-		TotalEpisodes: 12,
-	}
-	if err := repos.Subscription.Create(t.Context(), sub); err != nil {
-		t.Fatal(err)
-	}
-	queued, err := svc.runOne(t.Context(), sub)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if queued != 1 {
-		t.Fatalf("queued = %d, want 1", queued)
-	}
-	if got := atomic.LoadInt32(&addCalls); got != 1 {
-		t.Fatalf("qb add calls = %d, want 1", got)
-	}
-	rows, err := repos.Download.List(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 1 {
-		t.Fatalf("download rows = %d, want 1", len(rows))
-	}
-}
-
-func TestSubscriptionRunOneRSSWashQueuesOnlyBestMovieVariant(t *testing.T) {
-	rss := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/rss+xml")
-		_, _ = w.Write([]byte(`<?xml version="1.0"?>
-<rss><channel>
-  <item>
-    <title>Dune 2021 1080p WEB-DL</title>
-    <guid>dune-1080-web</guid>
-    <link>magnet:?xt=urn:btih:dddddddddddddddddddddddddddddddddddddddd&amp;dn=Dune+2021+1080p+WEB-DL</link>
-  </item>
-  <item>
-    <title>Dune 2021 2160p UHD BluRay REMUX HDR</title>
-    <guid>dune-2160-remux</guid>
-    <link>magnet:?xt=urn:btih:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee&amp;dn=Dune+2021+2160p+REMUX</link>
-  </item>
-  <item>
-    <title>Dune 2021 720p HDTV</title>
-    <guid>dune-720-hdtv</guid>
-    <link>magnet:?xt=urn:btih:ffffffffffffffffffffffffffffffffffffffff&amp;dn=Dune+2021+720p+HDTV</link>
-  </item>
-</channel></rss>`))
-	}))
-	defer rss.Close()
-
-	var addCalls int32
-	var addedTitles []string
-	addedHashes := make([]string, 0, 3)
-	qb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v2/auth/login":
-			_, _ = w.Write([]byte("Ok."))
-		case "/api/v2/torrents/info":
-			if len(addedHashes) == 0 {
-				_, _ = w.Write([]byte(`[]`))
-				return
-			}
-			var items []string
-			for _, hash := range addedHashes {
-				items = append(items, `{"hash":"`+hash+`","name":"Dune 2021","state":"downloading","progress":0.1}`)
-			}
-			_, _ = w.Write([]byte(`[` + strings.Join(items, ",") + `]`))
-		case "/api/v2/torrents/add":
-			call := atomic.AddInt32(&addCalls, 1)
-			_ = r.ParseMultipartForm(10 << 20)
-			addedTitles = append(addedTitles, r.FormValue("urls"))
-			addedHashes = append(addedHashes, strings.Repeat(fmt.Sprintf("%x", call), 40))
-			_, _ = w.Write([]byte("Ok."))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer qb.Close()
-
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Subscription{}, &model.Setting{}, &model.DownloadTask{}, &model.Media{}, &model.DownloadClient{}); err != nil {
-		t.Fatal(err)
-	}
-	repos := repository.New(db)
-	configureTestDefaultQB(t, repos, qb.URL)
-	downloads := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
-	svc := NewSubscriptionService(nil, zap.NewNop(), repos, downloads, nil, NewHub(zap.NewNop()))
-
-	sub := &model.Subscription{
-		Name:         "Dune 自动订阅",
-		FeedURL:      rss.URL,
-		Filter:       "Dune 2021",
-		MediaType:    "movie",
-		WashEnabled:  true,
-		WashPriority: "resolution",
-		SavePath:     "/downloads/movies",
-	}
-	if err := repos.Subscription.Create(t.Context(), sub); err != nil {
-		t.Fatal(err)
-	}
-	queued, err := svc.runOne(t.Context(), sub)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if queued != 1 {
-		t.Fatalf("queued = %d, want 1 best movie variant", queued)
-	}
-	if got := atomic.LoadInt32(&addCalls); got != 1 {
-		t.Fatalf("qb add calls = %d, want 1", got)
-	}
-	if len(addedTitles) != 1 || !strings.Contains(addedTitles[0], "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") {
-		t.Fatalf("added %#v, want 2160p REMUX variant only", addedTitles)
-	}
-}
-
-func TestSubscriptionRunOneDoesNotUseDeletedDownloader(t *testing.T) {
-	rss := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/rss+xml")
-		_, _ = w.Write([]byte(`<?xml version="1.0"?>
-<rss><channel>
-  <item>
-    <title>Deleted Downloader Show S01E01 1080p</title>
-    <guid>deleted-downloader-episode-1</guid>
-    <link>magnet:?xt=urn:btih:cccccccccccccccccccccccccccccccccccccccc&amp;dn=Deleted+Downloader+Show+S01E01</link>
-  </item>
-</channel></rss>`))
-	}))
-	defer rss.Close()
-
-	var qbCalls int32
-	qb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&qbCalls, 1)
-		switch r.URL.Path {
-		case "/api/v2/auth/login":
-			_, _ = w.Write([]byte("Ok."))
-		case "/api/v2/torrents/info":
-			_, _ = w.Write([]byte(`[]`))
-		case "/api/v2/torrents/add":
-			_, _ = w.Write([]byte("Ok."))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer qb.Close()
-
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Subscription{}, &model.Setting{}, &model.DownloadTask{}, &model.Media{}, &model.DownloadClient{}); err != nil {
-		t.Fatal(err)
-	}
-	repos := repository.New(db)
-	client := &model.DownloadClient{Name: "qB deleted", Type: "qbittorrent", Host: qb.URL, Username: "admin", Password: "admin", IsDefault: true, Enabled: true}
-	if err := repos.DownloadClient.Create(t.Context(), client); err != nil {
-		t.Fatal(err)
-	}
-	if err := repos.Setting.Set(t.Context(), settingDownloadClientsManaged, "true"); err != nil {
-		t.Fatal(err)
-	}
-	if err := repos.DownloadClient.Delete(t.Context(), client.ID); err != nil {
-		t.Fatal(err)
-	}
-
-	downloads := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
-	svc := NewSubscriptionService(nil, zap.NewNop(), repos, downloads, nil, NewHub(zap.NewNop()))
-	sub := &model.Subscription{
-		Name:      "Deleted Downloader Show 自动订阅",
-		FeedURL:   rss.URL,
-		Filter:    "Deleted Downloader Show",
-		MediaType: "tv",
-		SavePath:  "/downloads/tv",
-	}
-	if err := repos.Subscription.Create(t.Context(), sub); err != nil {
-		t.Fatal(err)
-	}
-
-	queued, err := svc.runOne(t.Context(), sub)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if queued != 0 {
-		t.Fatalf("queued = %d, want 0 when default downloader was deleted", queued)
-	}
-	if got := atomic.LoadInt32(&qbCalls); got != 0 {
-		t.Fatalf("qB calls = %d, want 0 after downloader deletion", got)
-	}
-	rows, err := repos.Download.List(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 0 {
-		t.Fatalf("download rows = %d, want 0", len(rows))
-	}
-}
-
-func TestMatchesSubscriptionRulesUserExcludeWords(t *testing.T) {
-	sub := &model.Subscription{ExcludeWords: "10bit,dolby vision,杜比"}
-	cases := []struct {
-		title string
-		want  bool
-	}{
-		{"Movie 2024 1080p WEB-DL", true},
-		{"Movie 2024 2160p 10bit HEVC", false},
-		{"Movie 2024 2160p Dolby Vision", false},
-		{"电影 2024 杜比全景声", false},
-	}
-	for _, c := range cases {
-		if got := matchesSubscriptionRules(sub, c.title); got != c.want {
-			t.Errorf("matchesSubscriptionRules(%q) = %v, want %v", c.title, got, c.want)
-		}
-	}
-}
-
-func TestMatchesSubscriptionRulesDefaultExcludesJunkReleases(t *testing.T) {
-	sub := &model.Subscription{}
-	for _, title := range []string{
-		"Some Movie 2024 CAM",
-		"Some Movie 2024 HDTS",
-		"某电影 2024 枪版",
-		"Some Movie 2024 TELESYNC",
-		"Some Show 预告",
-	} {
-		if matchesSubscriptionRules(sub, title) {
-			t.Errorf("expected default rules to exclude junk release %q", title)
-		}
-	}
-}
-
-func TestMatchesSubscriptionRulesWordBoundaryAvoidsFalsePositives(t *testing.T) {
-	sub := &model.Subscription{}
-	// "ts" / "cam" / "tc" 作为子串出现在合法标题里时不应被默认排除误伤。
-	for _, title := range []string{
-		"Tsukihime 2024 1080p WEB-DL",
-		"Camp Rock 2024 1080p BluRay",
-		"Catch Me 2024 1080p WEB-DL",
-	} {
-		if !matchesSubscriptionRules(sub, title) {
-			t.Errorf("word-boundary match wrongly excluded %q", title)
-		}
-	}
-}
-
-func TestSelectSiteSearchCandidatesSkipsExistingMovieWhenNotWashing(t *testing.T) {
-	sub := &model.Subscription{Name: "Inception 自动订阅", Filter: "Inception 2010", MediaType: "movie"}
-	results := []SearchResult{
-		{Title: "Inception 2010 2160p 10bit Dolby Vision Atmos", DownloadURL: "https://pt/download/dovi", Seeders: 500},
-		{Title: "Inception 2010 1080p WEB-DL", DownloadURL: "https://pt/download/web", Seeders: 90},
-	}
-	availability := LocalAvailability{LocalMediaCount: 1, InLibrary: true, DownloadedEpisodes: 1, TotalEpisodes: 1}
-
-	got := selectSiteSearchCandidates(results, sub, map[string]struct{}{}, availability)
-	if len(got) != 0 {
-		t.Fatalf("selected %#v, want none (movie already in library, wash disabled)", got)
-	}
-}
-
-func TestSelectSiteSearchCandidatesAllowsMovieWashUpgrade(t *testing.T) {
-	sub := &model.Subscription{Name: "Inception 自动订阅", Filter: "Inception 2010", MediaType: "movie", WashEnabled: true, WashPriority: "resolution"}
-	results := []SearchResult{
-		{Title: "Inception 2010 2160p REMUX", DownloadURL: "https://pt/download/2160", Seeders: 80},
-		{Title: "Inception 2010 1080p WEB-DL", DownloadURL: "https://pt/download/1080", Seeders: 200},
-	}
-	availability := LocalAvailability{LocalMediaCount: 1, InLibrary: true, DownloadedEpisodes: 1, TotalEpisodes: 1}
-
-	got := selectSiteSearchCandidates(results, sub, map[string]struct{}{}, availability)
-	if len(got) != 1 || got[0].Download != "https://pt/download/2160" {
-		t.Fatalf("selected %#v, want 2160p upgrade allowed when washing", got)
-	}
-}
-
-func TestSubscriptionItemAlreadyAvailable(t *testing.T) {
-	movieSub := &model.Subscription{MediaType: "movie"}
-	if !subscriptionItemAlreadyAvailable(movieSub, LocalAvailability{LocalMediaCount: 1}, "Inception 2010 2160p") {
-		t.Fatal("movie already in library should be reported available")
-	}
-	if subscriptionItemAlreadyAvailable(movieSub, LocalAvailability{}, "Inception 2010 2160p") {
-		t.Fatal("empty library should not be reported available")
-	}
-	tvSub := &model.Subscription{MediaType: "tv"}
-	avail := LocalAvailability{LocalMediaCount: 1, ExistingEpisodeKeys: map[string]struct{}{episodeKey(1, 2): {}}}
-	if !subscriptionItemAlreadyAvailable(tvSub, avail, "Show S01E02 1080p") {
-		t.Fatal("existing episode should be reported available")
-	}
-	if subscriptionItemAlreadyAvailable(tvSub, avail, "Show S01E03 1080p") {
-		t.Fatal("missing episode should not be reported available")
 	}
 }

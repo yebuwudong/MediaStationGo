@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import { Check, LoaderCircle, Search, Sparkles, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 import { imageURL } from '../api/client'
 import { mediaAPI, type ManualScrapeCandidate } from '../api/library'
 import type { Media } from '../types'
+import { EpisodeArtworkToggle } from './EpisodeArtworkToggle'
 
 interface ManualScrapeDialogProps {
   open: boolean
@@ -13,12 +14,12 @@ interface ManualScrapeDialogProps {
   defaultQuery?: string
   mediaType?: string
   scopeLabel?: string
+  episodeArtwork?: boolean
   onClose: () => void
   onApplied?: () => void
 }
 
 const providers = [
-  { value: 'all', label: '全部源' },
   { value: 'tmdb', label: 'TMDb' },
   { value: 'douban', label: '豆瓣' },
   { value: 'bangumi', label: 'Bangumi' },
@@ -33,11 +34,13 @@ export function ManualScrapeDialog({
   defaultQuery,
   mediaType,
   scopeLabel,
+  episodeArtwork,
   onClose,
   onApplied,
 }: ManualScrapeDialogProps) {
   const [query, setQuery] = useState('')
-  const [provider, setProvider] = useState('all')
+  const [selectedProviders, setSelectedProviders] = useState<string[]>([])
+  const [includeEpisodeArtwork, setIncludeEpisodeArtwork] = useState(false)
   const [searching, setSearching] = useState(false)
   const [applyingKey, setApplyingKey] = useState('')
   const [items, setItems] = useState<ManualScrapeCandidate[]>([])
@@ -50,10 +53,11 @@ export function ManualScrapeDialog({
   useEffect(() => {
     if (!open) return
     setQuery(defaultQuery || media?.title || '')
-    setProvider('all')
+    setSelectedProviders([])
+    setIncludeEpisodeArtwork(episodeArtwork ?? false)
     setItems([])
     setApplyingKey('')
-  }, [defaultQuery, media?.title, open])
+  }, [defaultQuery, episodeArtwork, media?.title, open])
 
   if (!open || !media) return null
 
@@ -67,7 +71,7 @@ export function ManualScrapeDialog({
     try {
       const results = await mediaAPI.manualScrapeSearch(media.id, {
         query: text,
-        provider,
+        provider: selectedProviders.length > 0 ? selectedProviders.join(',') : 'all',
         media_type: mediaType,
       })
       setItems(results)
@@ -84,11 +88,12 @@ export function ManualScrapeDialog({
     const key = candidateKey(item)
     setApplyingKey(key)
     try {
+      const options = { episode_images: includeEpisodeArtwork }
       if (targetIds.length > 1) {
-        const result = await mediaAPI.applyManualScrapeBatch(targetIds, item)
+        const result = await mediaAPI.applyManualScrapeBatch(targetIds, item, options)
         toast.success(`已应用到 ${result.applied} 个媒体`)
       } else {
-        await mediaAPI.applyManualScrape(media.id, item)
+        await mediaAPI.applyManualScrape(media.id, item, options)
         toast.success('已应用手动匹配')
       }
       onApplied?.()
@@ -117,15 +122,30 @@ export function ManualScrapeDialog({
         </div>
 
         <div className="flex flex-col gap-3 border-b border-sand-200 p-5 sm:flex-row">
-          <select
-            value={provider}
-            onChange={(event) => setProvider(event.target.value)}
-            className="h-11 rounded-xl border border-sand-200 bg-white px-3 text-sm font-semibold text-ink-600 outline-none focus:border-brand-300"
-          >
-            {providers.map((item) => (
-              <option key={item.value} value={item.value}>{item.label}</option>
-            ))}
-          </select>
+          <div className="flex min-w-0 flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setSelectedProviders([])}
+              className={providerButtonClass(selectedProviders.length === 0)}
+            >
+              {selectedProviders.length === 0 && <Check size={13} />}
+              全部源
+            </button>
+            {providers.map((item) => {
+              const active = selectedProviders.includes(item.value)
+              return (
+                <button
+                  key={item.value}
+                  type="button"
+                  onClick={() => toggleProvider(item.value, setSelectedProviders)}
+                  className={providerButtonClass(active)}
+                >
+                  {active && <Check size={13} />}
+                  {item.label}
+                </button>
+              )
+            })}
+          </div>
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-sand-500" />
             <input
@@ -140,6 +160,13 @@ export function ManualScrapeDialog({
             {searching ? <LoaderCircle size={16} className="animate-spin" /> : <Sparkles size={16} />}
             搜索
           </button>
+          {isEpisodeArtworkTarget(media, mediaType, targetIds.length) && (
+            <EpisodeArtworkToggle
+              checked={includeEpisodeArtwork}
+              onChange={setIncludeEpisodeArtwork}
+              title="关闭后仍写入每集简介、评分和时长，只跳过每集图片"
+            />
+          )}
         </div>
 
         <div className="flex-1 overflow-y-auto p-5">
@@ -188,6 +215,29 @@ export function ManualScrapeDialog({
 
 function candidateKey(item: ManualScrapeCandidate): string {
   return `${item.source}:${item.tmdb_id || item.bangumi_id || item.douban_id || item.thetvdb_id || item.title}:${item.media_type || ''}`
+}
+
+function toggleProvider(value: string, setSelectedProviders: Dispatch<SetStateAction<string[]>>) {
+  setSelectedProviders((current) => {
+    if (current.includes(value)) {
+      return current.filter((item) => item !== value)
+    }
+    return [...current, value]
+  })
+}
+
+function providerButtonClass(active: boolean): string {
+  return (
+    'inline-flex h-11 items-center gap-1.5 rounded-xl border px-3 text-xs font-bold transition ' +
+    (active
+      ? 'border-brand-300 bg-brand-50 text-brand-700'
+      : 'border-sand-200 bg-white text-sand-600 hover:border-brand-200 hover:text-brand-600')
+  )
+}
+
+function isEpisodeArtworkTarget(media: Media, mediaType?: string, targetCount = 1): boolean {
+  const type = (mediaType || '').toLowerCase()
+  return type === 'tv' || type === 'anime' || type === 'variety' || media.season_num > 0 || media.episode_num > 0 || targetCount > 1
 }
 
 function candidateIDText(item: ManualScrapeCandidate): string {

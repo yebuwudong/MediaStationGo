@@ -8,7 +8,7 @@ import {
   type AssistantSession,
   type SessionView,
 } from '../api/assistant'
-import { confirmAction } from '../components/ConfirmDialog'
+import { confirmAction } from '../components/confirmAction'
 
 // AssistantChatPage is the multi-turn chat surface backed by the Go
 // AssistantService. It complements the older AIAssistantPage which is

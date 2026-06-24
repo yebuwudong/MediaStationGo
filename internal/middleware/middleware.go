@@ -21,6 +21,11 @@ const (
 	CtxUserTier     = "ctx_user_tier"
 	CtxTokenPurpose = "ctx_token_purpose"
 	CtxTokenMediaID = "ctx_token_media_id"
+
+	// AccessTokenCookieName carries the web access token for browser-managed
+	// resource requests such as <img>, which cannot attach Authorization.
+	AccessTokenCookieName = "msgo_access_token"
+	AccessTokenCookiePath = "/api"
 )
 
 // RequestLogger logs one structured line per request.
@@ -199,6 +204,7 @@ func AuthRequired(secret string) gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 40304, "message": "token scope denied"})
 			return
 		}
+		syncAccessTokenCookie(c, raw, claims)
 		c.Set(CtxUserID, claims.UserID)
 		c.Set(CtxUserRole, claims.Role)
 		c.Set(CtxUserTier, claims.Tier)
@@ -206,6 +212,48 @@ func AuthRequired(secret string) gin.HandlerFunc {
 		c.Set(CtxTokenMediaID, claims.MediaID)
 		c.Next()
 	}
+}
+
+func syncAccessTokenCookie(c *gin.Context, raw string, claims *Claims) {
+	if c == nil || claims == nil || strings.TrimSpace(raw) == "" || strings.TrimSpace(claims.Purpose) != "" {
+		return
+	}
+	if existing, err := c.Cookie(AccessTokenCookieName); err == nil && existing == raw {
+		return
+	}
+	maxAge := int(time.Hour.Seconds())
+	expires := time.Now().Add(time.Hour)
+	if claims.ExpiresAt != nil {
+		expires = claims.ExpiresAt.Time
+		ttl := time.Until(expires)
+		if ttl <= 0 {
+			return
+		}
+		maxAge = int(ttl.Seconds())
+		if maxAge < 1 {
+			maxAge = 1
+		}
+	}
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     AccessTokenCookieName,
+		Value:    raw,
+		Path:     AccessTokenCookiePath,
+		MaxAge:   maxAge,
+		Expires:  expires,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   requestIsHTTPS(c),
+	})
+}
+
+func requestIsHTTPS(c *gin.Context) bool {
+	if c == nil || c.Request == nil {
+		return false
+	}
+	if c.Request.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https")
 }
 
 func scopedTokenAllowedForRequest(c *gin.Context, claims *Claims) bool {
@@ -319,6 +367,9 @@ func extractToken(c *gin.Context) string {
 		if value := strings.TrimSpace(c.Query(key)); value != "" {
 			return value
 		}
+	}
+	if cookie, err := c.Cookie(AccessTokenCookieName); err == nil {
+		return strings.TrimSpace(cookie)
 	}
 	return ""
 }

@@ -16,6 +16,7 @@ export interface DiscoverItem extends Partial<Media> {
   year?: number
   rating?: number
   subscribe_keyword?: string
+  subscribe_aliases?: string[]
 }
 
 export interface DiscoverSection {

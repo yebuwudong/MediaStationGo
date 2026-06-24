@@ -21,53 +21,93 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
-func TestScanCloudLibraryImportsRecursivePlayableMedia(t *testing.T) {
-	empty := false
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/file/sort" {
-			t.Fatalf("unexpected path %s", r.URL.Path)
+type openListTestEntry struct {
+	Name  string
+	Size  int64
+	IsDir bool
+}
+
+func newOpenListAPIServer(t *testing.T, list func(path string, page, perPage int) ([]openListTestEntry, int)) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/fs/list" {
+			t.Fatalf("unexpected openlist api request %s", r.URL.Path)
+		}
+		var in struct {
+			Path    string `json:"path"`
+			Page    int    `json:"page"`
+			PerPage int    `json:"per_page"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			t.Fatalf("decode openlist list request: %v", err)
+		}
+		if in.Path == "" {
+			in.Path = "/"
+		}
+		if in.Page <= 0 {
+			in.Page = 1
+		}
+		if in.PerPage <= 0 {
+			in.PerPage = 500
+		}
+		entries, total := list(in.Path, in.Page, in.PerPage)
+		content := make([]map[string]any, 0, len(entries))
+		for _, entry := range entries {
+			content = append(content, map[string]any{
+				"name":   entry.Name,
+				"size":   entry.Size,
+				"is_dir": entry.IsDir,
+			})
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if empty {
-			_, _ = w.Write([]byte(`{"status":200,"code":0,"data":{"list":[]}}`))
-			return
-		}
-		switch r.URL.Query().Get("pdir_fid") {
-		case "0":
-			_, _ = w.Write([]byte(`{"status":200,"code":0,"data":{"list":[
-				{"fid":"d1","file_name":"Movies","dir":true,"size":0},
-				{"fid":"f1","file_name":"Root.Movie.2024.mkv","dir":false,"size":123}
-			]}}`))
-		case "d1":
-			_, _ = w.Write([]byte(`{"status":200,"code":0,"data":{"list":[
-				{"fid":"f2","file_name":"Nested.Show.S01E02.mp4","dir":false,"size":456}
-			]}}`))
-		default:
-			t.Fatalf("unexpected pdir_fid %q", r.URL.Query().Get("pdir_fid"))
-		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"code":    200,
+			"message": "success",
+			"data": map[string]any{
+				"content": content,
+				"total":   total,
+			},
+		})
 	}))
+}
+
+func TestScanCloudLibraryImportsRecursivePlayableMedia(t *testing.T) {
+	empty := false
+	upstream := newOpenListAPIServer(t, func(path string, page, perPage int) ([]openListTestEntry, int) {
+		if empty {
+			return nil, 0
+		}
+		switch path {
+		case "/":
+			return []openListTestEntry{
+				{Name: "Movies", IsDir: true},
+				{Name: "Root.Movie.2024.mkv", Size: 123},
+			}, 2
+		case "/Movies":
+			return []openListTestEntry{
+				{Name: "Nested.Show.S01E02.mp4", Size: 456},
+			}, 1
+		default:
+			t.Fatalf("unexpected openlist path %q", path)
+			return nil, 0
+		}
+	})
 	defer upstream.Close()
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{})
 	repos := repository.New(db)
 	log := zap.NewNop()
 	storage := NewStorageConfigService(log, repos, NewCryptoService("", log))
 	if _, err := storage.Save(t.Context(), StorageInput{
-		Type: "quark",
+		Type: "openlist",
 		Config: map[string]any{
-			"cookie": "kps=test",
-			"base":   upstream.URL,
+			"server": upstream.URL,
+			"token":  "openlist-token",
 		},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	lib := model.Library{Name: "夸克网盘", Path: "cloud://quark/0", Type: "tv", Enabled: true}
+	lib := model.Library{Name: "OpenList", Path: "cloud://openlist", Type: "tv", Enabled: true}
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
 		t.Fatal(err)
 	}
@@ -88,13 +128,13 @@ func TestScanCloudLibraryImportsRecursivePlayableMedia(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("media rows = %d, want 2: %#v", len(rows), rows)
 	}
-	if rows[0].Path != "cloud://quark/Movies/Nested.Show.S01E02.mp4" || !strings.Contains(rows[0].STRMURL, "ref=f2") {
+	if rows[0].Path != "cloud://openlist/Movies/Nested.Show.S01E02.mp4" || !strings.Contains(rows[0].STRMURL, "ref=%2FMovies%2FNested.Show.S01E02.mp4") {
 		t.Fatalf("nested media path/strm wrong: path=%q strm=%q", rows[0].Path, rows[0].STRMURL)
 	}
 	if rows[0].SeasonNum != 1 || rows[0].EpisodeNum != 2 {
 		t.Fatalf("nested episode metadata wrong: %#v", rows[0])
 	}
-	if rows[1].Path != "cloud://quark/Root.Movie.2024.mkv" || rows[1].STRMURL != "/api/cloud/play/quark?ref=f1" {
+	if rows[1].Path != "cloud://openlist/Root.Movie.2024.mkv" || rows[1].STRMURL != "/api/cloud/play/openlist?ref=%2FRoot.Movie.2024.mkv" {
 		t.Fatalf("root media path/strm wrong: path=%q strm=%q", rows[0].Path, rows[0].STRMURL)
 	}
 
@@ -126,24 +166,163 @@ func TestScanCloudLibraryImportsRecursivePlayableMedia(t *testing.T) {
 	}
 }
 
+func TestScanRootCloudLibraryCreatesAutoCategoryLibraries(t *testing.T) {
+	empty := false
+	upstream := newOpenListAPIServer(t, func(path string, page, perPage int) ([]openListTestEntry, int) {
+		if empty {
+			return nil, 0
+		}
+		switch path {
+		case "/":
+			return []openListTestEntry{
+				{Name: "电视剧", IsDir: true},
+				{Name: "电影", IsDir: true},
+				{Name: "国漫", IsDir: true},
+			}, 3
+		case "/电视剧":
+			return []openListTestEntry{{Name: "欧美剧", IsDir: true}}, 1
+		case "/电视剧/欧美剧":
+			return []openListTestEntry{{Name: "The Show", IsDir: true}}, 1
+		case "/电视剧/欧美剧/The Show":
+			return []openListTestEntry{{Name: "The.Show.S01E01.mkv", Size: 101}}, 1
+		case "/电影":
+			return []openListTestEntry{{Name: "华语电影", IsDir: true}}, 1
+		case "/电影/华语电影":
+			return []openListTestEntry{{Name: "Movie.2024.mkv", Size: 202}}, 1
+		case "/国漫":
+			return []openListTestEntry{{Name: "剑来", IsDir: true}}, 1
+		case "/国漫/剑来":
+			return []openListTestEntry{{Name: "剑来.S01E01.mkv", Size: 303}}, 1
+		default:
+			t.Fatalf("unexpected openlist path %q", path)
+			return nil, 0
+		}
+	})
+	defer upstream.Close()
+
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{})
+	repos := repository.New(db)
+	log := zap.NewNop()
+	storage := NewStorageConfigService(log, repos, NewCryptoService("", log))
+	if _, err := storage.Save(t.Context(), StorageInput{
+		Type: "openlist",
+		Config: map[string]any{
+			"server": upstream.URL,
+			"token":  "openlist-token",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	root := model.Library{Name: "OpenList", Path: "cloud://openlist", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &root); err != nil {
+		t.Fatal(err)
+	}
+	scanner := NewScannerService(&config.Config{}, log, repos, NewHub(log), nil, nil)
+	scanner.SetStorageConfig(storage)
+
+	res, err := scanner.ScanLibrary(t.Context(), root.ID)
+	if err != nil {
+		t.Fatalf("scan root cloud: %v", err)
+	}
+	if res.Visited != 3 || res.Added != 3 {
+		t.Fatalf("scan result = %#v, want visited=3 added=3", res)
+	}
+
+	libs, err := repos.Library.List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byDisplayDir := map[string]model.Library{}
+	for _, lib := range libs {
+		if !CloudLibraryAutoCategory(lib) {
+			continue
+		}
+		info, ok := ParseCloudLibraryMount(lib.Path)
+		if !ok {
+			t.Fatalf("auto category path did not parse: %q", lib.Path)
+		}
+		byDisplayDir[info.DisplayDir] = lib
+	}
+	wantTypes := map[string]string{
+		"电视剧/欧美剧": "tv",
+		"电影/华语电影": "movie",
+		"动漫/国漫":   "anime",
+	}
+	for dir, wantType := range wantTypes {
+		lib, ok := byDisplayDir[dir]
+		if !ok {
+			t.Fatalf("missing auto category library %q; got %#v", dir, byDisplayDir)
+		}
+		if lib.Type != wantType {
+			t.Fatalf("auto category %s type = %s, want %s", dir, lib.Type, wantType)
+		}
+	}
+
+	var rows []model.Media
+	if err := repos.DB.Order("path").Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("media rows = %d, want 3", len(rows))
+	}
+	wantLibraries := map[string]string{
+		"cloud://openlist/电视剧/欧美剧/The Show/The.Show.S01E01.mkv": byDisplayDir["电视剧/欧美剧"].ID,
+		"cloud://openlist/电影/华语电影/Movie.2024.mkv":               byDisplayDir["电影/华语电影"].ID,
+		"cloud://openlist/国漫/剑来/剑来.S01E01.mkv":                  byDisplayDir["动漫/国漫"].ID,
+	}
+	for _, row := range rows {
+		if row.LibraryID != wantLibraries[row.Path] {
+			t.Fatalf("%s library_id = %s, want %s", row.Path, row.LibraryID, wantLibraries[row.Path])
+		}
+	}
+
+	res, err = scanner.ScanLibrary(t.Context(), root.ID)
+	if err != nil {
+		t.Fatalf("rescan root cloud: %v", err)
+	}
+	if res.Added != 0 || res.Updated != 0 || res.Skipped != 3 {
+		t.Fatalf("rescan should skip unchanged auto-category rows, got %#v", res)
+	}
+	libs, err = repos.Library.List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	autoCount := 0
+	for _, lib := range libs {
+		if CloudLibraryAutoCategory(lib) {
+			autoCount++
+		}
+	}
+	if autoCount != 3 {
+		t.Fatalf("auto category library count after rescan = %d, want 3", autoCount)
+	}
+
+	empty = true
+	res, err = scanner.ScanLibrary(t.Context(), root.ID)
+	if err != nil {
+		t.Fatalf("empty rescan root cloud: %v", err)
+	}
+	if res.Removed != 3 {
+		t.Fatalf("removed = %d, want 3", res.Removed)
+	}
+	if got := countMedia(t, repos); got != 0 {
+		t.Fatalf("media count after auto-category prune = %d, want 0", got)
+	}
+}
+
 func TestScanCloudLibraryListsChildDirectoriesConcurrently(t *testing.T) {
 	var active int32
 	var maxActive int32
 	var releaseOnce sync.Once
 	release := make(chan struct{})
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/file/sort" {
-			t.Errorf("unexpected path %s", r.URL.Path)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Query().Get("pdir_fid") {
-		case "0":
-			_, _ = w.Write([]byte(`{"status":200,"code":0,"data":{"list":[
-				{"fid":"d1","file_name":"A","dir":true,"size":0},
-				{"fid":"d2","file_name":"B","dir":true,"size":0}
-			]}}`))
-		case "d1", "d2":
+	upstream := newOpenListAPIServer(t, func(path string, page, perPage int) ([]openListTestEntry, int) {
+		switch path {
+		case "/":
+			return []openListTestEntry{
+				{Name: "A", IsDir: true},
+				{Name: "B", IsDir: true},
+			}, 2
+		case "/A", "/B":
 			cur := atomic.AddInt32(&active, 1)
 			defer atomic.AddInt32(&active, -1)
 			for {
@@ -157,18 +336,17 @@ func TestScanCloudLibraryListsChildDirectoriesConcurrently(t *testing.T) {
 			}
 			select {
 			case <-release:
-			case <-r.Context().Done():
-				return
 			case <-time.After(1500 * time.Millisecond):
 				t.Errorf("child directory requests were not concurrent")
-				return
+				return nil, 0
 			}
-			id := r.URL.Query().Get("pdir_fid")
-			_, _ = fmt.Fprintf(w, `{"status":200,"code":0,"data":{"list":[{"fid":"f-%s","file_name":"Movie.%s.mkv","dir":false,"size":123}]}}`, id, id)
+			id := strings.TrimPrefix(path, "/")
+			return []openListTestEntry{{Name: fmt.Sprintf("Movie.%s.mkv", id), Size: 123}}, 1
 		default:
-			t.Errorf("unexpected pdir_fid %q", r.URL.Query().Get("pdir_fid"))
+			t.Errorf("unexpected openlist path %q", path)
+			return nil, 0
 		}
-	}))
+	})
 	defer upstream.Close()
 
 	db, err := gorm.Open(sqlite.Open("file:cloud_scan_concurrent?mode=memory&cache=shared"), &gorm.Config{})
@@ -182,15 +360,15 @@ func TestScanCloudLibraryListsChildDirectoriesConcurrently(t *testing.T) {
 	log := zap.NewNop()
 	storage := NewStorageConfigService(log, repos, NewCryptoService("", log))
 	if _, err := storage.Save(t.Context(), StorageInput{
-		Type: "quark",
+		Type: "openlist",
 		Config: map[string]any{
-			"cookie": "kps=test",
-			"base":   upstream.URL,
+			"server": upstream.URL,
+			"token":  "openlist-token",
 		},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	lib := model.Library{Name: "夸克网盘", Path: "cloud://quark/0", Type: "movie", Enabled: true}
+	lib := model.Library{Name: "OpenList", Path: "cloud://openlist", Type: "movie", Enabled: true}
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
 		t.Fatal(err)
 	}
@@ -218,8 +396,8 @@ func TestCloudLibraryPathParsing(t *testing.T) {
 	if !ok || typ != "cloud115" || dir != "abc 123" {
 		t.Fatalf("parse path got typ=%q dir=%q ok=%v", typ, dir, ok)
 	}
-	typ, dir, ok = parseCloudLibraryPath("cloud://quark?dir=0")
-	if !ok || typ != "quark" || dir != "" {
+	typ, dir, ok = parseCloudLibraryPath("cloud://openlist/Movies?dir=%2FMovies")
+	if !ok || typ != "openlist" || dir != "Movies" {
 		t.Fatalf("parse query got typ=%q dir=%q ok=%v", typ, dir, ok)
 	}
 	if ref := cloudEntryRef("cloud115", "fid", "pick"); ref != "pick" {
@@ -335,13 +513,7 @@ func TestScan115CloudLibraryKeepsDisplayHierarchyAndSeasonCounts(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{})
 	repos := repository.New(db)
 	log := zap.NewNop()
 	storage := NewStorageConfigService(log, repos, NewCryptoService("", log))
@@ -424,185 +596,6 @@ func TestCloudMetadataNeedsRefreshWhenPathHintConflicts(t *testing.T) {
 	}
 }
 
-func TestScanCloudLibraryReadsRemoteSTRMTarget(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case "PROPFIND":
-			if r.URL.Path != "/dav/Links" {
-				t.Fatalf("unexpected propfind path %s", r.URL.Path)
-			}
-			w.Header().Set("Content-Type", "application/xml")
-			w.WriteHeader(http.StatusMultiStatus)
-			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?>
-<d:multistatus xmlns:d="DAV:">
-  <d:response>
-    <d:href>/dav/Links/</d:href>
-    <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat>
-  </d:response>
-  <d:response>
-    <d:href>/dav/Links/Movie.strm</d:href>
-    <d:propstat><d:prop><d:displayname>Movie.strm</d:displayname><d:getcontentlength>32</d:getcontentlength><d:resourcetype/></d:prop></d:propstat>
-  </d:response>
-</d:multistatus>`))
-		case http.MethodGet:
-			if r.URL.Path != "/dav/Links/Movie.strm" {
-				t.Fatalf("unexpected get path %s", r.URL.Path)
-			}
-			_, _ = w.Write([]byte("https://cdn.example.com/Movie.mkv\n"))
-		default:
-			t.Fatalf("unexpected method %s", r.Method)
-		}
-	}))
-	defer upstream.Close()
-
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{}); err != nil {
-		t.Fatal(err)
-	}
-	repos := repository.New(db)
-	log := zap.NewNop()
-	storage := NewStorageConfigService(log, repos, NewCryptoService("", log))
-	if _, err := storage.Save(t.Context(), StorageInput{
-		Type: "openlist",
-		Config: map[string]any{
-			"url": upstream.URL,
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	lib := model.Library{Name: "OpenList · Links", Path: "cloud://openlist/Links", Type: "movie", Enabled: true}
-	if err := repos.Library.Create(t.Context(), &lib); err != nil {
-		t.Fatal(err)
-	}
-	scanner := NewScannerService(&config.Config{}, log, repos, NewHub(log), nil, nil)
-	scanner.SetStorageConfig(storage)
-
-	res, err := scanner.ScanLibrary(t.Context(), lib.ID)
-	if err != nil {
-		t.Fatalf("scan cloud: %v", err)
-	}
-	if res.Added != 1 {
-		t.Fatalf("scan result = %#v, want added=1", res)
-	}
-	var media model.Media
-	if err := repos.DB.First(&media).Error; err != nil {
-		t.Fatal(err)
-	}
-	if media.Path != "cloud://openlist/Links/Movie.strm" {
-		t.Fatalf("path = %q", media.Path)
-	}
-	if media.STRMURL != "https://cdn.example.com/Movie.mkv" {
-		t.Fatalf("strm target = %q", media.STRMURL)
-	}
-}
-
-func TestScanCloudLibraryReadsRemoteNFOAndArtwork(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case "PROPFIND":
-			w.Header().Set("Content-Type", "application/xml")
-			w.WriteHeader(http.StatusMultiStatus)
-			switch r.URL.Path {
-			case "/dav/Anime/JianLai":
-				_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?>
-<d:multistatus xmlns:d="DAV:">
-  <d:response><d:href>/dav/Anime/JianLai/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response>
-  <d:response><d:href>/dav/Anime/JianLai/tvshow.nfo</d:href><d:propstat><d:prop><d:displayname>tvshow.nfo</d:displayname><d:getcontentlength>64</d:getcontentlength><d:resourcetype/></d:prop></d:propstat></d:response>
-  <d:response><d:href>/dav/Anime/JianLai/poster.jpg</d:href><d:propstat><d:prop><d:displayname>poster.jpg</d:displayname><d:getcontentlength>1024</d:getcontentlength><d:resourcetype/></d:prop></d:propstat></d:response>
-  <d:response><d:href>/dav/Anime/JianLai/Season1/</d:href><d:propstat><d:prop><d:displayname>Season1</d:displayname><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response>
-</d:multistatus>`))
-			case "/dav/Anime/JianLai/Season1":
-				_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?>
-<d:multistatus xmlns:d="DAV:">
-  <d:response><d:href>/dav/Anime/JianLai/Season1/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response>
-  <d:response><d:href>/dav/Anime/JianLai/Season1/JianLai.S01E01.mkv</d:href><d:propstat><d:prop><d:displayname>JianLai.S01E01.mkv</d:displayname><d:getcontentlength>2048</d:getcontentlength><d:resourcetype/></d:prop></d:propstat></d:response>
-  <d:response><d:href>/dav/Anime/JianLai/Season1/JianLai.S01E01.nfo</d:href><d:propstat><d:prop><d:displayname>JianLai.S01E01.nfo</d:displayname><d:getcontentlength>128</d:getcontentlength><d:resourcetype/></d:prop></d:propstat></d:response>
-</d:multistatus>`))
-			default:
-				t.Fatalf("unexpected propfind path %s", r.URL.Path)
-			}
-		case http.MethodGet:
-			switch r.URL.Path {
-			case "/dav/Anime/JianLai/tvshow.nfo":
-				_, _ = w.Write([]byte(`<tvshow><title>剑来</title><year>2024</year><plot>天地有剑气</plot></tvshow>`))
-			case "/dav/Anime/JianLai/Season1/JianLai.S01E01.nfo":
-				_, _ = w.Write([]byte(`<episodedetails><showtitle>剑来</showtitle><title>第一集</title><season>1</season><episode>1</episode></episodedetails>`))
-			case "/dav/Anime/JianLai/poster.jpg":
-				w.Header().Set("Content-Type", "image/jpeg")
-				_, _ = w.Write([]byte("cloud-poster-bytes"))
-			default:
-				t.Fatalf("unexpected get path %s", r.URL.Path)
-			}
-		default:
-			t.Fatalf("unexpected method %s", r.Method)
-		}
-	}))
-	defer upstream.Close()
-
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{}); err != nil {
-		t.Fatal(err)
-	}
-	repos := repository.New(db)
-	log := zap.NewNop()
-	storage := NewStorageConfigService(log, repos, NewCryptoService("", log))
-	if _, err := storage.Save(t.Context(), StorageInput{
-		Type: "openlist",
-		Config: map[string]any{
-			"url": upstream.URL,
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	lib := model.Library{Name: "OpenList · 国漫 · 剑来", Path: "cloud://openlist/Anime/JianLai", Type: "anime", Enabled: true}
-	if err := repos.Library.Create(t.Context(), &lib); err != nil {
-		t.Fatal(err)
-	}
-	scanner := NewScannerService(&config.Config{}, log, repos, NewHub(log), nil, nil)
-	scanner.SetStorageConfig(storage)
-	imageProxy := NewImageProxy(&config.Config{Cache: config.CacheConfig{CacheDir: t.TempDir()}}, log)
-	scanner.SetImageProxy(imageProxy)
-
-	res, err := scanner.ScanLibrary(t.Context(), lib.ID)
-	if err != nil {
-		t.Fatalf("scan cloud: %v", err)
-	}
-	if res.Added != 1 || res.LocalMetadata != 1 {
-		t.Fatalf("scan result = %#v, want added=1 local_metadata=1", res)
-	}
-	var media model.Media
-	if err := repos.DB.First(&media).Error; err != nil {
-		t.Fatal(err)
-	}
-	// 单集名(episode <title>「第一集」)不得写入 OriginalName(整剧原名/分组键)。
-	// tvshow.nfo 未提供 originaltitle, 故 OriginalName 应为空。
-	if media.Title != "剑来" || media.OriginalName != "" || media.Year != 2024 {
-		t.Fatalf("metadata not applied: %#v", media)
-	}
-	if media.SeasonNum != 1 || media.EpisodeNum != 1 {
-		t.Fatalf("episode numbers = %d/%d", media.SeasonNum, media.EpisodeNum)
-	}
-	if media.PosterURL != "/api/cloud/play/openlist?ref=%2FAnime%2FJianLai%2Fposter.jpg" {
-		t.Fatalf("poster url = %q", media.PosterURL)
-	}
-	rec := httptest.NewRecorder()
-	if !imageProxy.ServeCloudCached(rec, httptest.NewRequest(http.MethodGet, media.PosterURL, nil), "openlist:/Anime/JianLai/poster.jpg") {
-		t.Fatal("cloud poster should be cached locally during scan before media is exposed")
-	}
-	if got := rec.Body.String(); got != "cloud-poster-bytes" {
-		t.Fatalf("cached poster body = %q", got)
-	}
-	if media.ScrapeStatus != "matched" {
-		t.Fatalf("scrape status = %q", media.ScrapeStatus)
-	}
-}
-
 func TestScanOpenListCloudLibraryUsesAPIPaginationBeyondFirstPage(t *testing.T) {
 	const totalFiles = 125
 	requestedPages := map[int]bool{}
@@ -656,13 +649,7 @@ func TestScanOpenListCloudLibraryUsesAPIPaginationBeyondFirstPage(t *testing.T) 
 	}))
 	defer upstream.Close()
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{})
 	repos := repository.New(db)
 	log := zap.NewNop()
 	storage := NewStorageConfigService(log, repos, NewCryptoService("", log))
@@ -699,54 +686,44 @@ func TestScanOpenListCloudLibraryUsesAPIPaginationBeyondFirstPage(t *testing.T) 
 
 func TestScanCloudLibraryQueuesMissingExistingTrackMetadataBeforeNewFiles(t *testing.T) {
 	const newFiles = maxCloudMediaProbeQueuePerScan + 5
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/file/sort" || r.URL.Query().Get("pdir_fid") != "0" {
-			t.Fatalf("unexpected cloud list request %s?%s", r.URL.Path, r.URL.RawQuery)
+	upstream := newOpenListAPIServer(t, func(path string, page, perPage int) ([]openListTestEntry, int) {
+		if path != "/" {
+			t.Fatalf("unexpected openlist path %q", path)
 		}
-		var b strings.Builder
-		b.WriteString(`{"status":200,"code":0,"data":{"list":[`)
+		entries := make([]openListTestEntry, 0, newFiles+1)
 		for i := 0; i < newFiles; i++ {
-			if i > 0 {
-				b.WriteByte(',')
-			}
-			_, _ = fmt.Fprintf(&b, `{"fid":"new-%02d","file_name":"New.Movie.%02d.mkv","dir":false,"size":%d}`, i, i, 1000+i)
+			entries = append(entries, openListTestEntry{Name: fmt.Sprintf("New.Movie.%02d.mkv", i), Size: int64(1000 + i)})
 		}
-		_, _ = fmt.Fprintf(&b, `,{"fid":"existing","file_name":"Existing.Show.S01E01.mkv","dir":false,"size":2048}]}}`)
-		_, _ = w.Write([]byte(b.String()))
-	}))
+		entries = append(entries, openListTestEntry{Name: "Existing.Show.S01E01.mkv", Size: 2048})
+		return entries, len(entries)
+	})
 	defer upstream.Close()
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{}, &model.StorageConfig{})
 	repos := repository.New(db)
 	log := zap.NewNop()
 	storage := NewStorageConfigService(log, repos, NewCryptoService("", log))
 	if _, err := storage.Save(t.Context(), StorageInput{
-		Type: "quark",
+		Type: "openlist",
 		Config: map[string]any{
-			"cookie": "kps=test",
-			"base":   upstream.URL,
+			"server": upstream.URL,
+			"token":  "openlist-token",
 		},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	lib := model.Library{Name: "夸克网盘", Path: "cloud://quark/0", Type: "tv", Enabled: true}
+	lib := model.Library{Name: "OpenList", Path: "cloud://openlist", Type: "tv", Enabled: true}
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
 		t.Fatal(err)
 	}
-	existingPath := "cloud://quark/Existing.Show.S01E01.mkv"
+	existingPath := "cloud://openlist/Existing.Show.S01E01.mkv"
 	if err := repos.DB.Create(&model.Media{
 		LibraryID:  lib.ID,
 		Title:      "Existing Show",
 		Path:       existingPath,
 		SizeBytes:  2048,
 		Container:  "mkv",
-		STRMURL:    "/api/cloud/play/quark?ref=existing",
+		STRMURL:    "/api/cloud/play/openlist?ref=%2FExisting.Show.S01E01.mkv",
 		SeasonNum:  1,
 		EpisodeNum: 1,
 	}).Error; err != nil {
@@ -778,15 +755,23 @@ func TestScanCloudLibraryQueuesMissingExistingTrackMetadataBeforeNewFiles(t *tes
 	}
 }
 
-func TestParseCloudImagePlaybackURL(t *testing.T) {
-	typ, ref, ok := parseCloudImagePlaybackURL("http://nas.local/api/cloud/play/openlist?ref=%2FAnime%2FJianLai%2Fposter.jpg")
+func TestParseCloudArtworkURL(t *testing.T) {
+	typ, ref, ok := ParseCloudArtworkURL("http://nas.local/api/cloud/play/openlist?ref=%2FAnime%2FJianLai%2Fposter.jpg")
 	if !ok || typ != "openlist" || ref != "/Anime/JianLai/poster.jpg" {
 		t.Fatalf("parse cloud image url = typ=%q ref=%q ok=%v", typ, ref, ok)
 	}
-	if _, _, ok := parseCloudImagePlaybackURL("/api/cloud/play/openlist?ref=%2FAnime%2FJianLai%2Fmovie.mkv"); ok {
+	typ, ref, ok = ParseCloudArtworkURL("/api/img/cloud/openlist?ref=%2FAnime%2FJianLai%2Fposter.jpg")
+	if !ok || typ != "openlist" || ref != "/Anime/JianLai/poster.jpg" {
+		t.Fatalf("parse cached cloud artwork url = typ=%q ref=%q ok=%v", typ, ref, ok)
+	}
+	typ, ref, ok = ParseCloudArtworkURL("/api/img/cloud/openlist?ref=%2FMovies%2FMovie.tbn")
+	if !ok || typ != "openlist" || ref != "/Movies/Movie.tbn" {
+		t.Fatalf("parse tbn cloud artwork url = typ=%q ref=%q ok=%v", typ, ref, ok)
+	}
+	if _, _, ok := ParseCloudArtworkURL("/api/cloud/play/openlist?ref=%2FAnime%2FJianLai%2Fmovie.mkv"); ok {
 		t.Fatal("video cloud url should not be treated as artwork")
 	}
-	if _, _, ok := parseCloudImagePlaybackURL("https://image.tmdb.org/t/p/w500/poster.jpg"); ok {
+	if _, _, ok := ParseCloudArtworkURL("https://image.tmdb.org/t/p/w500/poster.jpg"); ok {
 		t.Fatal("remote HTTP poster should not be treated as cloud artwork")
 	}
 }

@@ -22,6 +22,17 @@ type telegramCommandDefinition struct {
 
 func (s *TelegramBotService) telegramCommandDefinitions(ctx context.Context, channel *model.NotifyChannel, msg *TelegramMessage) []telegramCommandDefinition {
 	adminOnly := "此命令仅管理员可用。"
+	defs := s.telegramCoreCommandDefinitions(ctx, channel, msg)
+	defs = append(defs, s.telegramSelfServiceCommandDefinitions(ctx, channel, msg)...)
+	defs = append(defs, s.telegramAdminCoreCommandDefinitions(ctx, msg, adminOnly)...)
+	defs = append(defs, s.telegramMgoUserCommandDefinitions(ctx, adminOnly)...)
+	defs = append(defs, s.telegramMgoAuditCommandDefinitions(ctx, adminOnly)...)
+	defs = append(defs, s.telegramMgoMaintenanceCommandDefinitions(ctx, channel, adminOnly)...)
+	defs = append(defs, s.telegramMgoPolicyCommandDefinitions(ctx, channel, adminOnly)...)
+	return defs
+}
+
+func (s *TelegramBotService) telegramCoreCommandDefinitions(ctx context.Context, channel *model.NotifyChannel, msg *TelegramMessage) []telegramCommandDefinition {
 	return []telegramCommandDefinition{
 		{Aliases: []string{"/start"}, GroupAllowed: true, Handle: func(args []string) (telegramCommandReply, error) {
 			if len(args) == 0 {
@@ -39,6 +50,11 @@ func (s *TelegramBotService) telegramCommandDefinitions(ctx context.Context, cha
 		{Aliases: []string{"/help"}, GroupAllowed: true, Handle: func(args []string) (telegramCommandReply, error) {
 			return telegramCommandReply{Text: s.cmdHelp(ctx, msg)}, nil
 		}},
+	}
+}
+
+func (s *TelegramBotService) telegramSelfServiceCommandDefinitions(ctx context.Context, channel *model.NotifyChannel, msg *TelegramMessage) []telegramCommandDefinition {
+	return []telegramCommandDefinition{
 		{Aliases: []string{"/hideadult", "/hide_adult", "/adult"}, GroupAllowed: true, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdHideAdult(ctx, msg, args), nil }},
 		{Aliases: []string{"/account", "/me", "/myinfo"}, GroupAllowed: true, Handle: func(args []string) (telegramCommandReply, error) { return s.replyAccount(ctx, msg), nil }},
 		{Aliases: []string{"/count"}, GroupAllowed: true, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdStats(ctx) }},
@@ -53,7 +69,11 @@ func (s *TelegramBotService) telegramCommandDefinitions(ctx context.Context, cha
 		}},
 		{Aliases: []string{"/redeem_renew"}, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdRedeemRenew(ctx, msg, args), nil }},
 		{Aliases: []string{"/register", "/reg", "/signup"}, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdRegister(ctx, channel, msg, args), nil }},
+	}
+}
 
+func (s *TelegramBotService) telegramAdminCoreCommandDefinitions(ctx context.Context, msg *TelegramMessage, adminOnly string) []telegramCommandDefinition {
+	return []telegramCommandDefinition{
 		{Aliases: []string{"/registration", "/reg_switch", "/openreg"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdRegistrationToggle(ctx, args), nil }},
 		{Aliases: []string{"/capacity"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.replyCapacity(ctx), nil }},
 		{Aliases: []string{"/users", "/kk"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.replyUserList(ctx), nil }},
@@ -75,11 +95,21 @@ func (s *TelegramBotService) telegramCommandDefinitions(ctx context.Context, cha
 		{Aliases: []string{"/downloads"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdDownloads(ctx) }},
 		{Aliases: []string{"/stats"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdStats(ctx) }},
 		{Aliases: []string{"/renew"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdUserRenew(ctx, args), nil }},
+	}
+}
+
+func (s *TelegramBotService) telegramMgoUserCommandDefinitions(ctx context.Context, adminOnly string) []telegramCommandDefinition {
+	return []telegramCommandDefinition{
 		{Aliases: []string{"/ucr"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdMgoCreateUser(ctx, args), nil }},
 		{Aliases: []string{"/uinfo"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdMgoUserInfo(ctx, args), nil }},
 		{Aliases: []string{"/rmemby", "/urm", "/only_rm_emby"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdMgoDeleteUser(ctx, args), nil }},
 		{Aliases: []string{"/only_rm_record"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdMgoOnlyRemoveRecord(ctx, args), nil }},
 		{Aliases: []string{"/userip"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdMgoUserIP(ctx, args), nil }},
+	}
+}
+
+func (s *TelegramBotService) telegramMgoAuditCommandDefinitions(ctx context.Context, adminOnly string) []telegramCommandDefinition {
+	return []telegramCommandDefinition{
 		{Aliases: []string{"/udeviceid"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) {
 			return s.cmdMgoAuditDevices(ctx, "udeviceid", args), nil
 		}},
@@ -92,6 +122,11 @@ func (s *TelegramBotService) telegramCommandDefinitions(ctx context.Context, cha
 		{Aliases: []string{"/auditclient"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) {
 			return s.cmdMgoAuditDevices(ctx, "auditclient", args), nil
 		}},
+	}
+}
+
+func (s *TelegramBotService) telegramMgoMaintenanceCommandDefinitions(ctx context.Context, channel *model.NotifyChannel, adminOnly string) []telegramCommandDefinition {
+	return []telegramCommandDefinition{
 		{Aliases: []string{"/renewall"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdMgoRenewAll(ctx, args), nil }},
 		{Aliases: []string{"/callall"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdMgoCallAll(ctx, channel, args), nil }},
 		{Aliases: []string{"/syncunbound"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdMgoSyncUnbound(ctx, args), nil }},
@@ -111,6 +146,11 @@ func (s *TelegramBotService) telegramCommandDefinitions(ctx context.Context, cha
 		{Aliases: []string{"/week_ranks"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) {
 			return s.cmdMgoRanks(ctx, 7*24*time.Hour, false), nil
 		}},
+	}
+}
+
+func (s *TelegramBotService) telegramMgoPolicyCommandDefinitions(ctx context.Context, channel *model.NotifyChannel, adminOnly string) []telegramCommandDefinition {
+	return []telegramCommandDefinition{
 		{Aliases: []string{"/embyadmin"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdMgoAdminRole(ctx, args), nil }},
 		{Aliases: []string{"/unbanall"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdMgoBanAll(ctx, true, args), nil }},
 		{Aliases: []string{"/banall"}, AdminOnly: true, AdminOnlyText: adminOnly, Handle: func(args []string) (telegramCommandReply, error) { return s.cmdMgoBanAll(ctx, false, args), nil }},

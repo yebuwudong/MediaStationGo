@@ -99,7 +99,7 @@ func importSTRMHandler(svc *service.Container) gin.HandlerFunc {
 }
 
 type generateSTRMReq struct {
-	LibraryID    string `json:"library_id" binding:"required"`
+	LibraryID    string `json:"library_id"`
 	OutputDir    string `json:"output_dir"`
 	BaseURL      string `json:"base_url"`
 	Enabled      bool   `json:"enabled"`
@@ -122,7 +122,7 @@ func generateSTRMHandler(svc *service.Container) gin.HandlerFunc {
 		if baseURL == "" {
 			baseURL = strings.TrimRight(absoluteRequestURL(c, "/"), "/")
 		}
-		res, err := strmSvc.GenerateForLibrary(c.Request.Context(), service.GenerateSTRMOptions{
+		options := service.GenerateSTRMOptions{
 			LibraryID:     req.LibraryID,
 			OutputDir:     req.OutputDir,
 			BaseURL:       baseURL,
@@ -130,7 +130,14 @@ func generateSTRMHandler(svc *service.Container) gin.HandlerFunc {
 			Overwrite:     req.Overwrite,
 			IncludeLocal:  true,
 			PlaybackToken: strmPlaybackTokenForRequest(c, svc),
-		})
+		}
+		var res *service.GenerateSTRMResult
+		var err error
+		if strings.TrimSpace(req.LibraryID) == "*" {
+			res, err = strmSvc.GenerateForAllLibraries(c.Request.Context(), options)
+		} else {
+			res, err = strmSvc.GenerateForLibrary(c.Request.Context(), options)
+		}
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return

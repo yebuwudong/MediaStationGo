@@ -6,9 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -17,13 +15,7 @@ import (
 
 func newFileManagerTestServiceWithRepo(t *testing.T, root string) (*FileManagerService, *repository.Container) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{})
 	repos := repository.New(db)
 	lib := model.Library{Name: "downloads", Path: root, Type: "movie", Enabled: true}
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {

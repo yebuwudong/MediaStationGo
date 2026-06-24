@@ -1,44 +1,32 @@
-﻿import { motion } from 'framer-motion'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { FileText, Heart, Play, RefreshCw, Sparkles, Trash2, Calendar, Database, Search, Pencil, FolderInput } from 'lucide-react'
+import { ArrowLeft, Heart, Play, RefreshCw } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 import { mediaAPI } from '../api/library'
 import { playbackAPI } from '../api/playback'
 import { recycleAPI } from '../api/recycle'
-import { imageURL } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 import { api } from '../api/client'
 import type { Media } from '../types'
-import { confirmAction } from '../components/ConfirmDialog'
+import { confirmAction } from '../components/confirmAction'
 import { ExternalPlayerButton } from '../components/ExternalPlayerButton'
 import { ManualScrapeDialog } from '../components/ManualScrapeDialog'
 import { MetadataEditDialog } from '../components/MetadataEditDialog'
 import { OrganizeMediaDialog } from '../components/OrganizeMediaDialog'
+import { getSeriesKey, isEpisodeLike } from '../utils/groupSeries'
+import { MediaDetailAdminPanel } from './MediaDetailAdminPanel'
+import { MediaDetailBackdrop, MediaDetailPoster } from './MediaDetailArtwork'
+import { MediaDetailMetadata } from './MediaDetailMetadata'
 
-function fmtDuration(sec: number): string {
-  if (!sec || sec <= 0) return '—'
-  const h = Math.floor(sec / 3600)
-  const m = Math.floor((sec % 3600) / 60)
-  return h > 0 ? `${h}h ${m}m` : `${m}m`
-}
+function mediaLibraryBackTarget(media: Media): string {
+  const libraryID = media.display_library_id || media.library_id
+  if (!libraryID) return ''
+  if (!isEpisodeLike(media)) return `/library/${encodeURIComponent(libraryID)}`
 
-function fmtSize(bytes: number): string {
-  if (!bytes || bytes <= 0) return '—'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let v = bytes
-  let i = 0
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024
-    i++
-  }
-  return `${v.toFixed(2)} ${units[i]}`
-}
-
-function parseCSV(s?: string): string[] {
-  if (!s) return []
-  return s.split(',').map(x => x.trim()).filter(Boolean)
+  const seriesKey = getSeriesKey(media)
+  const target = `/library/${encodeURIComponent(libraryID)}`
+  return seriesKey ? `${target}?series=${encodeURIComponent(seriesKey)}` : target
 }
 
 export function MediaDetailPage() {
@@ -51,8 +39,9 @@ export function MediaDetailPage() {
   const [manualScrapeOpen, setManualScrapeOpen] = useState(false)
   const [metadataEditOpen, setMetadataEditOpen] = useState(false)
   const [organizeOpen, setOrganizeOpen] = useState(false)
+  const [scrapeEpisodeArtwork, setScrapeEpisodeArtwork] = useState(false)
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     if (!id) return
     setLoading(true)
     try {
@@ -63,10 +52,11 @@ export function MediaDetailPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [id])
+
   useEffect(() => {
     refresh().catch(() => undefined)
-  }, [id])
+  }, [refresh])
 
   const toggleFav = async () => {
     if (!media) return
@@ -77,7 +67,11 @@ export function MediaDetailPage() {
 
   const rescrape = async () => {
     if (!media) return
-    await api.post(`/media/${media.id}/scrape`)
+    await api.post(`/media/${media.id}/scrape`, {
+      episode_images: scrapeEpisodeArtwork,
+      refresh_matched: true,
+      include_matched: true,
+    })
     toast.success('已触发重新刮削')
     await refresh()
   }
@@ -118,7 +112,9 @@ export function MediaDetailPage() {
     if (!(await confirmAction({ title: '移入回收站', message: `将「${media.title}」移至回收站? (磁盘文件保留)`, confirmText: '移入回收站' }))) return
     await recycleAPI.softDelete(media.id)
     toast.success('已移至回收站')
-    navigate(-1)
+    const backTarget = mediaLibraryBackTarget(media)
+    if (backTarget) navigate(backTarget, { replace: true })
+    else navigate(-1)
   }
 
   if (loading) {
@@ -138,155 +134,38 @@ export function MediaDetailPage() {
 
   return (
     <div className="relative overflow-hidden rounded-3xl bg-white border border-gray-200/90 shadow-[0_1px_3px_rgba(0,0,0,0.01),0_1px_2px_rgba(0,0,0,0.015)]">
-      {/* ── Cinematic Blurred Backdrop Glow ── */}
-      <div className="absolute inset-0 h-[480px] z-0 overflow-hidden">
-        {(media.backdrop_url || media.poster_url) ? (
-          <img
-            src={imageURL(media.backdrop_url || media.poster_url || '')}
-            alt=""
-            className="w-full h-full object-cover opacity-[0.04] scale-110 blur-2xl"
-            referrerPolicy="no-referrer"
-          />
-        ) : (
-          <div className="w-full h-full bg-gradient-to-b from-gray-50 to-transparent" />
-        )}
-        <div className="absolute inset-0 bg-gradient-to-t from-white via-white/95 to-transparent" />
+      <MediaDetailBackdrop media={media} />
+
+      <div className="relative z-20 px-6 pt-6 sm:px-10 sm:pt-8">
+        <button
+          type="button"
+          onClick={() => {
+            const backTarget = mediaLibraryBackTarget(media)
+            if (backTarget) navigate(backTarget)
+            else navigate(-1)
+          }}
+          className="btn-ghost gap-2 bg-white/80 shadow-sm backdrop-blur hover:bg-white"
+        >
+          <ArrowLeft size={16} />
+          <span>返回媒体库</span>
+        </button>
       </div>
 
-      {/* ── Main Details Layout Container ── */}
       <div className="relative z-10 p-6 sm:p-10 flex flex-col md:flex-row gap-8 lg:gap-12">
-        {/* Poster Card */}
-        <div className="w-56 shrink-0 mx-auto md:mx-0">
-          <motion.div 
-            whileHover={{ scale: 1.02 }}
-            className="aspect-[2/3] w-full rounded-2xl overflow-hidden bg-gray-50 border border-gray-200 shadow-md relative group"
-          >
-            {media.poster_url ? (
-              <img
-                src={imageURL(media.poster_url)}
-                alt={media.title}
-                className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-                referrerPolicy="no-referrer"
-              />
-            ) : (
-              <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-gray-500 bg-gray-50">
-                <FileText size={40} className="stroke-[1]" />
-                <span className="text-xs uppercase tracking-wider font-bold">无海报</span>
-              </div>
-            )}
-            
-            {/* Quick Play overlay button */}
-            <Link 
-              to={`/play/${media.id}`}
-              className="absolute inset-0 bg-[#111827]/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
-            >
-              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-brand-500 text-white shadow-xl transform scale-90 group-hover:scale-100 transition-transform">
-                <Play size={24} fill="currentColor" />
-              </div>
-            </Link>
-          </motion.div>
-        </div>
+        <MediaDetailPoster media={media} />
 
-        {/* Detailed Metadata Body */}
         <div className="flex-1 space-y-6">
-          {/* Title and Year Header */}
-          <div className="space-y-3">
-            <h1 className="font-display text-3xl sm:text-4xl font-extrabold tracking-tight text-gray-900 leading-tight">
-              {media.title}
-            </h1>
-            <div className="flex flex-wrap items-center gap-2.5 text-xs text-gray-500 font-bold tracking-wide uppercase">
-              {media.year > 0 && (
-                <span className="inline-flex items-center gap-1 bg-gray-100 border border-gray-200/50 px-2.5 py-1 rounded-xl text-gray-700">
-                  <Calendar size={13} className="text-brand-500" />
-                  <span>{media.year} 年</span>
-                </span>
-              )}
-              {media.width > 0 && (
-                <span className="inline-flex items-center gap-1 bg-brand-50 text-brand-700 border border-brand-100/50 px-2.5 py-1 rounded-xl">
-                  <span>{media.width} × {media.height}</span>
-                </span>
-              )}
-              <span className="bg-gray-100 border border-gray-200/50 px-2.5 py-1 rounded-xl text-gray-700">
-                {fmtSize(media.size_bytes)}
-              </span>
-              <span className="bg-gray-100 border border-gray-200/50 px-2.5 py-1 rounded-xl text-gray-700">
-                {fmtDuration(media.duration_sec)}
-              </span>
-              {media.container && (
-                <span className="bg-gray-100 border border-gray-200/50 px-2.5 py-1 rounded-xl text-gray-700 font-mono">
-                  {media.container}
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Description Card */}
-          {media.overview && (
-            <div className="rounded-2xl bg-gray-50/50 border border-gray-100 p-5 space-y-2">
-              <h3 className="text-xs font-bold uppercase tracking-widest text-brand-500">剧情简介</h3>
-              <p className="text-sm text-gray-600 leading-relaxed font-semibold">
-                {media.overview}
-              </p>
-            </div>
-          )}
-
-          {/* Tag Rows (Genres, Languages, Countries) */}
-          <div className="space-y-4">
-            {/* Genres */}
-            {parseCSV(media.genres).length > 0 && (
-              <div className="flex flex-wrap items-center gap-3">
-                <span className="text-xs font-bold text-gray-500 w-16 uppercase tracking-wider">类型流派</span>
-                <div className="flex flex-wrap gap-2">
-                  {parseCSV(media.genres).map((g) => (
-                    <span key={g} className="rounded-full bg-brand-50 text-brand-700 border border-brand-100/30 px-3 py-1 text-2xs font-bold uppercase tracking-wider">
-                      {g}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Languages */}
-            {parseCSV(media.languages).length > 0 && (
-              <div className="flex flex-wrap items-center gap-3">
-                <span className="text-xs font-bold text-gray-500 w-16 uppercase tracking-wider">语言</span>
-                <div className="flex flex-wrap gap-2">
-                  {parseCSV(media.languages).map((l) => (
-                    <span key={l} className="rounded-xl bg-gray-100 text-gray-600 border border-gray-200/40 px-2.5 py-1 text-2xs font-semibold">
-                      {l}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Countries */}
-            {parseCSV(media.countries).length > 0 && (
-              <div className="flex flex-wrap items-center gap-3">
-                <span className="text-xs font-bold text-gray-500 w-16 uppercase tracking-wider">国家/地区</span>
-                <div className="flex flex-wrap gap-2">
-                  {parseCSV(media.countries).map((c) => (
-                    <span key={c} className="rounded-xl bg-gray-100 text-gray-600 border border-gray-200/40 px-2.5 py-1 text-2xs font-semibold">
-                      {c}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
+          <MediaDetailMetadata media={media} />
 
           <div className="divider border-gray-200/60" />
 
-          {/* Action Buttons Panel */}
           <div className="flex flex-col gap-5">
             <div className="flex flex-wrap gap-3">
-              {/* Primary Direct Play */}
               <Link to={`/play/${media.id}`} className="btn-primary px-6 py-3.5 shadow-sm">
                 <Play size={16} fill="currentColor" />
                 <span>立即播放</span>
               </Link>
 
-              {/* Transcode Playback */}
               <Link
                 to={`/play/${media.id}?mode=hls`}
                 className="btn-outline border-brand-500/30 hover:border-brand-500 text-[#c9954a] hover:bg-brand-50 px-5"
@@ -297,7 +176,6 @@ export function MediaDetailPage() {
 
               <ExternalPlayerButton mediaId={media.id} />
 
-              {/* Toggle Favourites */}
               <button
                 onClick={toggleFav}
                 className={
@@ -312,44 +190,19 @@ export function MediaDetailPage() {
               </button>
             </div>
 
-            {/* Admin Management Toolbar */}
             {role === 'admin' && (
-              <div className="rounded-2xl border border-gray-200 bg-gray-50/50 p-5 space-y-3">
-                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#c9954a]">系统后台高级控制面板</p>
-                <div className="flex flex-wrap gap-2">
-                  <button onClick={rescrape} className="btn-outline py-2 px-3.5 text-xs gap-1.5 border-gray-200 hover:border-brand-500/50 hover:bg-brand-50">
-                    <Sparkles size={13} className="text-[#c9954a]" />
-                    <span>智能刮削 (TMDB)</span>
-                  </button>
-                  <button onClick={() => setManualScrapeOpen(true)} className="btn-outline py-2 px-3.5 text-xs gap-1.5 border-gray-200 hover:border-brand-500/50 hover:bg-brand-50">
-                    <Search size={13} className="text-[#c9954a]" />
-                    <span>手动匹配刮削</span>
-                  </button>
-                  <button onClick={() => setMetadataEditOpen(true)} className="btn-outline py-2 px-3.5 text-xs gap-1.5 border-gray-200 hover:border-brand-500/50 hover:bg-brand-50">
-                    <Pencil size={13} className="text-gray-600" />
-                    <span>编辑元数据</span>
-                  </button>
-                  <button onClick={() => setOrganizeOpen(true)} className="btn-outline py-2 px-3.5 text-xs gap-1.5 border-gray-200 hover:border-brand-500/50 hover:bg-brand-50">
-                    <FolderInput size={13} className="text-[#c9954a]" />
-                    <span>整理入库</span>
-                  </button>
-                  <button onClick={reprobe} className="btn-outline py-2 px-3.5 text-xs gap-1.5 border-gray-200 hover:border-brand-500/50 hover:bg-brand-50">
-                    <Database size={13} className="text-gray-600" />
-                    <span>探测媒体轨 (ffprobe)</span>
-                  </button>
-                  <button onClick={exportNFO} className="btn-outline py-2 px-3.5 text-xs gap-1.5 border-gray-200 hover:border-brand-500/50 hover:bg-brand-50">
-                    <FileText size={13} />
-                    <span>写出本地 NFO 属性</span>
-                  </button>
-                  <button
-                    onClick={softDelete}
-                    className="btn-outline py-2 px-3.5 text-xs gap-1.5 !border-red-100 !text-red-500 hover:!bg-red-50 hover:!border-red-200"
-                  >
-                    <Trash2 size={13} />
-                    <span>移入回收站</span>
-                  </button>
-                </div>
-              </div>
+              <MediaDetailAdminPanel
+                media={media}
+                scrapeEpisodeArtwork={scrapeEpisodeArtwork}
+                onScrapeEpisodeArtworkChange={setScrapeEpisodeArtwork}
+                onSmartScrape={rescrape}
+                onManualScrape={() => setManualScrapeOpen(true)}
+                onMetadataEdit={() => setMetadataEditOpen(true)}
+                onOrganize={() => setOrganizeOpen(true)}
+                onProbe={reprobe}
+                onExportNFO={exportNFO}
+                onSoftDelete={softDelete}
+              />
             )}
           </div>
         </div>
@@ -360,6 +213,7 @@ export function MediaDetailPage() {
         defaultQuery={media.title}
         mediaType={media.season_num > 0 || media.episode_num > 0 ? 'tv' : undefined}
         scopeLabel={media.title}
+        episodeArtwork={scrapeEpisodeArtwork}
         onClose={() => setManualScrapeOpen(false)}
         onApplied={refresh}
       />

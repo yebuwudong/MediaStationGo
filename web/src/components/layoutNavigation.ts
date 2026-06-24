@@ -1,0 +1,126 @@
+import type { LucideIcon } from 'lucide-react'
+import {
+  Activity,
+  Cast,
+  Clock,
+  CloudDownload,
+  Compass,
+  Globe,
+  HardDrive,
+  Heart,
+  Home,
+  Image,
+  KeySquare,
+  Library,
+  ListMusic,
+  MessageSquareText,
+  Rss,
+  Search,
+  Settings,
+  Sliders,
+  Sparkles,
+  Trash2,
+  User,
+  UserCog,
+} from 'lucide-react'
+
+export type LayoutNavGroupID = 'media' | 'personal' | 'downloads' | 'tools' | 'system'
+
+export type LayoutNavItem = {
+  to: string
+  label: string
+  icon: LucideIcon
+  end?: boolean
+  permission?: string
+  adminOnly?: boolean
+}
+
+export type LayoutNavGroup = {
+  id: LayoutNavGroupID
+  label: string
+  icon: LucideIcon
+  activePaths: string[]
+  adminOnly?: boolean
+  items: LayoutNavItem[]
+}
+
+export const LAYOUT_NAV_GROUPS: LayoutNavGroup[] = [
+  {
+    id: 'media',
+    label: '媒体浏览',
+    icon: Home,
+    activePaths: ['/', '/libraries', '/library', '/poster-wall', '/discover', '/search', '/dlna', '/ai'],
+    items: [
+      { to: '/', label: '系统首页', icon: Home, end: true },
+      { to: '/libraries', label: '媒体库', icon: Library },
+      { to: '/poster-wall', label: '海报墙', icon: Image },
+      { to: '/discover', label: '精彩发现', icon: Compass, permission: 'can_view_discover' },
+      { to: '/search', label: '智能搜索', icon: Search, permission: 'can_use_ai' },
+      { to: '/dlna', label: 'DLNA 投屏', icon: Cast, permission: 'can_cast' },
+      { to: '/ai', label: 'AI 助理', icon: Sparkles, permission: 'can_use_ai_assistant' },
+    ],
+  },
+  {
+    id: 'personal',
+    label: '个人观影',
+    icon: User,
+    activePaths: ['/favourites', '/playlists', '/playlist', '/history', '/profile', '/play-profiles'],
+    items: [
+      { to: '/favourites', label: '我的收藏', icon: Heart },
+      { to: '/playlists', label: '播放列表', icon: ListMusic },
+      { to: '/history', label: '观看历史', icon: Clock },
+      { to: '/profile', label: '账号信息', icon: User },
+      { to: '/play-profiles', label: '观影 Profile', icon: UserCog },
+    ],
+  },
+  {
+    id: 'downloads',
+    label: '下载与订阅',
+    icon: CloudDownload,
+    activePaths: ['/downloads', '/download-clients', '/subscriptions', '/site-search'],
+    items: [
+      { to: '/downloads', label: '下载中心', icon: CloudDownload, permission: 'can_manage_downloads' },
+      { to: '/subscriptions', label: '订阅管理', icon: Rss, permission: 'can_manage_subscriptions' },
+      { to: '/site-search', label: '站点检索', icon: Search, permission: 'can_manage_sites' },
+      { to: '/download-clients', label: '下载器管理', icon: Sliders, adminOnly: true },
+    ],
+  },
+  {
+    id: 'tools',
+    label: '文件与自动化',
+    icon: HardDrive,
+    activePaths: ['/storage', '/storage-config', '/files', '/strm', '/duplicates', '/tasks', '/scheduler', '/recycle', '/stats'],
+    adminOnly: true,
+    items: [
+      { to: '/storage', label: '存储与文件', icon: HardDrive },
+      { to: '/storage-config', label: '外部存储', icon: CloudDownload },
+      { to: '/files', label: '文件管理', icon: Library },
+      { to: '/strm', label: 'STRM 管理', icon: Cast },
+      { to: '/duplicates', label: '重复文件', icon: Image },
+      { to: '/tasks', label: '任务队列', icon: Activity },
+      { to: '/scheduler', label: '计划任务', icon: Clock },
+      { to: '/recycle', label: '回收站', icon: Trash2 },
+      { to: '/stats', label: '运行状态', icon: Activity },
+    ],
+  },
+  {
+    id: 'system',
+    label: '系统配置',
+    icon: Settings,
+    activePaths: ['/admin', '/sites', '/notify-channels', '/license', '/settings', '/assistant'],
+    adminOnly: true,
+    items: [
+      { to: '/admin', label: '媒体与用户', icon: Settings },
+      { to: '/sites', label: '站点管理', icon: Globe },
+      { to: '/notify-channels', label: '通知渠道', icon: MessageSquareText },
+      { to: '/assistant', label: 'AI 会话', icon: Sparkles },
+      { to: '/license', label: '授权许可', icon: KeySquare },
+      { to: '/settings', label: '系统设置', icon: Sliders },
+    ],
+  },
+]
+
+export const NAV_GROUP_PATHS: Record<LayoutNavGroupID, string[]> = LAYOUT_NAV_GROUPS.reduce(
+  (paths, group) => ({ ...paths, [group.id]: group.activePaths }),
+  {} as Record<LayoutNavGroupID, string[]>,
+)

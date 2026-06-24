@@ -16,24 +16,37 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
 
+type discoverSectionDef struct {
+	Key      string
+	Label    string
+	Provider string
+}
+
+var discoverSectionCatalog = []discoverSectionDef{
+	{Key: "tmdb_trending_day", Label: "TMDb 今日趋势", Provider: "tmdb"},
+	{Key: "tmdb_trending_week", Label: "TMDb 本周热门", Provider: "tmdb"},
+	{Key: "tmdb_popular_movie", Label: "TMDb 热门电影", Provider: "tmdb"},
+	{Key: "tmdb_popular_tv", Label: "TMDb 热门剧集", Provider: "tmdb"},
+	{Key: "tmdb_top_rated_movie", Label: "TMDb 高分电影", Provider: "tmdb"},
+	{Key: "douban_hot_movie", Label: "豆瓣热门电影", Provider: "douban"},
+	{Key: "douban_hot_tv", Label: "豆瓣热门剧集", Provider: "douban"},
+	{Key: "douban_top_movie", Label: "豆瓣高分电影", Provider: "douban"},
+	{Key: "bangumi_calendar", Label: "Bangumi 每日放送", Provider: "bangumi"},
+}
+
 // discoverSectionsHandler returns the catalog of sections the UI can
 // pick from. The names match the upstream Vue UI so existing settings
 // keep working.
-func discoverSectionsHandler(_ *service.Container) gin.HandlerFunc {
+func discoverSectionsHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"sections": []gin.H{
-				{"key": "tmdb_trending_day", "label": "TMDb 今日趋势", "provider": "tmdb"},
-				{"key": "tmdb_trending_week", "label": "TMDb 本周热门", "provider": "tmdb"},
-				{"key": "tmdb_popular_movie", "label": "TMDb 热门电影", "provider": "tmdb"},
-				{"key": "tmdb_popular_tv", "label": "TMDb 热门剧集", "provider": "tmdb"},
-				{"key": "tmdb_top_rated_movie", "label": "TMDb 高分电影", "provider": "tmdb"},
-				{"key": "douban_hot_movie", "label": "豆瓣热门电影", "provider": "douban"},
-				{"key": "douban_hot_tv", "label": "豆瓣热门剧集", "provider": "douban"},
-				{"key": "douban_top_movie", "label": "豆瓣高分电影", "provider": "douban"},
-				{"key": "bangumi_calendar", "label": "Bangumi 每日放送", "provider": "bangumi"},
-			},
-		})
+		sections := make([]gin.H, 0, len(discoverSectionCatalog))
+		for _, section := range discoverSectionCatalog {
+			if !discoverProviderEnabled(c.Request.Context(), svc, section.Provider) {
+				continue
+			}
+			sections = append(sections, gin.H{"key": section.Key, "label": section.Label, "provider": section.Provider})
+		}
+		c.JSON(http.StatusOK, gin.H{"sections": sections})
 	}
 }
 
@@ -45,17 +58,49 @@ func discoverFeedHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		keys := strings.Split(c.DefaultQuery("sections", "tmdb_trending_day,tmdb_popular_movie,douban_hot_movie,bangumi_calendar"), ",")
 		out := gin.H{}
+		artworkItems := []service.ExternalMediaResult{}
 		for _, raw := range keys {
 			k := strings.TrimSpace(raw)
+			if provider := discoverSectionProvider(k); provider != "" && !discoverProviderEnabled(c.Request.Context(), svc, provider) {
+				out[k] = []service.ExternalMediaResult{}
+				continue
+			}
 			items, err := discoverSectionItems(c.Request.Context(), svc, k)
 			if err != nil {
 				svc.Log.Debug("discover fetch failed")
 				items = nil
 			}
+			artworkItems = append(artworkItems, items...)
 			out[k] = items
 		}
+		svc.Discover.WarmExternalArtwork(artworkItems)
 		c.JSON(http.StatusOK, out)
 	}
+}
+
+func discoverSectionProvider(key string) string {
+	for _, section := range discoverSectionCatalog {
+		if section.Key == key {
+			return section.Provider
+		}
+	}
+	switch key {
+	case "trending_day", "trending_week", "popular_movie", "popular_tv", "top_rated_movie", "upcoming_movie":
+		return "tmdb"
+	default:
+		return ""
+	}
+}
+
+func discoverProviderEnabled(ctx context.Context, svc *service.Container, provider string) bool {
+	if svc == nil || svc.APIConfig == nil || strings.TrimSpace(provider) == "" {
+		return true
+	}
+	cfg, err := svc.APIConfig.Get(ctx, provider)
+	if err != nil || cfg == nil {
+		return true
+	}
+	return cfg.Enabled
 }
 
 func discoverSectionItems(ctx context.Context, svc *service.Container, k string) ([]service.ExternalMediaResult, error) {

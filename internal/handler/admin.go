@@ -24,6 +24,9 @@ func listUsersHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		if svc.Sessions != nil {
+			svc.Sessions.ApplyToUsers(c.Request.Context(), users)
+		}
 		c.JSON(http.StatusOK, users)
 	}
 }
@@ -130,6 +133,10 @@ func deleteUserHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		if firstAdmin != nil && firstAdmin.ID == c.Param("id") {
 			c.JSON(http.StatusForbidden, gin.H{"error": "default admin cannot be deleted"})
+			return
+		}
+		if svc.Sessions != nil && svc.Sessions.UserRecentlyActive(c.Request.Context(), c.Param("id"), service.RealtimeDeletionGuardWindow()) {
+			c.JSON(http.StatusConflict, gin.H{"error": "user has a recent realtime session; confirm the user is offline before deletion"})
 			return
 		}
 		if err := svc.Repo.User.Delete(c.Request.Context(), c.Param("id")); err != nil {

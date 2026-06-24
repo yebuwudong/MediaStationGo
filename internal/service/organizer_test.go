@@ -5,9 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -25,13 +23,7 @@ func TestOrganizeMediaReDetectsSeasonFromPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{})
 	repos := repository.New(db)
 	lib := model.Library{Name: "TV", Path: root, Type: "tv", Enabled: true}
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
@@ -86,13 +78,7 @@ func TestOrganizeMediaUsesEpisodeNFOSeason(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{})
 	repos := repository.New(db)
 	lib := model.Library{Name: "TV", Path: root, Type: "tv", Enabled: true}
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
@@ -134,13 +120,7 @@ func TestOrganizeMediaAddsTypeRootForGenericMediaRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{})
 	repos := repository.New(db)
 	if err := repos.Setting.Set(t.Context(), "organizer.smart_classify", "true"); err != nil {
 		t.Fatal(err)
@@ -189,13 +169,7 @@ func TestOrganizeMediaDoesNotRepeatCategoryWhenLibraryIsCategoryRoot(t *testing.
 		t.Fatal(err)
 	}
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{})
 	repos := repository.New(db)
 	if err := repos.Setting.Set(t.Context(), "organizer.smart_classify", "true"); err != nil {
 		t.Fatal(err)
@@ -245,13 +219,7 @@ func TestOrganizeLibrarySkipsFilesAlreadyInsideLibrary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{})
 	repos := repository.New(db)
 	if err := repos.Setting.Set(t.Context(), "organizer.smart_classify", "true"); err != nil {
 		t.Fatal(err)

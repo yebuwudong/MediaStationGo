@@ -18,6 +18,28 @@ export function buildSiteSearchFeedURL(keyword: string, source?: string, aliases
   return `site-search://search?${params.toString()}`
 }
 
+export function buildSubscriptionAliases(item: {
+  title?: string
+  original_name?: string
+  subscribe_keyword?: string
+  subscribe_aliases?: string[]
+  year?: number
+}) {
+  const withYear = (value?: string) => {
+    const title = (value || '').trim()
+    if (!title) return ''
+    return item.year && item.year > 0 ? `${title} ${item.year}` : title
+  }
+  return [
+    ...(item.subscribe_aliases || []),
+    item.title || '',
+    item.original_name || '',
+    withYear(item.title),
+    withYear(item.original_name),
+    item.subscribe_keyword || '',
+  ]
+}
+
 export const subscriptionsAPI = {
   list: () =>
     api.get<{ items: Subscription[] }>('/subscriptions').then((r) => r.data.items),
@@ -38,6 +60,8 @@ export const subscriptionsAPI = {
     poster_url?: string
     backdrop_url?: string
     overview?: string
+    original_name?: string
+    year?: number
     resolution?: string
     quality?: string
     effects?: string

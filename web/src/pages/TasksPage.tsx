@@ -19,6 +19,7 @@ function fmtBytes(n: number): string {
 const metricLabels: Record<string, string> = {
   organized: '新增',
   replaced: '替换',
+  reclassified: '纠偏',
   skipped: '跳过',
   errors: '错误',
   scans: '扫描库',
@@ -29,6 +30,7 @@ const metricLabels: Record<string, string> = {
   scan_errors: '扫描错误',
   scrapes: '刮削库',
   scrape_matched: '匹配',
+  scrape_processed: '刮削处理',
   scrape_skipped: '刮削跳过',
   scrape_errors: '刮削错误',
   skip_already_organized: '已在目标',

@@ -80,6 +80,22 @@ func TestImageProxyServesPosterUnderLibraryRoot(t *testing.T) {
 	if got := rec.Body.Bytes(); string(got) != string(realPoster) {
 		t.Fatalf("served %q, want real poster bytes", string(got))
 	}
+	etag := rec.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("expected static image ETag")
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/img", nil)
+	req.Header.Set("If-None-Match", etag)
+	rec = httptest.NewRecorder()
+	if err := proxy.Serve(t.Context(), rec, req, posterPath); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusNotModified {
+		t.Fatalf("conditional status = %d, want 304", rec.Code)
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("conditional body length = %d, want 0", rec.Body.Len())
+	}
 }
 
 func TestImageProxyCachesFailedRemoteImageFetch(t *testing.T) {

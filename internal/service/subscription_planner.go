@@ -30,6 +30,7 @@ type siteSearchCandidate struct {
 type siteSearchSelectionStats struct {
 	Total                    int
 	QueryMismatch            int
+	QueryMismatchExamples    []string
 	RelaxedQueryMatch        int
 	RuleMismatch             int
 	MissingDownload          int
@@ -105,6 +106,7 @@ func collectSiteSearchCandidates(results []SearchResult, sub *model.Subscription
 				stats.RelaxedQueryMatch++
 			} else {
 				stats.QueryMismatch++
+				stats.QueryMismatchExamples = appendLimitedStrings(stats.QueryMismatchExamples, matchText, 5)
 				continue
 			}
 		}
@@ -139,6 +141,14 @@ func collectSiteSearchCandidates(results []SearchResult, sub *model.Subscription
 		})
 	}
 	return candidates
+}
+
+func appendLimitedStrings(values []string, value string, limit int) []string {
+	value = strings.TrimSpace(value)
+	if value == "" || limit <= 0 || len(values) >= limit {
+		return values
+	}
+	return append(values, value)
 }
 
 func shouldRelaxSiteSearchQueryMatch(sub *model.Subscription, local LocalAvailability) bool {

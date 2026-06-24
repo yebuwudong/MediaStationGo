@@ -5,9 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -77,6 +75,9 @@ func TestReadLocalEpisodeMetadataMergesShowAndEpisode(t *testing.T) {
 	// 单集名不得写入整剧原名(分组键)。
 	if got.OriginalName != "" {
 		t.Fatalf("episode title must not pollute OriginalName, got %q", got.OriginalName)
+	}
+	if got.EpisodeTitle != "第三集" {
+		t.Fatalf("episode title metadata = %q, want 第三集", got.EpisodeTitle)
 	}
 	// 单集级简介按集回填;整剧 tmdb 仍取 tvshow.nfo 的 123,单集 id 不得覆盖。
 	if got.Overview != "本集简介" || got.TMDbID != 123 {
@@ -443,13 +444,7 @@ func TestScanLibraryUsesLocalMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{})
 	repos := repository.New(db)
 	lib := model.Library{Name: "TV", Path: root, Type: "tv", Enabled: true}
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
@@ -476,13 +471,16 @@ func TestScanLibraryUsesLocalMetadata(t *testing.T) {
 	if media.Title != "本地剧名" || media.OriginalName != "" || media.SeasonNum != 2 || media.EpisodeNum != 3 || media.ScrapeStatus != "matched" {
 		t.Fatalf("unexpected scanned media: %+v", media)
 	}
+	if media.EpisodeTitle != "本地第三集" {
+		t.Fatalf("episode_title = %q, want 本地第三集", media.EpisodeTitle)
+	}
 
 	res, err = scanner.ScanLibrary(t.Context(), lib.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Added != 0 || res.Updated != 1 {
-		t.Fatalf("repeat scan counts added=%d updated=%d, want 0/1", res.Added, res.Updated)
+	if res.Added != 0 || res.Updated != 0 || res.Skipped != 1 {
+		t.Fatalf("repeat scan counts added=%d updated=%d skipped=%d, want 0/0/1", res.Added, res.Updated, res.Skipped)
 	}
 }
 
@@ -497,13 +495,7 @@ func TestScanLibraryDoesNotMarkArtworkOnlyAsMatched(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{})
 	repos := repository.New(db)
 	lib := model.Library{Name: "Adult", Path: root, Type: "movie", Enabled: true}
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
@@ -541,13 +533,7 @@ func TestScanLibraryRefreshesArtworkOnlyMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{})
 	repos := repository.New(db)
 	lib := model.Library{Name: "Movies", Path: root, Type: "movie", Enabled: true}
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
@@ -590,13 +576,7 @@ func TestScanLibraryParsesEpisodesForMovieTypedLibrary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{})
 	repos := repository.New(db)
 	lib := model.Library{Name: "综艺", Path: root, Type: "movie", Enabled: true}
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
@@ -623,13 +603,7 @@ func TestScanLibraryPrunesMissingMedia(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{})
 	repos := repository.New(db)
 	lib := model.Library{Name: "TV", Path: root, Type: "tv", Enabled: true}
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {

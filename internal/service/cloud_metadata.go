@@ -3,8 +3,8 @@ package service
 import (
 	"context"
 	"encoding/xml"
-	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/ShukeBta/MediaStationGo/internal/service/cloud"
@@ -13,6 +13,9 @@ import (
 type cloudSidecarSet struct {
 	nfoByName   map[string]string
 	nfoByBase   map[string]string
+	jsonByName  map[string]string
+	jsonByBase  map[string]string
+	imageByName map[string]string
 	imageByBase map[string]string
 }
 
@@ -20,6 +23,9 @@ func newCloudSidecarSet(typ string, entries []cloud.FileEntry) cloudSidecarSet {
 	set := cloudSidecarSet{
 		nfoByName:   make(map[string]string),
 		nfoByBase:   make(map[string]string),
+		jsonByName:  make(map[string]string),
+		jsonByBase:  make(map[string]string),
+		imageByName: make(map[string]string),
 		imageByBase: make(map[string]string),
 	}
 	for _, entry := range entries {
@@ -40,7 +46,11 @@ func newCloudSidecarSet(typ string, entries []cloud.FileEntry) cloudSidecarSet {
 		case ".nfo":
 			set.nfoByName[strings.ToLower(name)] = ref
 			set.nfoByBase[base] = ref
-		case ".jpg", ".jpeg", ".png", ".webp":
+		case ".json":
+			set.jsonByName[strings.ToLower(name)] = ref
+			set.jsonByBase[base] = ref
+		case ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tbn":
+			set.imageByName[strings.ToLower(name)] = ref
 			set.imageByBase[base] = ref
 		}
 	}
@@ -60,12 +70,23 @@ func (s *ScannerService) cloudDirectoryMetadata(ctx context.Context, typ, displa
 		if ref == "" {
 			continue
 		}
-		if local, _, err := s.readCloudNFO(ctx, typ, ref, true); err == nil && local != nil {
+		if local, doc, err := s.readCloudNFO(ctx, typ, ref, true); err == nil && local != nil {
+			local = applyCloudNFOArtwork(typ, sidecars, local, doc)
 			meta = mergeCloudMetadata(meta, local)
 			break
 		}
 	}
-	meta = applyCloudDirectoryArtwork(typ, sidecars, meta)
+	for _, name := range cloudDirectoryJSONCandidates(displayDir) {
+		ref := cloudJSONRefByName(sidecars, name)
+		if ref == "" {
+			continue
+		}
+		if local, err := s.readCloudJSONMetadata(ctx, typ, ref, sidecars); err == nil && local != nil {
+			meta = mergeCloudMetadata(meta, local)
+			break
+		}
+	}
+	meta = applyCloudDirectoryArtwork(typ, displayDir, sidecars, meta)
 	if !cloudMetadataUseful(meta) {
 		return nil
 	}
@@ -77,11 +98,12 @@ func (s *ScannerService) cloudFileMetadata(ctx context.Context, typ, displayPath
 	seriesLike = seriesLike || season > 0 || episode > 0
 	meta := cloneLocalMetadata(inherited)
 	if hinted, _ := pathHintMetadata(displayPath, seriesLike); hinted != nil {
-		meta = mergeCloudMetadata(meta, hinted)
+		meta = mergeCloudPathHintMetadata(meta, hinted)
 	}
 	base := strings.ToLower(strings.TrimSpace(strings.TrimSuffix(fileName, filepath.Ext(fileName))))
 	if ref := sidecars.nfoByBase[base]; ref != "" {
 		if local, doc, err := s.readCloudNFO(ctx, typ, ref, seriesLike); err == nil && local != nil {
+			local = applyCloudNFOArtwork(typ, sidecars, local, doc)
 			if seriesLike && doc != nil {
 				if meta == nil {
 					meta = &LocalMetadata{}
@@ -93,11 +115,37 @@ func (s *ScannerService) cloudFileMetadata(ctx context.Context, typ, displayPath
 			}
 		}
 	}
-	meta = applyCloudFileArtwork(typ, sidecars, base, meta)
+	for _, name := range cloudFileJSONCandidates(fileName, base) {
+		ref := cloudJSONRefByName(sidecars, name)
+		if ref == "" {
+			continue
+		}
+		if local, err := s.readCloudJSONMetadata(ctx, typ, ref, sidecars); err == nil && local != nil {
+			meta = mergeCloudMetadata(meta, local)
+			break
+		}
+	}
+	meta = applyCloudFileArtwork(typ, sidecars, displayPath, fileName, base, meta)
 	if !cloudMetadataUseful(meta) {
 		return nil
 	}
 	return meta
+}
+
+func (s *ScannerService) readCloudJSONMetadata(ctx context.Context, typ, ref string, sidecars cloudSidecarSet) (*LocalMetadata, error) {
+	if s.storage == nil {
+		return nil, nil
+	}
+	body, err := s.storage.CloudReadText(ctx, typ, ref, 512<<10)
+	if err != nil {
+		return nil, err
+	}
+	meta, artwork := metadataFromCloudJSON([]byte(body))
+	if meta == nil {
+		return nil, nil
+	}
+	meta = applyCloudJSONArtwork(typ, sidecars, meta, artwork)
+	return meta, nil
 }
 
 func (s *ScannerService) readCloudNFO(ctx context.Context, typ, ref string, seriesLike bool) (*LocalMetadata, *nfoDocument, error) {
@@ -116,18 +164,18 @@ func (s *ScannerService) readCloudNFO(ctx context.Context, typ, ref string, seri
 	return meta, &doc, nil
 }
 
-func applyCloudDirectoryArtwork(typ string, sidecars cloudSidecarSet, meta *LocalMetadata) *LocalMetadata {
+func applyCloudDirectoryArtwork(typ, displayDir string, sidecars cloudSidecarSet, meta *LocalMetadata) *LocalMetadata {
 	if meta == nil {
 		meta = &LocalMetadata{}
 	}
 	if meta.PosterURL == "" {
-		if ref := firstCloudImageRef(sidecars, "poster", "folder", "cover", "show", "tvshow"); ref != "" {
+		if ref := firstCloudImageRef(sidecars, cloudPosterNameCandidates(cloudDirectoryArtworkBases(displayDir), "poster", "folder", "cover", "show", "tvshow")...); ref != "" {
 			meta.PosterURL = cloudPlaybackURL(typ, ref)
 			meta.HasArtwork = true
 		}
 	}
 	if meta.BackdropURL == "" {
-		if ref := firstCloudImageRef(sidecars, "fanart", "backdrop", "background", "landscape"); ref != "" {
+		if ref := firstCloudImageRef(sidecars, cloudBackdropNameCandidates(cloudDirectoryArtworkBases(displayDir), "fanart", "backdrop", "background", "landscape")...); ref != "" {
 			meta.BackdropURL = cloudPlaybackURL(typ, ref)
 			meta.HasArtwork = true
 		}
@@ -135,47 +183,139 @@ func applyCloudDirectoryArtwork(typ string, sidecars cloudSidecarSet, meta *Loca
 	return meta
 }
 
-func applyCloudFileArtwork(typ string, sidecars cloudSidecarSet, base string, meta *LocalMetadata) *LocalMetadata {
+func applyCloudFileArtwork(typ string, sidecars cloudSidecarSet, displayPath, fileName, base string, meta *LocalMetadata) *LocalMetadata {
 	if meta == nil {
 		meta = &LocalMetadata{}
 	}
+	bases := cloudFileArtworkBases(displayPath, fileName, base)
 	if meta.PosterURL == "" {
-		if ref := firstCloudImageRef(sidecars,
-			base+"-poster", base+".poster", base+"-cover", base+".cover", base+"-thumb", base+".thumb",
-			"poster", "folder", "cover", "movie", "show", "thumb",
-		); ref != "" {
+		if ref := firstCloudImageRef(sidecars, cloudPosterNameCandidates(bases, "poster", "folder", "cover", "movie", "show", "thumb")...); ref != "" {
 			meta.PosterURL = cloudPlaybackURL(typ, ref)
 			meta.HasArtwork = true
 		}
 	}
 	if meta.BackdropURL == "" {
-		if ref := firstCloudImageRef(sidecars,
-			base+"-fanart", base+".fanart", base+"-backdrop", base+".backdrop", base+"-background", base+".background",
-			"fanart", "backdrop", "background", "landscape",
-		); ref != "" {
+		if ref := firstCloudImageRef(sidecars, cloudBackdropNameCandidates(bases, "fanart", "backdrop", "background", "landscape")...); ref != "" {
 			meta.BackdropURL = cloudPlaybackURL(typ, ref)
 			meta.HasArtwork = true
 		}
 	}
 	return meta
-}
-
-func firstCloudImageRef(sidecars cloudSidecarSet, names ...string) string {
-	for _, name := range names {
-		if ref := sidecars.imageByBase[strings.ToLower(strings.TrimSpace(name))]; ref != "" {
-			return ref
-		}
-	}
-	return ""
 }
 
 func cloudShowNFOCandidates(displayDir string) []string {
-	names := []string{"tvshow.nfo", "series.nfo", "show.nfo"}
+	names := []string{"tvshow.nfo", "series.nfo", "show.nfo", "movie.nfo"}
 	base := strings.TrimSpace(pathBaseSlash(displayDir))
 	if base != "" {
 		names = append(names, base+".nfo")
 	}
 	return names
+}
+
+func cloudDirectoryJSONCandidates(displayDir string) []string {
+	names := []string{"movie.json", "metadata.json", "tvshow.json", "series.json", "show.json"}
+	base := strings.TrimSpace(pathBaseSlash(displayDir))
+	if base != "" {
+		names = append(names, base+".json", base+"-metadata.json", base+".metadata.json", base+"-mediainfo.json", base+".mediainfo.json")
+	}
+	return names
+}
+
+func cloudFileJSONCandidates(fileName, base string) []string {
+	if base == "" {
+		base = strings.ToLower(strings.TrimSpace(strings.TrimSuffix(fileName, filepath.Ext(fileName))))
+	}
+	cleanBases := cloudCleanArtworkBases(fileName)
+	bases := uniqueCloudArtworkNames(append([]string{base}, cleanBases...)...)
+	out := make([]string, 0, len(bases)*5+2)
+	for _, value := range bases {
+		out = append(out, value+".json", value+"-metadata.json", value+".metadata.json", value+"-mediainfo.json", value+".mediainfo.json")
+	}
+	return append(out, "movie.json", "metadata.json")
+}
+
+func cloudJSONRefByName(sidecars cloudSidecarSet, name string) string {
+	name = normalizeCloudArtworkName(name)
+	if name == "" || isHTTPURL(name) {
+		return ""
+	}
+	if ref := sidecars.jsonByName[strings.ToLower(name)]; ref != "" {
+		return ref
+	}
+	base := strings.TrimSuffix(name, filepath.Ext(name))
+	return sidecars.jsonByBase[strings.ToLower(base)]
+}
+
+func cloudFileArtworkBases(displayPath, fileName, base string) []string {
+	return uniqueCloudArtworkNames(append(
+		[]string{base},
+		append(cloudCleanArtworkBases(fileName), cloudDirectoryArtworkBases(pathDirSlash(displayPath))...)...,
+	)...)
+}
+
+func cloudDirectoryArtworkBases(displayDir string) []string {
+	base := pathBaseSlash(displayDir)
+	return uniqueCloudArtworkNames(append([]string{base}, cloudCleanArtworkBases(base)...)...)
+}
+
+func cloudCleanArtworkBases(value string) []string {
+	title, year := CleanQuery(value)
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return nil
+	}
+	out := []string{title}
+	if year > 0 {
+		yearText := strconv.Itoa(year)
+		out = append(out,
+			title+" ("+yearText+")",
+			title+"."+yearText,
+			title+" "+yearText,
+		)
+	}
+	return out
+}
+
+func cloudPosterNameCandidates(bases []string, fallback ...string) []string {
+	out := make([]string, 0, len(bases)*7+len(fallback))
+	for _, base := range bases {
+		base = strings.TrimSpace(base)
+		if base == "" {
+			continue
+		}
+		out = append(out, base, base+"-poster", base+".poster", base+"-cover", base+".cover", base+"-thumb", base+".thumb")
+	}
+	return append(out, fallback...)
+}
+
+func cloudBackdropNameCandidates(bases []string, fallback ...string) []string {
+	out := make([]string, 0, len(bases)*6+len(fallback))
+	for _, base := range bases {
+		base = strings.TrimSpace(base)
+		if base == "" {
+			continue
+		}
+		out = append(out, base+"-fanart", base+".fanart", base+"-backdrop", base+".backdrop", base+"-background", base+".background")
+	}
+	return append(out, fallback...)
+}
+
+func uniqueCloudArtworkNames(values ...string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func mergeCloudMetadata(dst, src *LocalMetadata) *LocalMetadata {
@@ -190,6 +330,9 @@ func mergeCloudMetadata(dst, src *LocalMetadata) *LocalMetadata {
 	}
 	if src.OriginalName != "" {
 		dst.OriginalName = src.OriginalName
+	}
+	if src.EpisodeTitle != "" {
+		dst.EpisodeTitle = src.EpisodeTitle
 	}
 	if src.AdultCode != "" {
 		dst.AdultCode = src.AdultCode
@@ -243,6 +386,38 @@ func mergeCloudMetadata(dst, src *LocalMetadata) *LocalMetadata {
 	return dst
 }
 
+func mergeCloudPathHintMetadata(dst, hint *LocalMetadata) *LocalMetadata {
+	if hint == nil {
+		return dst
+	}
+	if dst == nil || !dst.HasNFO {
+		return mergeCloudMetadata(dst, hint)
+	}
+	if dst.Title == "" {
+		dst.Title = hint.Title
+	}
+	if dst.OriginalName == "" {
+		dst.OriginalName = hint.OriginalName
+	}
+	if dst.Year == 0 {
+		dst.Year = hint.Year
+	}
+	if dst.TMDbID == 0 {
+		dst.TMDbID = hint.TMDbID
+	}
+	if dst.BangumiID == 0 {
+		dst.BangumiID = hint.BangumiID
+	}
+	if dst.DoubanID == "" {
+		dst.DoubanID = hint.DoubanID
+	}
+	if dst.TheTVDBID == "" {
+		dst.TheTVDBID = hint.TheTVDBID
+	}
+	dst.PathHint = dst.PathHint || hint.PathHint
+	return dst
+}
+
 func cloneLocalMetadata(src *LocalMetadata) *LocalMetadata {
 	if src == nil {
 		return nil
@@ -256,7 +431,7 @@ func cloudMetadataUseful(meta *LocalMetadata) bool {
 }
 
 func cloudPlaybackURL(typ, ref string) string {
-	return "/api/cloud/play/" + typ + "?ref=" + url.QueryEscape(ref)
+	return CloudArtworkURL(typ, ref)
 }
 
 func joinCloudDisplayPath(parent, child string) string {
@@ -279,4 +454,16 @@ func pathBaseSlash(value string) string {
 	}
 	parts := strings.Split(value, "/")
 	return parts[len(parts)-1]
+}
+
+func pathDirSlash(value string) string {
+	value = strings.Trim(strings.ReplaceAll(strings.TrimSpace(value), "\\", "/"), "/")
+	if value == "" {
+		return ""
+	}
+	idx := strings.LastIndex(value, "/")
+	if idx < 0 {
+		return ""
+	}
+	return value[:idx]
 }

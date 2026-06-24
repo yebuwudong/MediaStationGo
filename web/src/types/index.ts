@@ -13,6 +13,8 @@ export interface User {
   is_active: boolean
   is_default_admin?: boolean
   is_protected?: boolean
+  realtime_online?: boolean
+  realtime_device_count?: number
   last_login_at?: string
   created_at: string
   updated_at: string
@@ -114,6 +116,7 @@ export interface Media {
   series_id?: string
   title: string
   original_name?: string
+  episode_title?: string
   path: string
   size_bytes: number
   duration_sec: number

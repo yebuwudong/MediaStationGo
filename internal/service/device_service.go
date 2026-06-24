@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -27,8 +28,9 @@ import (
 // a Telegram notification is sent before a destructive action; every policy
 // defaults to OFF.
 type DeviceService struct {
-	log  *zap.Logger
-	repo *repository.Container
+	log      *zap.Logger
+	repo     *repository.Container
+	sessions *SessionTrackerService
 
 	// notifyUser sends a Telegram message to the local user (resolved to their
 	// Telegram binding). Wired by the bot service; nil disables notifications.
@@ -43,6 +45,10 @@ func NewDeviceService(log *zap.Logger, repo *repository.Container) *DeviceServic
 // SetNotifier wires the per-user Telegram notification callback.
 func (s *DeviceService) SetNotifier(fn func(ctx context.Context, userID, text string)) {
 	s.notifyUser = fn
+}
+
+func (s *DeviceService) SetSessionTracker(tracker *SessionTrackerService) {
+	s.sessions = tracker
 }
 
 // fingerprint derives a stable terminal hash from the device name. Client/app
@@ -70,12 +76,19 @@ func (s *DeviceService) RecordLogin(ctx context.Context, userID, deviceID, devic
 	if userID == "" {
 		return
 	}
+	username := ""
+	if u, _ := s.repo.User.FindByID(ctx, userID); u != nil {
+		username = u.Username
+	}
 	if deviceID == "" {
 		// Fall back to a fingerprint-derived id so headless clients still count.
 		deviceID = "fp-" + fingerprint(client, deviceName)
 	}
+	if s.sessions != nil {
+		s.sessions.RecordLogin(ctx, userID, username, deviceID, deviceName, client, ip)
+	}
 	fp := fingerprint(client, deviceName)
-	now := time.Now()
+	now := s.now()
 
 	existing, _ := s.repo.UserDevice.Find(ctx, userID, deviceID)
 	mismatch := false
@@ -124,10 +137,17 @@ func (s *DeviceService) RecordPlayback(ctx context.Context, userID, deviceID, de
 	if userID == "" {
 		return
 	}
+	username := ""
+	if u, _ := s.repo.User.FindByID(ctx, userID); u != nil {
+		username = u.Username
+	}
 	if deviceID == "" {
 		deviceID = "fp-" + fingerprint(client, deviceName)
 	}
-	now := time.Now()
+	if s.sessions != nil {
+		s.sessions.RecordPlayback(ctx, userID, username, deviceID, deviceName, client, "", "", 0, 0, false)
+	}
+	now := s.now()
 	existing, _ := s.repo.UserDevice.Find(ctx, userID, deviceID)
 	if existing == nil {
 		existing = &model.UserDevice{
@@ -172,7 +192,7 @@ func (s *DeviceService) registerFingerprintWarning(ctx context.Context, userID, 
 		s.log.Info("anti-share: skipping protected account", zap.String("user", u.Username), zap.String("reason", reason))
 		return
 	}
-	now := time.Now()
+	now := s.now()
 	if u.LastShareWarnAt != nil && now.Sub(*u.LastShareWarnAt) < time.Minute {
 		return // debounce burst
 	}
@@ -202,7 +222,7 @@ func (s *DeviceService) disableForPolicy(ctx context.Context, userID, reason str
 		s.log.Info("device policy: skipping protected account", zap.String("user", u.Username), zap.String("reason", reason))
 		return
 	}
-	now := time.Now()
+	now := s.now()
 	_ = s.repo.User.UpdateFields(ctx, userID, map[string]any{
 		"is_active":          false,
 		"last_share_warn_at": &now,
@@ -300,7 +320,62 @@ func (s *DeviceService) KickAllDevices(ctx context.Context, userID string) error
 
 // ListDevices returns the device sessions for a user.
 func (s *DeviceService) ListDevices(ctx context.Context, userID string) ([]model.UserDevice, error) {
-	return s.repo.UserDevice.ListByUser(ctx, userID)
+	rows, err := s.repo.UserDevice.ListByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if s.sessions == nil {
+		return rows, nil
+	}
+	now := s.sessions.now()
+	byDevice := make(map[string]int, len(rows))
+	for i := range rows {
+		byDevice[rows[i].DeviceID] = i
+	}
+	for _, sess := range s.sessions.ListByUser(ctx, userID) {
+		online := sess.LastActivityAt.After(now.Add(-realtimeSessionOnlineTTL))
+		if idx, ok := byDevice[sess.DeviceID]; ok {
+			if sess.LastActivityAt.After(rows[idx].LastSeenAt) {
+				rows[idx].LastSeenAt = sess.LastActivityAt
+			}
+			if sess.DeviceName != "" {
+				rows[idx].DeviceName = sess.DeviceName
+			}
+			if sess.Client != "" {
+				rows[idx].Client = sess.Client
+			}
+			if sess.RemoteEndPoint != "" {
+				rows[idx].LastIP = sess.RemoteEndPoint
+			}
+			if sess.LastPlaybackAt != nil {
+				rows[idx].LastPlayAt = sess.LastPlaybackAt
+			}
+			rows[idx].Realtime = true
+			rows[idx].Online = online
+			rows[idx].Playing = sess.IsPlaying && online
+			continue
+		}
+		row := model.UserDevice{
+			UserID:      userID,
+			DeviceID:    sess.DeviceID,
+			DeviceName:  sess.DeviceName,
+			Client:      sess.Client,
+			Fingerprint: fingerprint(sess.Client, sess.DeviceName),
+			LastIP:      sess.RemoteEndPoint,
+			FirstSeenAt: sess.LastActivityAt,
+			LastSeenAt:  sess.LastActivityAt,
+			LastPlayAt:  sess.LastPlaybackAt,
+			Realtime:    true,
+			Online:      online,
+			Playing:     sess.IsPlaying && online,
+		}
+		row.ID = "rt:" + sess.ID
+		rows = append(rows, row)
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		return rows[i].LastSeenAt.After(rows[j].LastSeenAt)
+	})
+	return rows, nil
 }
 
 // IsDeviceKicked reports whether a (user, device) pair was kicked and should be
@@ -311,6 +386,17 @@ func (s *DeviceService) IsDeviceKicked(ctx context.Context, userID, deviceID str
 	}
 	d, err := s.repo.UserDevice.Find(ctx, userID, deviceID)
 	return err == nil && d != nil && d.Kicked
+}
+
+func (s *DeviceService) UserRecentlyActive(ctx context.Context, userID string, within time.Duration) bool {
+	return s.sessions != nil && s.sessions.UserRecentlyActive(ctx, userID, within)
+}
+
+func (s *DeviceService) now() time.Time {
+	if s != nil && s.sessions != nil && s.sessions.now != nil {
+		return s.sessions.now()
+	}
+	return time.Now()
 }
 
 func (s *DeviceService) notify(ctx context.Context, userID, text string) {
@@ -372,7 +458,11 @@ func (s *DeviceService) userMatchesCleanupRule(ctx context.Context, u *model.Use
 		if days < 1 {
 			days = r.WindowDaysMin
 		}
-		ok := u.LastLoginAt != nil && u.LastLoginAt.After(time.Now().Add(-time.Duration(days)*24*time.Hour))
+		cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+		ok := u.LastLoginAt != nil && u.LastLoginAt.After(cutoff)
+		if !ok && s.sessions != nil {
+			ok = s.sessions.UserRecentlyActive(ctx, u.ID, time.Duration(days)*24*time.Hour)
+		}
 		return ok, fmt.Sprintf("%s：%d 天内登录", r.Name, days)
 	case "signin_streak":
 		rec, _ := s.repo.SignIn.Get(ctx, u.ID)

@@ -129,9 +129,12 @@ func WriteMediaNFO(m *model.Media) (string, error) {
 
 	var doc any
 	if m.SeasonNum > 0 || m.EpisodeNum > 0 {
-		title := m.OriginalName
+		title := strings.TrimSpace(m.EpisodeTitle)
+		if title == "" && m.EpisodeNum > 0 {
+			title = fmt.Sprintf("第 %d 集", m.EpisodeNum)
+		}
 		if title == "" {
-			title = m.Title
+			title = strings.TrimSpace(m.Title)
 		}
 		doc = episodeNFO{
 			Title:     title,

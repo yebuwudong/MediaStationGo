@@ -5,7 +5,7 @@ import { Globe, Plus, RefreshCw } from "lucide-react";
 import { sitesAPI } from "../api/sites";
 import type { Site } from "../types";
 import { ManagementShortcuts } from "../components/ManagementShortcuts";
-import { confirmAction } from "../components/ConfirmDialog";
+import { confirmAction } from "../components/confirmAction";
 
 import {
   defaultSiteForm,
@@ -161,21 +161,25 @@ export function SitesPage() {
             title: "下载器管理",
             description: "添加、测试和维护下载器连接",
             badge: "必需",
+            group: "基础配置",
           },
           {
             to: "/site-search",
             title: "站点检索",
             description: "跨 PT 站点搜索资源并创建下载任务",
+            group: "资源获取",
           },
           {
             to: "/subscriptions",
             title: "订阅管理",
             description: "管理追剧追番和自动下载规则",
+            group: "资源获取",
           },
           {
             to: "/downloads",
             title: "下载中心",
             description: "查看下载任务状态和历史记录",
+            group: "任务状态",
           },
         ]}
       />

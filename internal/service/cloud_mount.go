@@ -89,6 +89,9 @@ func FindCloudMountConflict(libs []model.Library, provider, scanDir, displayDir 
 		ScanDir:    normalizeCloudMountDir(provider, scanDir),
 	}
 	for _, lib := range libs {
+		if CloudLibraryAutoCategory(lib) {
+			continue
+		}
 		existing, ok := ParseCloudLibraryMount(lib.Path)
 		if !ok || existing.Provider != candidate.Provider {
 			continue
@@ -113,6 +116,9 @@ func CloudLibraryShadowed(libs []model.Library, lib model.Library) *CloudMountCo
 	}
 	for _, existing := range libs {
 		if existing.ID == lib.ID || !existing.Enabled {
+			continue
+		}
+		if CloudLibraryAutoCategory(existing) {
 			continue
 		}
 		info, ok := ParseCloudLibraryMount(existing.Path)
@@ -143,6 +149,7 @@ func FilterDisplayCloudLibraries(ctx context.Context, repo *repository.Container
 	if len(libs) == 0 {
 		return libs
 	}
+	libs = FilterDeprecatedNativeCloudLibraries(libs)
 	counts := cloudLibraryMediaCounts(ctx, repo, libs)
 	collapsed := make([]model.Library, 0, len(libs))
 	byKey := make(map[string]int, len(libs))
@@ -173,6 +180,12 @@ func FilterScannableCloudLibraries(ctx context.Context, repo *repository.Contain
 	collapsed := make([]model.Library, 0, len(libs))
 	byKey := make(map[string]int, len(libs))
 	for _, lib := range libs {
+		if CloudLibraryAutoCategory(lib) {
+			continue
+		}
+		if info, ok := ParseCloudLibraryMount(lib.Path); ok && IsDeprecatedNativeCloudProvider(info.Provider) {
+			continue
+		}
 		key, ok := cloudLibraryDisplayKey(lib)
 		if !ok {
 			collapsed = append(collapsed, lib)
@@ -188,6 +201,21 @@ func FilterScannableCloudLibraries(ctx context.Context, repo *repository.Contain
 		collapsed = append(collapsed, lib)
 	}
 	return FilterShadowedCloudLibraries(collapsed)
+}
+
+func FilterDeprecatedNativeCloudLibraries(libs []model.Library) []model.Library {
+	if len(libs) == 0 {
+		return libs
+	}
+	out := make([]model.Library, 0, len(libs))
+	for _, lib := range libs {
+		info, ok := ParseCloudLibraryMount(lib.Path)
+		if ok && IsDeprecatedNativeCloudProvider(info.Provider) {
+			continue
+		}
+		out = append(out, lib)
+	}
+	return out
 }
 
 func NormalizeCloudLibraryDisplayNames(libs []model.Library) []model.Library {
@@ -388,12 +416,17 @@ func ExpandMediaVisibilityForMergedCloudLibraries(ctx context.Context, repo *rep
 	if repo == nil || repo.Library == nil {
 		return visibility
 	}
+	libs, err := repo.Library.List(ctx)
+	if err != nil {
+		return visibility
+	}
 	if len(visibility.AllowedLibraryIDs) > 0 {
-		visibility.AllowedLibraryIDs = expandMergedLibraryIDs(ctx, repo, visibility.AllowedLibraryIDs)
+		visibility.AllowedLibraryIDs = expandMergedLibraryIDsFromLibraries(libs, visibility.AllowedLibraryIDs)
 	}
 	if len(visibility.HiddenLibraryIDs) > 0 {
-		visibility.HiddenLibraryIDs = expandMergedLibraryIDs(ctx, repo, visibility.HiddenLibraryIDs)
+		visibility.HiddenLibraryIDs = expandMergedLibraryIDsFromLibraries(libs, visibility.HiddenLibraryIDs)
 	}
+	visibility.HiddenLibraryIDs = appendUniqueLibraryIDs(visibility.HiddenLibraryIDs, DeprecatedNativeCloudLibraryIDs(libs)...)
 	return visibility
 }
 
@@ -405,40 +438,63 @@ func expandMergedLibraryIDs(ctx context.Context, repo *repository.Container, ids
 	if err != nil {
 		return ids
 	}
+	return expandMergedLibraryIDsFromLibraries(libs, ids)
+}
+
+func expandMergedLibraryIDsFromLibraries(libs []model.Library, ids []string) []string {
 	byID := make(map[string]model.Library, len(libs))
 	for _, lib := range libs {
 		byID[lib.ID] = lib
 	}
 	out := make([]string, 0, len(ids))
-	seen := map[string]struct{}{}
-	add := func(id string) {
-		id = strings.TrimSpace(id)
-		if id == "" {
-			return
-		}
-		if _, ok := seen[id]; ok {
-			return
-		}
-		seen[id] = struct{}{}
-		out = append(out, id)
-	}
 	for _, id := range ids {
 		lib, ok := byID[id]
 		if !ok {
-			add(id)
+			out = appendUniqueLibraryIDs(out, id)
 			continue
 		}
 		for _, mergedID := range MergedLibraryIDs(libs, lib) {
-			add(mergedID)
+			out = appendUniqueLibraryIDs(out, mergedID)
 		}
 	}
 	return out
 }
 
+func DeprecatedNativeCloudLibraryIDs(libs []model.Library) []string {
+	ids := make([]string, 0)
+	for _, lib := range libs {
+		info, ok := ParseCloudLibraryMount(lib.Path)
+		if ok && IsDeprecatedNativeCloudProvider(info.Provider) {
+			ids = appendUniqueLibraryIDs(ids, lib.ID)
+		}
+	}
+	return ids
+}
+
+func appendUniqueLibraryIDs(ids []string, more ...string) []string {
+	for _, id := range more {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		found := false
+		for _, existing := range ids {
+			if existing == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 func CloudMountProviderLabel(provider string) string {
 	switch strings.TrimSpace(provider) {
-	case cloud.TypeQuark:
-		return "夸克网盘"
+	case LegacyQuarkProvider:
+		return "已停用网盘"
 	case cloud.Type115:
 		return "115 网盘"
 	case cloud.TypeCloudDrive2:
@@ -556,7 +612,7 @@ func normalizeCloudMountDir(provider, value string) string {
 	}
 	value = strings.ReplaceAll(value, "\\", "/")
 	value = strings.Trim(strings.TrimSpace(value), "/")
-	if value == "." || ((provider == cloud.Type115 || provider == cloud.TypeQuark) && value == "0") {
+	if value == "." || ((provider == cloud.Type115 || provider == LegacyQuarkProvider) && value == "0") {
 		return ""
 	}
 	return value

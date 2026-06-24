@@ -24,6 +24,7 @@ type DiscoverService struct {
 	log    *zap.Logger
 	tmdb   *TMDbProvider
 	client *http.Client
+	images *ImageProxy
 }
 
 // NewDiscoverService is the constructor.
@@ -74,6 +75,7 @@ func (d *DiscoverService) TMDbSection(ctx context.Context, key string) ([]Extern
 			Rating:           item.Rating,
 			TMDbID:           item.TMDbID,
 			SubscribeKeyword: buildSubscribeKeyword(item.Title, item.Year),
+			SubscribeAliases: buildSubscribeAliases(item.Title, item.OriginalName, item.Year),
 		})
 	}
 	return out, nil
@@ -257,6 +259,7 @@ func (d *DoubanProvider) Discover(ctx context.Context, key string) ([]ExternalMe
 			Rating:           float32(rating),
 			DoubanID:         subject.ID,
 			SubscribeKeyword: subject.Title,
+			SubscribeAliases: buildSubscribeAliases(subject.Title, "", 0),
 		})
 	}
 	return out, nil
@@ -320,6 +323,7 @@ func (b *BangumiProvider) Calendar(ctx context.Context) ([]ExternalMediaResult, 
 				Rating:           item.Rating.Score,
 				BangumiID:        item.ID,
 				SubscribeKeyword: buildSubscribeKeyword(title, year),
+				SubscribeAliases: buildSubscribeAliases(title, item.Name, year),
 			})
 			if len(out) >= 24 {
 				return out, nil

@@ -15,6 +15,7 @@ export type GenerateSTRMResult = {
   generated: number
   updated: number
   skipped: number
+  cleaned: number
   errors?: string[]
   items?: Array<{
     media_id: string

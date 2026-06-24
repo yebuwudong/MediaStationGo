@@ -7,22 +7,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
 func TestSiteUpdateKeepsSecretsWhenPatchIsBlank(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Site{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Site{})
 	svc := NewSiteService(zap.NewNop(), &repository.Container{DB: db}, "")
 	site := &model.Site{
 		Name:     "M-Team",
@@ -63,13 +55,7 @@ func TestYemaPTTestConnectionDoesNotFallbackAfterAuthFailure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Site{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Site{})
 	repos := repository.New(db)
 	svc := NewSiteService(zap.NewNop(), repos, "")
 	site := &model.Site{

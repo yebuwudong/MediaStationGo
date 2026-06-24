@@ -11,23 +11,32 @@ import (
 )
 
 type ManualScrapeRequest struct {
-	Source       string   `json:"source"`
-	MediaType    string   `json:"media_type"`
-	Title        string   `json:"title"`
-	OriginalName string   `json:"original_name"`
-	Overview     string   `json:"overview"`
-	PosterURL    string   `json:"poster_url"`
-	BackdropURL  string   `json:"backdrop_url"`
-	Year         int      `json:"year"`
-	Rating       float32  `json:"rating"`
-	TMDbID       int      `json:"tmdb_id"`
-	BangumiID    int      `json:"bangumi_id"`
-	DoubanID     string   `json:"douban_id"`
-	TheTVDBID    string   `json:"thetvdb_id"`
-	Languages    []string `json:"languages"`
-	Countries    []string `json:"countries"`
-	Genres       []string `json:"genres"`
-	NSFW         bool     `json:"nsfw"`
+	Source         string   `json:"source"`
+	MediaType      string   `json:"media_type"`
+	Title          string   `json:"title"`
+	OriginalName   string   `json:"original_name"`
+	Overview       string   `json:"overview"`
+	PosterURL      string   `json:"poster_url"`
+	BackdropURL    string   `json:"backdrop_url"`
+	Year           int      `json:"year"`
+	Rating         float32  `json:"rating"`
+	TMDbID         int      `json:"tmdb_id"`
+	BangumiID      int      `json:"bangumi_id"`
+	DoubanID       string   `json:"douban_id"`
+	TheTVDBID      string   `json:"thetvdb_id"`
+	Languages      []string `json:"languages"`
+	Countries      []string `json:"countries"`
+	Genres         []string `json:"genres"`
+	NSFW           bool     `json:"nsfw"`
+	EpisodeArtwork *bool    `json:"episode_artwork,omitempty"`
+	EpisodeImages  *bool    `json:"episode_images,omitempty"`
+}
+
+func (r ManualScrapeRequest) EpisodeArtworkOption() *bool {
+	if r.EpisodeImages != nil {
+		return r.EpisodeImages
+	}
+	return r.EpisodeArtwork
 }
 
 func (s *ScraperService) ManualSearch(ctx context.Context, media *model.Media, query, provider, mediaType string) ([]ExternalMediaResult, error) {
@@ -35,27 +44,22 @@ func (s *ScraperService) ManualSearch(ctx context.Context, media *model.Media, q
 		return nil, errors.New("media required")
 	}
 	lib, _ := s.repo.Library.FindByID(ctx, media.LibraryID)
-	query = strings.TrimSpace(query)
-	if query == "" {
-		query = firstText(media.Title, media.OriginalName)
-	}
-	if query == "" {
-		query, _ = CleanQuery(media.Path)
-	}
-	if query == "" {
+	queries := manualSearchQueries(media, lib, query)
+	if len(queries) == 0 {
 		return nil, errors.New("search query required")
 	}
-	if mediaType == "" && lib != nil {
-		mediaType = lib.Type
+	if mediaType == "" {
+		if mediaIsEpisodic(media, lib) {
+			mediaType = "tv"
+		} else if lib != nil {
+			mediaType = lib.Type
+		}
 	}
-	mediaType = normalizeMediaType(mediaType, query, "")
-	provider = strings.ToLower(strings.TrimSpace(provider))
-	if provider == "" || provider == "all" {
-		provider = "all"
-	}
+	mediaType = normalizeMediaType(mediaType, queries[0], "")
+	providers := manualSearchProviderSet(provider)
 	year := mediaYearHint(media)
 	if year <= 0 {
-		_, year = CleanQuery(query)
+		_, year = CleanQuery(queries[0])
 	}
 
 	out := make([]ExternalMediaResult, 0, 6)
@@ -78,6 +82,7 @@ func (s *ScraperService) ManualSearch(ctx context.Context, media *model.Media, q
 			DoubanID:         match.DoubanID,
 			TheTVDBID:        match.TheTVDBID,
 			SubscribeKeyword: buildSubscribeKeyword(match.Title, match.Year),
+			SubscribeAliases: buildSubscribeAliases(match.Title, match.OriginalName, match.Year),
 			Languages:        match.Languages,
 			Countries:        match.Countries,
 			Genres:           match.Genres,
@@ -85,42 +90,108 @@ func (s *ScraperService) ManualSearch(ctx context.Context, media *model.Media, q
 		})
 	}
 
-	if provider == "all" || provider == "adult" {
-		for _, match := range s.manualAdultMatches(ctx, media, query) {
-			add("adult", "adult", match)
-		}
-	}
-	if provider == "all" || provider == "tmdb" {
-		for _, match := range s.manualTMDbMatches(ctx, query, year, mediaType) {
-			typ := mediaType
-			if typ == "" {
-				typ = "movie"
+	if providers.want("adult") {
+		for _, candidateQuery := range queries {
+			for _, match := range s.manualAdultMatches(ctx, media, candidateQuery) {
+				add("adult", "adult", match)
 			}
-			if match.TMDbID > 0 && isTVLikeTMDbMatch(match, mediaType) {
-				typ = "tv"
+		}
+	}
+	if providers.want("tmdb") {
+		for _, candidateQuery := range queries {
+			for _, candidate := range s.manualTMDbCandidates(ctx, candidateQuery, year, mediaType) {
+				add("tmdb", candidate.MediaType, candidate.Match)
 			}
-			add("tmdb", typ, match)
 		}
 	}
-	if provider == "all" || provider == "douban" {
-		if match := s.manualDoubanMatch(ctx, query); match != nil {
-			add("douban", normalizeMediaType(mediaType, query, ""), match)
+	if providers.want("douban") {
+		for _, candidateQuery := range queries {
+			if match := s.manualDoubanMatch(ctx, candidateQuery); match != nil {
+				add("douban", normalizeMediaType(mediaType, candidateQuery, ""), match)
+			}
 		}
 	}
-	if provider == "all" || provider == "bangumi" {
-		if match := s.manualBangumiMatch(ctx, query); match != nil {
-			add("bangumi", "anime", match)
+	if providers.want("bangumi") {
+		for _, candidateQuery := range queries {
+			if match := s.manualBangumiMatch(ctx, candidateQuery); match != nil {
+				add("bangumi", "anime", match)
+			}
 		}
 	}
-	if provider == "all" || provider == "thetvdb" {
-		if match := s.manualTheTVDBMatch(ctx, query); match != nil {
-			add("thetvdb", "tv", match)
+	if providers.want("thetvdb") {
+		for _, candidateQuery := range queries {
+			if match := s.manualTheTVDBMatch(ctx, candidateQuery); match != nil {
+				add("thetvdb", "tv", match)
+			}
 		}
 	}
 	return dedupeExternalMedia(out), nil
 }
 
+type manualSearchProviders map[string]struct{}
+
+func manualSearchProviderSet(provider string) manualSearchProviders {
+	out := manualSearchProviders{}
+	for _, field := range strings.FieldsFunc(provider, func(r rune) bool {
+		return r == ',' || r == ';' || r == '|' || r == ' '
+	}) {
+		field = strings.ToLower(strings.TrimSpace(field))
+		if field == "" || field == "all" {
+			return nil
+		}
+		out[field] = struct{}{}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func (p manualSearchProviders) want(provider string) bool {
+	if len(p) == 0 {
+		return true
+	}
+	_, ok := p[provider]
+	return ok
+}
+
+func manualSearchQueries(media *model.Media, lib *model.Library, query string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 4)
+	add := func(value string) {
+		value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+		if value == "" {
+			return
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+
+	add(query)
+	if strings.TrimSpace(query) == "" && media != nil {
+		add(firstText(media.Title, media.OriginalName))
+	}
+	if media != nil {
+		for _, candidate := range scrapeQueryCandidates(media, lib) {
+			add(candidate)
+		}
+		if len(out) == 0 {
+			title, _ := CleanQuery(media.Path)
+			add(title)
+		}
+	}
+	return out
+}
+
 func (s *ScraperService) ApplyManualMatch(ctx context.Context, mediaID string, req ManualScrapeRequest) (*model.Media, error) {
+	return s.ApplyManualMatchWithOptions(ctx, mediaID, req, ScrapeOptions{EpisodeArtwork: req.EpisodeArtworkOption()})
+}
+
+func (s *ScraperService) ApplyManualMatchWithOptions(ctx context.Context, mediaID string, req ManualScrapeRequest, options ScrapeOptions) (*model.Media, error) {
 	media, err := s.repo.Media.FindByID(ctx, mediaID)
 	if err != nil || media == nil {
 		return nil, errors.New("media not found")
@@ -133,7 +204,7 @@ func (s *ScraperService) ApplyManualMatch(ctx context.Context, mediaID string, r
 	if strings.TrimSpace(match.Title) == "" {
 		return nil, errors.New("manual match title required")
 	}
-	if err := s.applyProviderMatch(ctx, media, lib, match); err != nil {
+	if err := s.applyProviderMatchWithOptions(ctx, media, lib, match, options); err != nil {
 		return nil, err
 	}
 	return s.repo.Media.FindByID(ctx, mediaID)
@@ -183,27 +254,76 @@ func (s *ScraperService) manualRequestMatch(ctx context.Context, req ManualScrap
 	return fallback()
 }
 
-func (s *ScraperService) manualTMDbMatches(ctx context.Context, query string, year int, mediaType string) []*Match {
+type manualTMDbCandidate struct {
+	MediaType string
+	Match     *Match
+}
+
+func (s *ScraperService) manualTMDbCandidates(ctx context.Context, query string, year int, mediaType string) []manualTMDbCandidate {
 	if s.tmdb == nil || !s.tmdb.Enabled() {
 		return nil
 	}
 	if id, ok := parsePositiveInt(query); ok {
-		if match := s.manualTMDbMatchByID(ctx, id, mediaType); match != nil {
-			return []*Match{match}
+		out := make([]manualTMDbCandidate, 0, 2)
+		for _, typ := range manualTMDbIDSearchTypes(mediaType) {
+			if match := s.manualTMDbMatchByIDForType(ctx, id, typ); match != nil {
+				out = append(out, manualTMDbCandidate{MediaType: typ, Match: match})
+			}
 		}
+		return out
 	}
-	out := make([]*Match, 0, 2)
-	if mediaType == "" || mediaType == "movie" {
-		if matches, err := s.tmdb.SearchMovieCandidates(ctx, query, year); err == nil {
-			out = append(out, matches...)
-		}
-	}
-	if mediaType == "" || mediaType == "tv" || mediaType == "anime" || mediaType == "variety" {
-		if matches, err := s.tmdb.SearchTVCandidates(ctx, query, year); err == nil {
-			out = append(out, matches...)
+	out := make([]manualTMDbCandidate, 0, 4)
+	for _, typ := range manualTMDbSearchTypes(mediaType) {
+		switch typ {
+		case "movie":
+			if matches, err := s.tmdb.SearchMovieCandidates(ctx, query, year); err == nil {
+				for _, match := range matches {
+					out = append(out, manualTMDbCandidate{MediaType: "movie", Match: match})
+				}
+			}
+		case "tv":
+			if matches, err := s.tmdb.SearchTVCandidates(ctx, query, year); err == nil {
+				for _, match := range matches {
+					out = append(out, manualTMDbCandidate{MediaType: "tv", Match: match})
+				}
+			}
 		}
 	}
 	return out
+}
+
+func (s *ScraperService) manualTMDbMatches(ctx context.Context, query string, year int, mediaType string) []*Match {
+	candidates := s.manualTMDbCandidates(ctx, query, year, mediaType)
+	out := make([]*Match, 0, len(candidates))
+	for _, candidate := range candidates {
+		out = append(out, candidate.Match)
+	}
+	return out
+}
+
+func manualTMDbIDSearchTypes(mediaType string) []string {
+	switch normalizeMediaType(mediaType, "", "") {
+	case "tv", "anime", "variety":
+		return []string{"tv", "movie"}
+	case "movie", "adult":
+		return []string{"movie", "tv"}
+	default:
+		return []string{"movie", "tv"}
+	}
+}
+
+func manualTMDbSearchTypes(mediaType string) []string {
+	if strings.TrimSpace(mediaType) == "" {
+		return []string{"movie", "tv"}
+	}
+	switch normalizeMediaType(mediaType, "", "") {
+	case "tv", "anime", "variety":
+		return []string{"tv", "movie"}
+	case "movie", "adult":
+		return []string{"movie"}
+	default:
+		return []string{"movie", "tv"}
+	}
 }
 
 func (s *ScraperService) manualAdultMatches(ctx context.Context, media *model.Media, query string) []*Match {
@@ -254,6 +374,23 @@ func (s *ScraperService) manualTMDbMatchByID(ctx context.Context, id int, mediaT
 	}
 	if match, err := s.tmdb.GetTVMatch(ctx, id); err == nil && match != nil {
 		return match
+	}
+	return nil
+}
+
+func (s *ScraperService) manualTMDbMatchByIDForType(ctx context.Context, id int, mediaType string) *Match {
+	if s.tmdb == nil || !s.tmdb.Enabled() || id <= 0 {
+		return nil
+	}
+	switch normalizeMediaType(mediaType, "", "") {
+	case "tv", "anime", "variety":
+		if match, err := s.tmdb.GetTVMatch(ctx, id); err == nil && match != nil {
+			return match
+		}
+	case "movie", "adult":
+		if match, err := s.tmdb.GetMovieMatch(ctx, id); err == nil && match != nil {
+			return match
+		}
 	}
 	return nil
 }

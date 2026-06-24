@@ -11,9 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
@@ -447,13 +445,7 @@ func TestStorageConfigUploadLocalMoveDeletesSourceAfterUpload(t *testing.T) {
 
 func newStorageUploadTestService(t *testing.T) (*repository.Container, *StorageConfigService) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.StorageConfig{}, &model.Setting{}, &model.Library{}, &model.Media{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.StorageConfig{}, &model.Setting{}, &model.Library{}, &model.Media{})
 	repos := repository.New(db)
 	log := zap.NewNop()
 	return repos, NewStorageConfigService(log, repos, NewCryptoService("", log))

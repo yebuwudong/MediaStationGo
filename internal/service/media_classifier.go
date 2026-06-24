@@ -341,7 +341,7 @@ func (s *SubscriptionService) lookupSubscriptionMetadata(ctx context.Context, me
 				if candidate == "" {
 					continue
 				}
-				match := s.scraper.lookup(ctx, lib, candidate, year)
+				match := s.scraper.lookup(ctx, lib, nil, candidate, year)
 				if match == nil || strings.TrimSpace(match.Title) == "" {
 					continue
 				}

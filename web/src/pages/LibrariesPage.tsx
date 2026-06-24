@@ -6,6 +6,7 @@ import { ArrowRight, Film, FolderOpen, Library as LibraryIcon, Music, PlayCircle
 import { imageURL } from '../api/client'
 import { libraryAPI } from '../api/library'
 import { toolsAPI } from '../api/tools'
+import { EpisodeArtworkToggle } from '../components/EpisodeArtworkToggle'
 import { MediaCard } from '../components/MediaCard'
 import type { Library, Media } from '../types'
 import { artworkScore, groupSeries, seriesCardLink, type SeriesCard } from '../utils/groupSeries'
@@ -37,6 +38,7 @@ export function LibrariesPage() {
   const [previews, setPreviews] = useState<LibraryPreview[]>([])
   const [loading, setLoading] = useState(true)
   const [repairing, setRepairing] = useState(false)
+  const [repairEpisodeArtwork, setRepairEpisodeArtwork] = useState(false)
   const [repairMsg, setRepairMsg] = useState('')
 
   async function handleRepairRescrape() {
@@ -44,7 +46,7 @@ export function LibrariesPage() {
     setRepairing(true)
     setRepairMsg('')
     try {
-      await toolsAPI.repairAndRescrapeAll()
+      await toolsAPI.repairAndRescrapeAll({ episode_images: repairEpisodeArtwork, refresh_matched: true })
       setRepairMsg('已开始全库修复+重刮，进度可在任务中查看。')
     } catch {
       setRepairMsg('启动失败，请稍后重试。')
@@ -61,7 +63,7 @@ export function LibrariesPage() {
         const libs = await libraryAPI.list()
         const rows = await Promise.all(libs.map(async (library) => {
           try {
-            const page = await libraryAPI.listMedia(library.id, 1, 160)
+            const page = await libraryAPI.listMedia(library.id, 1, 160, { groupVersions: false })
             const cards = latestCards(page.items)
             return { library, items: page.items, total: page.total, cards } satisfies LibraryPreview
           } catch {
@@ -94,6 +96,12 @@ export function LibrariesPage() {
         </div>
         <div className="flex flex-wrap items-center gap-3">
           {repairMsg && <span className="text-xs text-ink-50">{repairMsg}</span>}
+          <EpisodeArtworkToggle
+            checked={repairEpisodeArtwork}
+            onChange={setRepairEpisodeArtwork}
+            title="关闭后仍会获取主海报和每集文字元数据，只跳过每集图片"
+            className="h-10"
+          />
           <button
             type="button"
             onClick={handleRepairRescrape}
@@ -159,9 +167,12 @@ function LibraryEntryCard({ preview }: { preview: LibraryPreview }) {
   const library = preview.library
   const artwork = preview.cards
     .sort((a, b) => artworkScore(b.rep) - artworkScore(a.rep) || mediaTime(b.rep) - mediaTime(a.rep))
-    .map((card) => card.rep.poster_url || card.rep.backdrop_url)
-    .filter(Boolean)
-    .slice(0, 4) as string[]
+    .map((card) => ({
+      src: card.rep.poster_url || card.rep.backdrop_url,
+      version: card.rep.updated_at,
+    }))
+    .filter((item) => Boolean(item.src))
+    .slice(0, 4)
 
   return (
     <Link
@@ -170,10 +181,10 @@ function LibraryEntryCard({ preview }: { preview: LibraryPreview }) {
     >
       <div className="grid h-24 w-36 shrink-0 grid-cols-2 gap-1 overflow-hidden rounded-2xl bg-[linear-gradient(135deg,#fff7ed,#f8fafc)]">
         {artwork.length > 0 ? (
-          artwork.map((src, index) => (
+          artwork.map(({ src, version }, index) => (
             <img
               key={`${src}-${index}`}
-              src={imageURL(src)}
+              src={imageURL(src, version)}
               alt=""
               loading="lazy"
               referrerPolicy="no-referrer"

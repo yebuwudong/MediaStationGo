@@ -60,10 +60,10 @@ export function HomePage() {
       <div className="flex items-center justify-center py-48">
         <motion.div animate={{ opacity: [0.4, 1, 0.4] }} transition={{ repeat: Infinity, duration: 1.5 }} className="flex flex-col items-center gap-4">
           <div className="relative flex items-center justify-center">
-            <div className="h-10 w-10 rounded-full border-2 border-gray-100 border-t-gray-900 animate-spin" />
+            <div className="h-10 w-10 animate-spin rounded-full border-2 border-[var(--app-border)] border-t-[var(--app-active-bg)]" />
             <Film className="absolute h-4 w-4 text-brand-500" />
           </div>
-          <span className="text-sm font-semibold tracking-widest text-gray-500 uppercase">首页内容准备中…</span>
+          <span className="text-sm font-semibold uppercase tracking-widest text-[var(--app-muted)]">首页内容准备中…</span>
         </motion.div>
       </div>
     )
@@ -72,11 +72,11 @@ export function HomePage() {
   if (empty) {
     return (
       <div className="flex flex-col items-center justify-center py-32 text-center max-w-md mx-auto">
-        <div className="mb-6 flex h-24 w-24 items-center justify-center rounded-3xl bg-gray-100 border border-gray-200/50 shadow-sm">
-          <Film className="h-10 w-10 text-gray-500" />
+        <div className="mb-6 flex h-24 w-24 items-center justify-center rounded-3xl border border-[var(--app-border)] bg-[var(--app-panel-soft)] shadow-sm">
+          <Film className="h-10 w-10 text-[var(--app-muted)]" />
         </div>
-        <p className="text-xl font-bold text-gray-900">您的家庭影视站暂无内容</p>
-        <p className="mt-2 text-sm text-gray-500 leading-relaxed">
+        <p className="text-xl font-bold text-[var(--app-text)]">您的家庭影视站暂无内容</p>
+        <p className="mt-2 text-sm leading-relaxed text-[var(--app-muted)]">
           前往管理后台添加媒体目录，扫描后首页将展示本周力荐、继续观看和最近入库。
         </p>
         <Link to="/admin" className="mt-8 btn-primary">
@@ -89,65 +89,65 @@ export function HomePage() {
   return (
     <div className="space-y-12">
       {featuredItem && (
-        <section className="relative overflow-hidden rounded-[2rem] bg-white border border-gray-200/90 shadow-[0_24px_80px_rgba(15,23,42,0.08)]">
+        <section className="relative overflow-hidden rounded-[2rem] border border-[var(--app-border)] bg-[var(--app-panel)] shadow-[0_24px_80px_var(--app-shadow)]">
           <div className="absolute inset-0 z-0">
-            <div className="h-full w-full bg-[radial-gradient(circle_at_80%_20%,rgba(212,175,55,0.22),transparent_34%),linear-gradient(135deg,#fff7ed,#f8fafc_52%,#eef2ff)]" />
+            <div className="theme-hero-bg h-full w-full" />
             {featuredVisual && (
               <img
-                src={imageURL(featuredVisual)}
+                src={imageURL(featuredVisual, featuredItem.updated_at)}
                 alt=""
                 className="absolute inset-0 h-full w-full scale-105 object-cover object-center opacity-[0.34] blur-[1px]"
                 referrerPolicy="no-referrer"
                 onError={(event) => { event.currentTarget.style.display = 'none' }}
               />
             )}
-            <div className="absolute inset-0 bg-[linear-gradient(90deg,#ffffff_0%,rgba(255,255,255,0.96)_37%,rgba(255,255,255,0.62)_68%,rgba(255,255,255,0.2)_100%)]" />
-            <div className="absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-white to-transparent" />
+            <div className="theme-hero-overlay absolute inset-0" />
+            <div className="theme-hero-fade absolute inset-x-0 bottom-0 h-32" />
           </div>
 
           <div className="relative z-10 grid gap-8 px-6 py-8 sm:px-8 md:grid-cols-[minmax(0,1fr)_280px] md:px-12 md:py-12 lg:grid-cols-[minmax(0,1fr)_340px] lg:px-14 lg:py-14">
             <div className="flex min-w-0 flex-col justify-center space-y-5">
-              <div className="inline-flex w-fit items-center gap-2 rounded-full bg-white/82 px-3.5 py-1.5 text-xs font-bold uppercase tracking-widest text-[#a8732d] border border-[#ead6b6] shadow-sm backdrop-blur">
+              <div className="inline-flex w-fit items-center gap-2 rounded-full border border-[var(--app-brand-border)] bg-[var(--app-brand-soft)] px-3.5 py-1.5 text-xs font-bold uppercase tracking-widest text-[var(--app-brand-text)] shadow-sm backdrop-blur">
                 <Sparkles size={12} fill="currentColor" />
                 <span>本周力荐 / Featured</span>
               </div>
 
               <div className="space-y-3">
-                <div className="inline-flex max-w-full items-center gap-2 rounded-2xl bg-gray-950 px-3 py-2 text-white shadow-lg shadow-gray-950/10">
+                <div className="inline-flex max-w-full items-center gap-2 rounded-2xl bg-[var(--app-active-bg)] px-3 py-2 text-[var(--app-active-text)] shadow-lg">
                   <span className="h-2 w-2 rounded-full bg-[#d4af37]" />
                   <span className="truncate text-xs font-black tracking-[0.26em]">{featuredMark}</span>
                 </div>
-                <h1 className="font-display text-3xl sm:text-4xl md:text-5xl font-extrabold tracking-tight leading-tight text-gray-950">
+                <h1 className="font-display text-3xl font-extrabold leading-tight tracking-tight text-[var(--app-text)] sm:text-4xl md:text-5xl">
                   {featuredItem.title}
                 </h1>
               </div>
 
-              <p className="max-w-2xl text-gray-600 text-sm sm:text-base leading-relaxed line-clamp-3 font-semibold">
+              <p className="line-clamp-3 max-w-2xl text-sm font-semibold leading-relaxed text-[var(--app-subtle)] sm:text-base">
                 {featuredItem.overview || '家庭私人媒体中心收藏。支持多端播放、外部播放器、智能刮削与订阅下载。'}
               </p>
 
-              <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500 font-bold">
+              <div className="flex flex-wrap items-center gap-3 text-xs font-bold text-[var(--app-muted)]">
                 {featuredItem.year > 0 && (
-                  <span className="bg-white/85 px-2.5 py-1 rounded-xl text-gray-900 border border-gray-200 shadow-sm">{featuredItem.year} 年</span>
+                  <span className="rounded-xl border border-[var(--app-border)] bg-[var(--app-panel)] px-2.5 py-1 text-[var(--app-text)] shadow-sm">{featuredItem.year} 年</span>
                 )}
                 {featuredItem.video_codec && (
-                  <span className="rounded-lg bg-[#fff8e7] px-2 py-1 text-[#9a6a1e] border border-[#ead6b6] uppercase font-bold text-[10px]">
+                  <span className="rounded-lg border border-[var(--app-brand-border)] bg-[var(--app-brand-soft)] px-2 py-1 text-[10px] font-bold uppercase text-[var(--app-brand-text)]">
                     {featuredItem.video_codec}
                   </span>
                 )}
                 {featuredItem.container && (
-                  <span className="rounded-lg bg-white/80 px-2 py-1 text-gray-700 border border-gray-200 uppercase font-mono text-[10px]">
+                  <span className="rounded-lg border border-[var(--app-border)] bg-[var(--app-panel)] px-2 py-1 font-mono text-[10px] uppercase text-[var(--app-subtle)]">
                     {featuredItem.container}
                   </span>
                 )}
               </div>
 
               <div className="flex flex-wrap items-center gap-4 pt-2">
-                <Link to={`/media/${featuredItem.id}`} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#111827] px-6 py-3.5 text-sm font-bold text-white shadow-lg shadow-gray-900/15 hover:bg-[#1f2937] hover:-translate-y-0.5 transition-all">
+                <Link to={`/media/${featuredItem.id}`} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[var(--app-command-bg)] px-6 py-3.5 text-sm font-bold text-[var(--app-command-text)] shadow-lg transition-all hover:-translate-y-0.5">
                   <Play size={16} fill="currentColor" />
                   <span>立即播放</span>
                 </Link>
-                <Link to="/discover" className="btn-outline bg-white/80 px-5 py-3.5 text-sm font-bold text-gray-700 border border-gray-200 hover:border-gray-300">
+                <Link to="/discover" className="inline-flex items-center justify-center gap-2 rounded-xl border border-[var(--app-border)] bg-[var(--app-panel)] px-5 py-3.5 text-sm font-bold text-[var(--app-subtle)] shadow-sm transition-all hover:-translate-y-0.5 hover:border-brand-500/40 hover:text-[var(--app-text)]">
                   <span>发现更多精彩</span>
                   <ArrowRight size={16} />
                 </Link>
@@ -156,14 +156,14 @@ export function HomePage() {
 
             <div className="relative order-first mx-auto flex w-full max-w-[220px] items-center md:order-none md:max-w-[260px] lg:max-w-[310px]">
               <div className="absolute -right-6 top-5 h-32 w-32 rounded-full bg-[#d4af37]/20 blur-3xl" />
-              <div className="relative aspect-[2/3] w-full overflow-hidden rounded-[1.7rem] border border-white/70 bg-white p-2 shadow-[0_32px_80px_rgba(15,23,42,0.20)]">
-                <div className="flex h-full w-full flex-col items-center justify-center rounded-[1.25rem] bg-[linear-gradient(135deg,#f9fafb,#fff7ed)] text-center">
+              <div className="relative aspect-[2/3] w-full overflow-hidden rounded-[1.7rem] border border-[var(--app-border)] bg-[var(--app-poster-shell)] p-2 shadow-[0_32px_80px_var(--app-shadow)]">
+                <div className="flex h-full w-full flex-col items-center justify-center rounded-[1.25rem] text-center" style={{ background: 'var(--app-poster-empty)' }}>
                   <Film className="mb-4 h-12 w-12 text-[#c9954a]" />
-                  <span className="px-6 font-display text-3xl font-black tracking-tight text-gray-950">{featuredItem.title}</span>
+                  <span className="px-6 font-display text-3xl font-black tracking-tight text-[var(--app-text)]">{featuredItem.title}</span>
                 </div>
                 {featuredPoster && (
                   <img
-                    src={imageURL(featuredPoster)}
+                    src={imageURL(featuredPoster, featuredItem.updated_at)}
                     alt={featuredItem.title}
                     className="absolute inset-2 h-[calc(100%-1rem)] w-[calc(100%-1rem)] rounded-[1.25rem] object-cover"
                     referrerPolicy="no-referrer"
@@ -179,11 +179,11 @@ export function HomePage() {
       {history.length > 0 && (
         <section className="space-y-5">
           <div className="flex items-center gap-2.5">
-            <span className="p-1.5 rounded-xl bg-gray-100 border border-gray-200/50 text-gray-900">
+            <span className="rounded-xl border border-[var(--app-border)] bg-[var(--app-panel-soft)] p-1.5 text-[var(--app-text)]">
               <Clock size={16} />
             </span>
-            <h2 className="font-display text-xl font-extrabold tracking-tight text-gray-900">继续观看</h2>
-            <span className="text-xs font-bold text-gray-500 bg-gray-100 px-2.5 py-0.5 rounded-full border border-gray-200/40">{history.length} 个记录</span>
+            <h2 className="font-display text-xl font-extrabold tracking-tight text-[var(--app-text)]">继续观看</h2>
+            <span className="rounded-full border border-[var(--app-border)] bg-[var(--app-panel-soft)] px-2.5 py-0.5 text-xs font-bold text-[var(--app-muted)]">{history.length} 个记录</span>
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
@@ -198,17 +198,17 @@ export function HomePage() {
 
       {recentCards.length > 0 && (
         <section className="space-y-5">
-          <div className="flex items-center justify-between border-b border-gray-200/80 pb-3">
+          <div className="flex items-center justify-between border-b border-[var(--app-border)] pb-3">
             <div className="flex items-center gap-2.5">
-              <span className="p-1.5 rounded-xl bg-gray-100 text-gray-900 border border-gray-200/50">
+              <span className="rounded-xl border border-[var(--app-border)] bg-[var(--app-panel-soft)] p-1.5 text-[var(--app-text)]">
                 <Clock size={18} />
               </span>
               <div>
-                <h2 className="font-display text-xl font-extrabold tracking-tight text-gray-900">最近入库</h2>
-                <p className="text-xs text-gray-500">按整部电影、剧集、番剧和综艺合集展示新增内容。</p>
+                <h2 className="font-display text-xl font-extrabold tracking-tight text-[var(--app-text)]">最近入库</h2>
+                <p className="text-xs text-[var(--app-muted)]">按整部电影、剧集、番剧和综艺合集展示新增内容。</p>
               </div>
             </div>
-            <Link to="/poster-wall" className="group inline-flex items-center gap-1 text-xs font-bold text-gray-600 hover:text-brand-600 transition-colors">
+            <Link to="/poster-wall" className="group inline-flex items-center gap-1 text-xs font-bold text-[var(--app-subtle)] transition-colors hover:text-brand-500">
               <span>海报墙</span>
               <ArrowRight size={14} className="transition-transform group-hover:translate-x-0.5" />
             </Link>
@@ -232,18 +232,18 @@ export function HomePage() {
 
 function ContinueCard({ media, progress }: { media: Media; progress: number }) {
   return (
-    <Link to={`/media/${media.id}`} className="group flex items-center gap-4 rounded-2xl bg-white p-3.5 border border-gray-200/80 shadow-[0_1px_3px_rgba(0,0,0,0.01)] transition-all duration-300 hover:shadow-md hover:border-brand-500/30">
-      <div className="relative h-18 w-12 shrink-0 overflow-hidden rounded-xl bg-gray-50 border border-gray-100">
+    <Link to={`/media/${media.id}`} className="group flex items-center gap-4 rounded-2xl border border-[var(--app-border)] bg-[var(--app-panel)] p-3.5 shadow-[0_1px_3px_rgba(0,0,0,0.01)] transition-all duration-300 hover:border-brand-500/30 hover:bg-[var(--app-panel-soft)] hover:shadow-md">
+      <div className="relative h-18 w-12 shrink-0 overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-panel-soft)]">
         {media.poster_url ? (
           <img
-            src={imageURL(media.poster_url)}
+            src={imageURL(media.poster_url, media.updated_at)}
             alt=""
             loading="lazy"
             className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
             referrerPolicy="no-referrer"
           />
         ) : (
-          <div className="flex h-full items-center justify-center text-gray-500 bg-gray-50">
+          <div className="flex h-full items-center justify-center bg-[var(--app-panel-soft)] text-[var(--app-muted)]">
             <Film size={16} />
           </div>
         )}
@@ -252,11 +252,11 @@ function ContinueCard({ media, progress }: { media: Media; progress: number }) {
         </div>
       </div>
       <div className="min-w-0 flex-1 space-y-1.5">
-        <p className="truncate text-sm font-bold text-gray-900 group-hover:text-brand-500 transition-colors">
+        <p className="truncate text-sm font-bold text-[var(--app-text)] transition-colors group-hover:text-brand-500">
           {media.title}
         </p>
         <div className="space-y-1">
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--app-hover)]">
             <motion.div
               initial={{ width: 0 }}
               animate={{ width: `${Math.round(progress * 100)}%` }}
@@ -264,7 +264,7 @@ function ContinueCard({ media, progress }: { media: Media; progress: number }) {
               className="h-full rounded-full bg-gradient-to-r from-brand-400 to-brand-500"
             />
           </div>
-          <p className="text-[10px] text-gray-500 font-bold tracking-wide uppercase">
+          <p className="text-[10px] font-bold uppercase tracking-wide text-[var(--app-muted)]">
             已观看到 {Math.round(progress * 100)}%
           </p>
         </div>

@@ -43,6 +43,31 @@ async function cacheArtwork(request) {
   const contentType = response.headers.get('Content-Type') || ''
   if (response.ok && contentType.toLowerCase().startsWith('image/')) {
     await cache.put(cacheKey, response.clone())
+    await deleteOldArtworkVariants(cache, cacheKey)
   }
   return response
+}
+
+async function deleteOldArtworkVariants(cache, currentRequest) {
+  const currentURL = new URL(currentRequest.url)
+  const currentIdentity = artworkIdentity(currentURL)
+  if (!currentIdentity) return
+
+  const keys = await cache.keys()
+  await Promise.all(keys.map(async (key) => {
+    if (key.url === currentRequest.url) return
+    const keyURL = new URL(key.url)
+    if (artworkIdentity(keyURL) !== currentIdentity) return
+    await cache.delete(key)
+  }))
+}
+
+function artworkIdentity(url) {
+  if (url.pathname === '/api/img') {
+    return `${url.origin}${url.pathname}?url=${url.searchParams.get('url') || ''}`
+  }
+  if (url.pathname.startsWith('/api/cloud/play/')) {
+    return `${url.origin}${url.pathname}`
+  }
+  return ''
 }

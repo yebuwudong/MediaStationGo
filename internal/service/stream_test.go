@@ -8,9 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -223,13 +221,7 @@ func TestServeFileRejectsCloudMediaWhenSelectedModeDisabled(t *testing.T) {
 
 func newStreamTestRepo(t *testing.T) *repository.Container {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Media{}, &model.Setting{})
 	return repository.New(db)
 }
 

@@ -244,10 +244,11 @@ func OrganizeTaskMetrics(res *OrganizeResult) map[string]int64 {
 		return nil
 	}
 	metrics := map[string]int64{
-		"organized": int64(res.Organized),
-		"replaced":  int64(res.Replaced),
-		"skipped":   int64(res.Skipped),
-		"errors":    int64(len(res.Errors)),
+		"organized":    int64(res.Organized),
+		"replaced":     int64(res.Replaced),
+		"reclassified": int64(res.Reclassified),
+		"skipped":      int64(res.Skipped),
+		"errors":       int64(len(res.Errors)),
 	}
 	var scanVisited, scanAdded, scanUpdated, scanRemoved int64
 	for _, scan := range res.Scans {
@@ -269,9 +270,10 @@ func OrganizeTaskMetrics(res *OrganizeResult) map[string]int64 {
 	for reason, count := range OrganizeSkipReasonCounts(res) {
 		metrics["skip_"+organizeMetricKey(reason)] = int64(count)
 	}
-	var scrapeMatched int64
+	var scrapeMatched, scrapeProcessed int64
 	for _, scrape := range res.Scrapes {
 		scrapeMatched += int64(scrape.Matched)
+		scrapeProcessed += int64(scrape.Processed)
 		if scrape.Error != "" {
 			metrics["scrape_errors"]++
 		}
@@ -282,6 +284,7 @@ func OrganizeTaskMetrics(res *OrganizeResult) map[string]int64 {
 	if len(res.Scrapes) > 0 {
 		metrics["scrapes"] = int64(len(res.Scrapes))
 		metrics["scrape_matched"] = scrapeMatched
+		metrics["scrape_processed"] = scrapeProcessed
 	}
 	return metrics
 }
@@ -302,7 +305,7 @@ func OrganizeTaskDetails(res *OrganizeResult, limit int) []string {
 		}
 	}
 	for _, item := range res.Items {
-		if item.Action != "error" && item.Action != "skip" {
+		if item.Action != "error" && item.Action != "skip" && item.Action != "reclassify" && item.Action != "cleanup" {
 			continue
 		}
 		line := strings.TrimSpace(item.Source)

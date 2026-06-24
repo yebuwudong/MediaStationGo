@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
@@ -179,13 +178,7 @@ func TestResolveAccessibleMappedPathMapsWindowsDownloadVariants(t *testing.T) {
 }
 
 func TestDeleteCloudLibraryPurgesMountWithoutRecycleBin(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
 	repos := repository.New(db)
 	lib := model.Library{Name: "OpenList · 剑来", Path: "cloud://openlist/Anime/JianLai", Type: "anime", Enabled: true}
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
@@ -266,13 +259,7 @@ func TestGroupMediaVersionsMergesEpisodeByExternalIDAcrossLibraries(t *testing.T
 }
 
 func TestUpdateMediaMetadataMarksManualMatch(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
 	repos := repository.New(db)
 	lib := model.Library{Name: "自采集", Path: "/media/custom", Type: "movie", Enabled: true}
 	if err := repos.Library.Create(t.Context(), &lib); err != nil {
@@ -309,13 +296,7 @@ func TestUpdateMediaMetadataMarksManualMatch(t *testing.T) {
 }
 
 func TestMediaUpsertBackfillsExternalIDsForPendingCloudRows(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Media{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Media{})
 	repos := repository.New(db)
 	path := "cloud://openlist/国漫/折腰 (2025) {tmdb-296753}/Season 1/折腰.S01E01.mkv"
 	if err := repos.DB.Create(&model.Media{
@@ -350,13 +331,7 @@ func TestMediaUpsertBackfillsExternalIDsForPendingCloudRows(t *testing.T) {
 }
 
 func TestMediaUpsertCorrectsCloudExternalIDConflicts(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Media{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Media{})
 	repos := repository.New(db)
 	path := "cloud://openlist/国产剧/折腰 (2025) {tmdb-296753}/Season 1/折腰.S01E01.mkv"
 	if err := repos.DB.Create(&model.Media{
@@ -392,13 +367,7 @@ func TestMediaUpsertCorrectsCloudExternalIDConflicts(t *testing.T) {
 }
 
 func TestRepairCloudPathMetadataBackfillsExistingPlaceholders(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Media{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Media{})
 	repos := repository.New(db)
 	path := "cloud://openlist/动画电影/雄狮少年2 (2024) {tmdb-1154478}/雄狮少年2 (2024) - 2160p.WEB-DL.H.265.DDP 5.1-ADWeb.mp4"
 	if err := repos.DB.Create(&model.Media{
@@ -427,13 +396,7 @@ func TestRepairCloudPathMetadataBackfillsExistingPlaceholders(t *testing.T) {
 }
 
 func TestRepairCloudPathMetadataCorrectsConflictingMatchedID(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Media{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Media{})
 	repos := repository.New(db)
 	path := "cloud://openlist/国产剧/折腰 (2025) {tmdb-296753}/Season 1/折腰.S01E01.mkv"
 	if err := repos.DB.Create(&model.Media{
@@ -465,13 +428,7 @@ func TestRepairCloudPathMetadataCorrectsConflictingMatchedID(t *testing.T) {
 }
 
 func TestSoftDeleteCloudMediaPurgesRecordWithoutRecycleBin(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Media{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Media{})
 	repos := repository.New(db)
 	media := model.Media{
 		Base:    model.Base{ID: "cloud-media"},
@@ -504,13 +461,7 @@ func TestSoftDeleteCloudMediaPurgesRecordWithoutRecycleBin(t *testing.T) {
 }
 
 func TestListRecycleBinPrunesOldRowsOverLimit(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Media{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Media{})
 	repos := repository.New(db)
 	now := time.Now()
 	for i := 0; i < maxRecycleBinRecords+5; i++ {
@@ -553,13 +504,7 @@ func TestListRecycleBinPrunesOldRowsOverLimit(t *testing.T) {
 }
 
 func TestSoftDeleteInvalidatesMediaAndStatsCache(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Media{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Media{})
 	repos := repository.New(db)
 	media := model.Media{
 		Base:  model.Base{ID: "local-media"},
