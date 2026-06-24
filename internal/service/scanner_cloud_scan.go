@@ -9,6 +9,30 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
 
+type cloudScanImportRequest struct {
+	provider      string
+	candidates    []cloudCandidate
+	existingMedia map[string]existingCloudMedia
+	writeBatch    *localMediaWriteBatch
+	probeBudget   *int
+	progress      *cloudScanProgressState
+	result        *ScanResult
+}
+
+type cloudScanImportResult struct {
+	seen              map[string]struct{}
+	touchedLibraryIDs []string
+	scopeLibraryIDs   []string
+}
+
+type cloudLibraryScanCompletion struct {
+	libraryID         string
+	touchedLibraryIDs []string
+	result            *ScanResult
+	progress          *cloudScanProgressState
+	autoScrape        bool
+}
+
 func (s *ScannerService) scanCloudLibrary(ctx context.Context, lib *model.Library, mount CloudMountInfo, autoScrape bool) (*ScanResult, error) {
 	res := &ScanResult{LibraryID: lib.ID}
 	if s.storage == nil {
@@ -27,7 +51,6 @@ func (s *ScannerService) scanCloudLibrary(ctx context.Context, lib *model.Librar
 	rootDisplayDir := mount.DisplayDir
 	autoCategoryRoot := cloudRootMountNeedsAutoCategory(mount)
 	scopeIDs := s.cloudScanLibraryScopeIDs(ctx, lib, mount)
-	seen := make(map[string]struct{})
 	progress := newCloudScanProgressState()
 	progress.publish(s, lib.ID, res, "listing", true)
 	candidates, err := s.collectCloudScanCandidates(ctx, lib, cloudScanCandidateRequest{
@@ -49,53 +72,85 @@ func (s *ScannerService) scanCloudLibrary(ctx context.Context, lib *model.Librar
 	sortCloudCandidatesByRefreshPriority(candidates, existingMedia)
 	writeBatch := newLocalMediaWriteBatch(s, ctx, res, 100)
 	probeBudget := maxCloudMediaProbeQueuePerScan
-	targetLibs := map[string]*model.Library{"": lib}
-	touchedLibraryIDs := []string{}
-	for _, candidate := range candidates {
-		select {
-		case <-ctx.Done():
-			return res, ctx.Err()
-		default:
-		}
-		targetLib := lib
-		if candidate.categoryDisplayDir != "" {
-			if cached, ok := targetLibs[candidate.categoryDisplayDir]; ok {
-				targetLib = cached
-			} else if categoryLib, err := s.ensureCloudAutoCategoryLibrary(ctx, lib, typ, candidate.categoryDisplayDir); err == nil && categoryLib != nil {
-				targetLib = categoryLib
-				targetLibs[candidate.categoryDisplayDir] = categoryLib
-				scopeIDs = appendUniqueLibraryIDs(scopeIDs, categoryLib.ID)
-			} else if err != nil {
-				s.log.Warn("ensure cloud auto category library failed",
-					zap.String("library_id", lib.ID),
-					zap.String("provider", typ),
-					zap.String("category", candidate.categoryDisplayDir),
-					zap.Error(err))
-			}
-		}
-		touchedLibraryIDs = appendUniqueLibraryIDs(touchedLibraryIDs, targetLib.ID)
-		seen[candidate.path] = struct{}{}
-		s.ingestCloudFile(ctx, targetLib, typ, candidate.ref, candidate.path, candidate.name, candidate.size, candidate.localMeta, existingMedia, writeBatch, &probeBudget, res)
-		progress.publish(s, lib.ID, res, "importing", res.Visited == 1 || res.Visited%100 == 0)
+	imported, err := s.importCloudScanCandidates(ctx, lib, cloudScanImportRequest{
+		provider:      typ,
+		candidates:    candidates,
+		existingMedia: existingMedia,
+		writeBatch:    writeBatch,
+		probeBudget:   &probeBudget,
+		progress:      progress,
+		result:        res,
+	})
+	if err != nil {
+		return res, err
 	}
+	scopeIDs = appendUniqueLibraryIDs(scopeIDs, imported.scopeLibraryIDs...)
 	writeBatch.Flush()
-	removed, err := s.pruneMissingCloudMediaForLibraries(ctx, scopeIDs, seen)
+	removed, err := s.pruneMissingCloudMediaForLibraries(ctx, scopeIDs, imported.seen)
 	if err != nil {
 		s.log.Warn("prune missing cloud media failed", zap.String("library_id", lib.ID), zap.Error(err))
 	} else {
 		res.Removed = removed
 	}
-	publishCloudScanFinished(s, lib.ID, res, progress)
+	s.completeCloudLibraryScan(ctx, cloudLibraryScanCompletion{
+		libraryID:         lib.ID,
+		touchedLibraryIDs: imported.touchedLibraryIDs,
+		result:            res,
+		progress:          progress,
+		autoScrape:        autoScrape,
+	})
+	return res, nil
+}
+
+func (s *ScannerService) importCloudScanCandidates(ctx context.Context, rootLib *model.Library, req cloudScanImportRequest) (cloudScanImportResult, error) {
+	imported := cloudScanImportResult{
+		seen:              make(map[string]struct{}),
+		touchedLibraryIDs: []string{},
+		scopeLibraryIDs:   []string{},
+	}
+	targetLibs := map[string]*model.Library{"": rootLib}
+	for _, candidate := range req.candidates {
+		select {
+		case <-ctx.Done():
+			return imported, ctx.Err()
+		default:
+		}
+		targetLib := rootLib
+		if candidate.categoryDisplayDir != "" {
+			if cached, ok := targetLibs[candidate.categoryDisplayDir]; ok {
+				targetLib = cached
+			} else if categoryLib, err := s.ensureCloudAutoCategoryLibrary(ctx, rootLib, req.provider, candidate.categoryDisplayDir); err == nil && categoryLib != nil {
+				targetLib = categoryLib
+				targetLibs[candidate.categoryDisplayDir] = categoryLib
+				imported.scopeLibraryIDs = appendUniqueLibraryIDs(imported.scopeLibraryIDs, categoryLib.ID)
+			} else if err != nil {
+				s.log.Warn("ensure cloud auto category library failed",
+					zap.String("library_id", rootLib.ID),
+					zap.String("provider", req.provider),
+					zap.String("category", candidate.categoryDisplayDir),
+					zap.Error(err))
+			}
+		}
+		imported.touchedLibraryIDs = appendUniqueLibraryIDs(imported.touchedLibraryIDs, targetLib.ID)
+		imported.seen[candidate.path] = struct{}{}
+		s.ingestCloudFile(ctx, targetLib, req.provider, candidate.ref, candidate.path, candidate.name, candidate.size, candidate.localMeta, req.existingMedia, req.writeBatch, req.probeBudget, req.result)
+		req.progress.publish(s, rootLib.ID, req.result, "importing", req.result.Visited == 1 || req.result.Visited%100 == 0)
+	}
+	return imported, nil
+}
+
+func (s *ScannerService) completeCloudLibraryScan(ctx context.Context, req cloudLibraryScanCompletion) {
+	publishCloudScanFinished(s, req.libraryID, req.result, req.progress)
 	s.invalidateMediaCache(ctx)
-	for _, targetID := range appendUniqueLibraryIDs(touchedLibraryIDs, lib.ID) {
+	targetIDs := appendUniqueLibraryIDs(req.touchedLibraryIDs, req.libraryID)
+	for _, targetID := range targetIDs {
 		s.maybeGenerateSTRMAfterScan(targetID)
 	}
-	if scanHasImportChanges(res) && autoScrape && s.scraper != nil && s.scraper.AnyEnabled() && s.autoScrapeEnabled(ctx) {
-		for _, targetID := range appendUniqueLibraryIDs(touchedLibraryIDs, lib.ID) {
+	if scanHasImportChanges(req.result) && req.autoScrape && s.scraper != nil && s.scraper.AnyEnabled() && s.autoScrapeEnabled(ctx) {
+		for _, targetID := range targetIDs {
 			s.startAutoScrape(ctx, targetID)
 		}
 	}
-	return res, nil
 }
 
 func scanHasImportChanges(res *ScanResult) bool {
