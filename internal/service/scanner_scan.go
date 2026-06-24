@@ -59,21 +59,36 @@ func (s *ScannerService) scanLibrary(ctx context.Context, libraryID string, auto
 		return &ScanResult{LibraryID: lib.ID}, err
 	}
 	res := &ScanResult{LibraryID: lib.ID}
-	seen := make(map[string]struct{})
-	seenInodes := make(map[string]string)
 	writeBatch := newLocalMediaWriteBatch(s, ctx, res, 100)
 	existingMedia, err := s.existingLocalMediaSnapshot(ctx, lib.ID)
 	if err != nil {
 		s.log.Warn("load existing local media snapshot failed", zap.String("library_id", lib.ID), zap.Error(err))
 		existingMedia = nil
-	} else {
-		for path, existing := range existingMedia {
-			if existing.FileID != "" {
-				seenInodes[existing.FileID] = path
-			}
-		}
 	}
 
+	seen, walkErr := s.scanLocalLibraryFiles(ctx, lib, existingMedia, writeBatch, res)
+	writeBatch.Flush()
+	if walkErr != nil {
+		addScanError(res, lib.Path, walkErr)
+		if res.Added+res.Updated > 0 {
+			s.invalidateMediaCache(ctx)
+		}
+		return res, walkErr
+	}
+	removed, err := s.pruneMissingMedia(ctx, lib.ID, seen)
+	if err != nil {
+		s.log.Warn("prune missing media failed", zap.String("library_id", lib.ID), zap.Error(err))
+	} else {
+		res.Removed = removed
+	}
+
+	s.finishLocalLibraryScan(ctx, lib, res, autoScrape)
+	return res, nil
+}
+
+func (s *ScannerService) scanLocalLibraryFiles(ctx context.Context, lib *model.Library, existingMedia map[string]existingLocalMedia, writeBatch *localMediaWriteBatch, res *ScanResult) (map[string]struct{}, error) {
+	seen := make(map[string]struct{})
+	seenInodes := existingLocalMediaFileIDs(existingMedia)
 	walkFn := func(path string, info walkInfo) error {
 		select {
 		case <-ctx.Done():
@@ -91,23 +106,20 @@ func (s *ScannerService) scanLibrary(ctx context.Context, libraryID string, auto
 		s.ingestFile(ctx, lib, path, info.size, seenInodes, existingMedia, writeBatch, res)
 		return nil
 	}
+	return seen, walk(lib.Path, walkFn)
+}
 
-	walkErr := walk(lib.Path, walkFn)
-	writeBatch.Flush()
-	if walkErr != nil {
-		addScanError(res, lib.Path, walkErr)
-		if res.Added+res.Updated > 0 {
-			s.invalidateMediaCache(ctx)
+func existingLocalMediaFileIDs(existingMedia map[string]existingLocalMedia) map[string]string {
+	seenInodes := make(map[string]string)
+	for path, existing := range existingMedia {
+		if existing.FileID != "" {
+			seenInodes[existing.FileID] = path
 		}
-		return res, walkErr
 	}
-	removed, err := s.pruneMissingMedia(ctx, lib.ID, seen)
-	if err != nil {
-		s.log.Warn("prune missing media failed", zap.String("library_id", lib.ID), zap.Error(err))
-	} else {
-		res.Removed = removed
-	}
+	return seenInodes
+}
 
+func (s *ScannerService) finishLocalLibraryScan(ctx context.Context, lib *model.Library, res *ScanResult, autoScrape bool) {
 	s.hub.Publish("scan", map[string]any{
 		"library_id":  lib.ID,
 		"finished":    true,
@@ -127,7 +139,6 @@ func (s *ScannerService) scanLibrary(ctx context.Context, libraryID string, auto
 	if scanHasImportChanges(res) && autoScrape && s.scraper != nil && s.scraper.AnyEnabled() && s.autoScrapeEnabled(ctx) {
 		s.startAutoScrape(ctx, lib.ID)
 	}
-	return res, nil
 }
 
 func (s *ScannerService) scanMountedCloudLibrary(ctx context.Context, lib *model.Library, mount CloudMountInfo, autoScrape bool) (*ScanResult, error) {
