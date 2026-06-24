@@ -65,34 +65,53 @@ function DiscoverCard({
   onSelect: (item: DiscoverItem) => void
 }) {
   const source = discoverItemSource(item)
+  const imageCandidates = useMemo(
+    () =>
+      [item.poster_url, item.backdrop_url]
+        .map((value) => value?.trim())
+        .filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index),
+    [item.poster_url, item.backdrop_url],
+  )
+  const [imageIndex, setImageIndex] = useState(0)
   const [posterRetry, setPosterRetry] = useState(0)
   const [posterUnavailable, setPosterUnavailable] = useState(false)
   const posterVersion = [imageVersion, posterRetry > 0 ? `r${posterRetry}` : ''].filter(Boolean).join('-')
+  const activeImage = imageCandidates[imageIndex] ?? ''
   const shouldRefreshCache = Boolean(
     (imageVersion && refreshImageVersion === imageVersion) || posterRetry > 0,
   )
   const posterSrc = useMemo(
     () =>
-      imageURL(item.poster_url, posterVersion, {
+      imageURL(activeImage, posterVersion, {
         refreshCache: shouldRefreshCache,
         retryFailed: true,
       }),
-    [item.poster_url, posterVersion, shouldRefreshCache],
+    [activeImage, posterVersion, shouldRefreshCache],
   )
 
   useEffect(() => {
+    setImageIndex(0)
     setPosterRetry(0)
     setPosterUnavailable(false)
-  }, [item.poster_url])
+  }, [item.poster_url, item.backdrop_url, imageVersion])
 
   useEffect(() => {
-    if (!posterUnavailable || posterRetry >= 3) return
+    if (!posterUnavailable) return
+    if (imageIndex + 1 < imageCandidates.length) {
+      const timer = window.setTimeout(() => {
+        setImageIndex((current) => Math.min(current + 1, imageCandidates.length - 1))
+        setPosterRetry(0)
+        setPosterUnavailable(false)
+      }, 150)
+      return () => window.clearTimeout(timer)
+    }
+    if (posterRetry >= 3) return
     const timer = window.setTimeout(() => {
       setPosterRetry((current) => current + 1)
       setPosterUnavailable(false)
     }, 1200 * (posterRetry + 1))
     return () => window.clearTimeout(timer)
-  }, [posterRetry, posterUnavailable])
+  }, [imageCandidates.length, imageIndex, posterRetry, posterUnavailable])
 
   const markPosterUnavailable = () => setPosterUnavailable(true)
 

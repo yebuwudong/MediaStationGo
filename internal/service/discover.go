@@ -178,6 +178,10 @@ func tmdbDiscoverPath(key string) string {
 		return "/trending/movie/day"
 	case "tmdb_trending_week", "trending_week":
 		return "/trending/movie/week"
+	case "tmdb_latest_movie", "latest_movie":
+		return "/movie/now_playing"
+	case "tmdb_latest_tv", "latest_tv":
+		return "/tv/on_the_air"
 	case "tmdb_popular_movie", "popular_movie":
 		return "/movie/popular"
 	case "tmdb_popular_tv", "popular_tv":

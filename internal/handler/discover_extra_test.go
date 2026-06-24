@@ -65,3 +65,16 @@ func TestDefaultDiscoverSectionKeysSkipDisabledProviders(t *testing.T) {
 		t.Fatal("default keys should keep enabled providers")
 	}
 }
+
+func TestDefaultDiscoverSectionKeysIncludeLatestTMDbRails(t *testing.T) {
+	keys := defaultDiscoverSectionKeys(t.Context(), &service.Container{})
+	keySet := map[string]struct{}{}
+	for _, key := range keys {
+		keySet[key] = struct{}{}
+	}
+	for _, key := range []string{"tmdb_latest_movie", "tmdb_latest_tv"} {
+		if _, ok := keySet[key]; !ok {
+			t.Fatalf("default discover keys should include %q: %v", key, keys)
+		}
+	}
+}

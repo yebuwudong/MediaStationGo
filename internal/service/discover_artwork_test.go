@@ -83,6 +83,21 @@ func TestDiscoverWarmArtworkNoImageProxyIsNoop(t *testing.T) {
 	}
 }
 
+func TestTMDbDiscoverPathIncludesLatestSections(t *testing.T) {
+	cases := map[string]string{
+		"tmdb_latest_movie":   "/movie/now_playing",
+		"latest_movie":        "/movie/now_playing",
+		"tmdb_latest_tv":      "/tv/on_the_air",
+		"latest_tv":           "/tv/on_the_air",
+		"tmdb_upcoming_movie": "/movie/upcoming",
+	}
+	for key, want := range cases {
+		if got := tmdbDiscoverPath(key); got != want {
+			t.Fatalf("tmdbDiscoverPath(%q) = %q, want %q", key, got, want)
+		}
+	}
+}
+
 func waitForDiscoverArtworkCache(t *testing.T, calls *int32, wantCalls int32, cachePath, raw string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

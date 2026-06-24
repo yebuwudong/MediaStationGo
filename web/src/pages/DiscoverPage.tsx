@@ -8,6 +8,7 @@ import {
   defaultSections,
   discoverStorageKey,
   readSavedSections,
+  serializeSavedSections,
 } from './discoverPageModel'
 
 export function DiscoverPage() {
@@ -74,7 +75,7 @@ export function DiscoverPage() {
       }
       return next
     })
-    window.localStorage.setItem(discoverStorageKey, JSON.stringify(selected))
+    window.localStorage.setItem(discoverStorageKey, serializeSavedSections(selected))
 
     let pending = selected.length
     const markDone = () => {

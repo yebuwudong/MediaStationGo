@@ -25,9 +25,12 @@ type discoverSectionDef struct {
 var discoverSectionCatalog = []discoverSectionDef{
 	{Key: "tmdb_trending_day", Label: "TMDb 今日趋势", Provider: "tmdb"},
 	{Key: "tmdb_trending_week", Label: "TMDb 本周热门", Provider: "tmdb"},
+	{Key: "tmdb_latest_movie", Label: "TMDb 最新电影", Provider: "tmdb"},
+	{Key: "tmdb_latest_tv", Label: "TMDb 最新剧集", Provider: "tmdb"},
 	{Key: "tmdb_popular_movie", Label: "TMDb 热门电影", Provider: "tmdb"},
 	{Key: "tmdb_popular_tv", Label: "TMDb 热门剧集", Provider: "tmdb"},
 	{Key: "tmdb_top_rated_movie", Label: "TMDb 高分电影", Provider: "tmdb"},
+	{Key: "tmdb_upcoming_movie", Label: "TMDb 即将上映", Provider: "tmdb"},
 	{Key: "douban_hot_movie", Label: "豆瓣热门电影", Provider: "douban"},
 	{Key: "douban_hot_tv", Label: "豆瓣热门剧集", Provider: "douban"},
 	{Key: "douban_top_movie", Label: "豆瓣高分电影", Provider: "douban"},
@@ -94,7 +97,7 @@ func enabledDiscoverSections(ctx context.Context, svc *service.Container) []disc
 }
 
 func defaultDiscoverSectionKeys(ctx context.Context, svc *service.Container) []string {
-	preferred := []string{"tmdb_trending_day", "douban_hot_movie", "douban_hot_tv", "bangumi_calendar"}
+	preferred := []string{"tmdb_trending_day", "tmdb_latest_movie", "tmdb_latest_tv", "douban_hot_movie", "douban_hot_tv", "bangumi_calendar"}
 	enabled := map[string]struct{}{}
 	for _, section := range enabledDiscoverSections(ctx, svc) {
 		enabled[section.Key] = struct{}{}
@@ -124,7 +127,7 @@ func discoverSectionProvider(key string) string {
 		}
 	}
 	switch key {
-	case "trending_day", "trending_week", "popular_movie", "popular_tv", "top_rated_movie", "upcoming_movie":
+	case "trending_day", "trending_week", "latest_movie", "latest_tv", "popular_movie", "popular_tv", "top_rated_movie", "upcoming_movie":
 		return "tmdb"
 	default:
 		return ""
@@ -144,8 +147,8 @@ func discoverProviderEnabled(ctx context.Context, svc *service.Container, provid
 
 func discoverSectionItems(ctx context.Context, svc *service.Container, k string) ([]service.ExternalMediaResult, error) {
 	switch k {
-	case "tmdb_trending_day", "tmdb_trending_week", "tmdb_popular_movie", "tmdb_popular_tv", "tmdb_top_rated_movie",
-		"trending_day", "trending_week", "popular_movie", "popular_tv", "top_rated_movie", "upcoming_movie":
+	case "tmdb_trending_day", "tmdb_trending_week", "tmdb_latest_movie", "tmdb_latest_tv", "tmdb_popular_movie", "tmdb_popular_tv", "tmdb_top_rated_movie", "tmdb_upcoming_movie",
+		"trending_day", "trending_week", "latest_movie", "latest_tv", "popular_movie", "popular_tv", "top_rated_movie", "upcoming_movie":
 		return svc.Discover.TMDbSection(ctx, k)
 	case "douban_hot_movie", "douban_hot_tv", "douban_top_movie":
 		if svc.Douban == nil {
