@@ -62,12 +62,21 @@ func (s *SubscriptionService) runSiteSearch(ctx context.Context, sub *model.Subs
 		Availability: availability,
 	}
 	queueResult := s.enqueueSiteSearchCandidates(ctx, sub, candidates, runState)
-	availability = s.finalizePendingAvailability(sub, runState.Availability)
-	seen = trimSiteSearchSeen(runState.Seen)
+	availability = s.finishSiteSearchRun(ctx, sub, guidKey, runState)
+	return s.handleSiteSearchQueueResult(sub, keyword, queueResult, selectionStats, availability)
+}
+
+func (s *SubscriptionService) finishSiteSearchRun(ctx context.Context, sub *model.Subscription, guidKey string, state *siteSearchRunState) LocalAvailability {
+	availability := s.finalizePendingAvailability(sub, state.Availability)
+	seen := trimSiteSearchSeen(state.Seen)
 	_ = s.repo.Setting.Set(ctx, guidKey, strings.Join(seen, "\n"))
 	now := time.Now()
 	_ = s.repo.DB.Model(sub).Updates(map[string]any{"last_run_at": &now}).Error
 	_ = s.archiveCompletedSubscription(ctx, sub, availability)
+	return availability
+}
+
+func (s *SubscriptionService) handleSiteSearchQueueResult(sub *model.Subscription, keyword string, queueResult siteSearchQueueResult, selectionStats siteSearchSelectionStats, availability LocalAvailability) (int, error) {
 	if queueResult.Queued > 0 {
 		s.hub.Publish("subscription", map[string]any{
 			"id":        sub.ID,
