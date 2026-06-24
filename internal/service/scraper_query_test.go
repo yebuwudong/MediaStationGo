@@ -272,6 +272,42 @@ func TestScrapeQueryCandidatesUseSeriesLibraryRootWhenMountedAtShowFolder(t *tes
 	}
 }
 
+func TestScrapeQueryCandidatesSkipEpisodeOnlyTitles(t *testing.T) {
+	lib := &model.Library{
+		Path: `F:\media\电视剧\欧美剧`,
+		Type: "tv",
+	}
+	media := &model.Media{
+		Title:      "第1期上：最狠开局！五哈团命悬一线好刺激",
+		Path:       `F:\media\电视剧\欧美剧\第1期上：最狠开局！五哈团命悬一线好刺激 (2026)\Season 6\第1期上：最狠开局！五哈团命悬一线好刺激 - S06E01 - 第 1 集.mkv`,
+		SeasonNum:  6,
+		EpisodeNum: 1,
+	}
+
+	got := scrapeQueryCandidates(media, lib)
+	for _, candidate := range got {
+		if unsafeAutomaticEpisodeQuery(candidate) {
+			t.Fatalf("query candidates kept unsafe episode title %q: %#v", candidate, got)
+		}
+	}
+}
+
+func TestOrganizeMetadataRejectsEpisodeOnlyQuery(t *testing.T) {
+	match := &Match{Title: "错误节目", Year: 2026, TMDbID: 284725}
+	for _, query := range []string{"第 11 集", "第1期上：最狠开局！五哈团命悬一线好刺激"} {
+		if organizeMetadataMatchTrusted(query, 2026, match) {
+			t.Fatalf("episode-only query %q must not be trusted for automatic match", query)
+		}
+	}
+}
+
+func TestSeriesTitleFromMediaPathIgnoresEpisodeOnlyFolder(t *testing.T) {
+	got := seriesTitleFromMediaPath(`F:\media\电视剧\欧美剧\第 11 集 (2026)\Season 6\第 11 集 - S06E11.mkv`)
+	if got != "" {
+		t.Fatalf("series title from episode-only folder = %q, want empty", got)
+	}
+}
+
 func TestMediaIsEpisodicUsesEpisodePatternInPath(t *testing.T) {
 	lib := &model.Library{
 		Path: `/media/movies`,

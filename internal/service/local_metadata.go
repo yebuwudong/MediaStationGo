@@ -419,13 +419,10 @@ func mergeArtworkMetadata(meta *LocalMetadata, mediaPath, showBaseDir string) {
 func mergeEpisodeMetadata(dst, episode *LocalMetadata, doc *nfoDocument) {
 	showTitle := cleanXMLText(doc.ShowTitle)
 	// 整剧标题: 优先 <showtitle>(MoviePilot 在单集 NFO 里也会写整剧名);
-	// 其次保留 dst 已有(来自 tvshow.nfo);最后才退而用单集名占位。
+	// 其次保留 dst 已有(来自 tvshow.nfo)。不要把单集 <title> 当整剧标题,
+	// 否则会把"第 11 集/第几期"整理成整剧目录并污染后续 TMDb 查询。
 	if showTitle != "" {
 		dst.Title = showTitle
-	} else if dst.Title == "" {
-		if episodeTitle := cleanXMLText(doc.Title); episodeTitle != "" {
-			dst.Title = episodeTitle
-		}
 	}
 	// 注意: 不要把单集名 / 单集 originaltitle 写进 OriginalName(整剧原名,分组键)。
 	if episodeTitle := firstText(episode.EpisodeTitle, doc.Title); episodeTitle != "" && !strings.EqualFold(episodeTitle, showTitle) {

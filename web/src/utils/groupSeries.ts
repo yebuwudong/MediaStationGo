@@ -122,7 +122,8 @@ const SERIES_SPECIAL_CJK_RE =
 function normalizePathSeriesTitle(value?: string): string {
   const title = normalizeTitle(value)
   const stripped = stripSeriesSpecialSuffix(title)
-  return stripped || title
+  const normalized = stripped || title
+  return unsafeEpisodeTitle(normalized) ? '' : normalized
 }
 
 function stripSeriesSpecialSuffix(title: string): string {
@@ -131,6 +132,17 @@ function stripSeriesSpecialSuffix(title: string): string {
     if (stripped && stripped !== title) return stripped
   }
   return title
+}
+
+const EPISODE_ONLY_TITLE_RE =
+  /^(?:e(?:p(?:isode)?)?\s*\d{1,3}|episode\s*\d{1,3}|第\s*[0-9一二三四五六七八九十百零两]+\s*[集期话話](?:\s*[上下])?|第\s*[集期话話])$/i
+
+const EPISODE_TITLE_RE =
+  /^第\s*[0-9一二三四五六七八九十百零两]+\s*[集期话話](?:\s*[上下])?\s*[:：].+/
+
+function unsafeEpisodeTitle(title: string): boolean {
+  const value = title.trim()
+  return EPISODE_ONLY_TITLE_RE.test(value) || EPISODE_TITLE_RE.test(value)
 }
 
 export function seriesTitleFromPath(path?: string): string {

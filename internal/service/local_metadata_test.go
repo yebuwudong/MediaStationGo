@@ -79,6 +79,39 @@ func TestReadLocalEpisodeMetadataMergesShowAndEpisode(t *testing.T) {
 	}
 }
 
+func TestReadLocalEpisodeMetadataWithoutShowTitleDoesNotUseEpisodeTitleAsSeries(t *testing.T) {
+	root := t.TempDir()
+	showDir := filepath.Join(root, "哈哈哈哈哈")
+	seasonDir := filepath.Join(showDir, "Season 06")
+	if err := os.MkdirAll(seasonDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mediaPath := filepath.Join(seasonDir, "哈哈哈哈哈 - S06E11.mkv")
+	if err := os.WriteFile(mediaPath, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nfoPath(mediaPath), []byte(`<episodedetails><title>第 11 集</title><season>6</season><episode>11</episode><uniqueid type="tmdb">4375419</uniqueid></episodedetails>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ReadLocalMetadata(mediaPath, root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("metadata is nil")
+	}
+	if got.Title != "" {
+		t.Fatalf("episode title must not become series title, got %q", got.Title)
+	}
+	if got.EpisodeTitle != "第 11 集" || got.SeasonNum != 6 || got.EpisodeNum != 11 {
+		t.Fatalf("episode metadata not preserved: %+v", got)
+	}
+	if got.TMDbID != 0 {
+		t.Fatalf("episode-level tmdb id must not become series tmdb id, got %d", got.TMDbID)
+	}
+}
+
 func TestReadLocalEpisodeMetadataIgnoresNoneNumericFields(t *testing.T) {
 	root := t.TempDir()
 	showDir := filepath.Join(root, "链锯人 总集篇 (2025)")

@@ -55,6 +55,13 @@ var releaseBoundaryTokenSet = map[string]struct{}{
 	"x264": {}, "x265": {}, "h264": {}, "h265": {}, "hevc": {}, "avc": {},
 }
 
+var (
+	episodeOnlyQueryRE       = regexp.MustCompile(`(?i)^\s*(?:e(?:p(?:isode)?)?\s*\d{1,3}|episode\s*\d{1,3}|第\s*[0-9一二三四五六七八九十百零两]+\s*[集期话話](?:\s*[上下])?)\s*$`)
+	episodeTitleQueryRE      = regexp.MustCompile(`^\s*第\s*[0-9一二三四五六七八九十百零两]+\s*[集期话話](?:\s*[上下])?\s*[:：].+`)
+	genericEpisodeWordsRE    = regexp.MustCompile(`^\s*第\s*[集期话話]\s*$`)
+	episodeReleaseTitleTagRE = regexp.MustCompile(`(?i)(?:^|[\s._-])s\d{1,2}e\d{1,3}(?:[\s._-]|$)`)
+)
+
 // bracketedTag matches "[anything]", "(anything)" or "{anything}" segments.
 var bracketedTag = regexp.MustCompile(`[\[\(\{][^\]\)\}]*[\]\)\}]`)
 var multiWordNoise = []*regexp.Regexp{
@@ -150,6 +157,9 @@ func scrapeQueryCandidates(m *model.Media, lib *model.Library) []string {
 			cleaned = strings.TrimSpace(raw)
 		}
 		for _, candidate := range titleCandidates(cleaned) {
+			if unsafeAutomaticEpisodeQuery(candidate) {
+				continue
+			}
 			key := strings.ToLower(candidate)
 			if _, ok := seen[key]; ok || candidate == "" {
 				continue
@@ -393,4 +403,27 @@ func librarySupportsSeasons(lib *model.Library) bool {
 	default:
 		return false
 	}
+}
+
+func unsafeAutomaticEpisodeQuery(query string) bool {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return true
+	}
+	if episodeOnlyQueryRE.MatchString(query) || genericEpisodeWordsRE.MatchString(query) {
+		return true
+	}
+	if episodeTitleQueryRE.MatchString(query) {
+		return true
+	}
+	_, episode := ParseEpisode(query)
+	if episode > 0 && !looksLikeSeriesReleaseTitle(query) {
+		return true
+	}
+	return false
+}
+
+func looksLikeSeriesReleaseTitle(query string) bool {
+	cleaned, _ := CleanQuery(query)
+	return strings.TrimSpace(cleaned) != "" && episodeReleaseTitleTagRE.MatchString(query)
 }

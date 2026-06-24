@@ -221,7 +221,11 @@ func seriesTitleFromMediaPath(path string) string {
 	if dirIndex < 0 {
 		return ""
 	}
-	return normalizeSeriesPathTitle(parts[dirIndex])
+	title := normalizeSeriesPathTitle(parts[dirIndex])
+	if unsafeAutomaticEpisodeQuery(title) {
+		return ""
+	}
+	return title
 }
 
 func seriesDisplayTitle(media model.Media) string {

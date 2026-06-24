@@ -75,6 +75,73 @@ func TestOrganizeDirectoryRejectsWrongYearScraperRename(t *testing.T) {
 	}
 }
 
+func TestOrganizeDirectoryDoesNotUseEpisodeNFOTitleAsSeriesTitle(t *testing.T) {
+	var queries []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.Query().Get("query"))
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/search/tv" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.URL.Query().Get("query") != "哈哈哈哈哈" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": []any{}})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"results": []map[string]any{{
+				"id":             112732,
+				"name":           "哈哈哈哈哈",
+				"first_air_date": "2026-01-01",
+			}},
+		})
+	}))
+	defer upstream.Close()
+
+	repos := newOrganizerTestRepo(t)
+	cfg := &config.Config{}
+	cfg.Secrets.TMDbAPIKey = "test-key"
+	cfg.Secrets.TMDbAPIProxy = upstream.URL
+	scraper := NewScraperService(cfg, zap.NewNop(), repos, NewTMDbProvider(cfg, zap.NewNop(), nil), nil, nil, nil, NewHub(zap.NewNop()))
+
+	root := t.TempDir()
+	src := filepath.Join(root, "downloads")
+	dest := filepath.Join(root, "media")
+	sourceFile := filepath.Join(src, "哈哈哈哈哈", "Season 06", "哈哈哈哈哈 - S06E11.mkv")
+	writeOrgFile(t, sourceFile, "episode")
+	if err := os.WriteFile(nfoPath(sourceFile), []byte(`<episodedetails><title>第 11 集</title><season>6</season><episode>11</episode><tmdbid>7129825</tmdbid></episodedetails>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	organizer := NewOrganizerService(cfg, zap.NewNop(), repos)
+	organizer.SetScraper(scraper)
+	res, err := organizer.OrganizeDirectory(t.Context(), OrganizeOptions{
+		SourcePath:   src,
+		DestPath:     dest,
+		TransferMode: TransferCopy,
+		MediaType:    "tv",
+	})
+	if err != nil {
+		t.Fatalf("organize directory: %v", err)
+	}
+	if res.Organized != 1 {
+		t.Fatalf("organized = %d, want 1; items=%#v errors=%#v queries=%v", res.Organized, res.Items, res.Errors, queries)
+	}
+	rejected := filepath.Join(dest, "电视剧", "第 11 集", "Season 06", "第 11 集 - S06E11.mkv")
+	if _, err := os.Stat(rejected); err == nil {
+		t.Fatalf("episode title should not be used as series folder: %q", rejected)
+	}
+	want := filepath.Join(dest, "电视剧", "哈哈哈哈哈", "Season 06", "哈哈哈哈哈 - S06E11.mkv")
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("expected organized file at %q: %v; items=%#v queries=%v", want, err, res.Items, queries)
+	}
+	for _, query := range queries {
+		if unsafeAutomaticEpisodeQuery(query) {
+			t.Fatalf("organizer queried unsafe episode title %q; all queries=%v", query, queries)
+		}
+	}
+}
+
 func TestOrganizeDirectoryDedupsByExternalIDBeforeRename(t *testing.T) {
 	scraper, repos, closeServer := newTestScraper(t)
 	defer closeServer()

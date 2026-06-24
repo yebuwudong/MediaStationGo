@@ -138,6 +138,9 @@ func organizeMetadataMatchTrusted(query string, sourceYear int, match *Match) bo
 	if match == nil || strings.TrimSpace(match.Title) == "" {
 		return false
 	}
+	if unsafeAutomaticEpisodeQuery(query) {
+		return false
+	}
 	if sourceYear > 0 && match.Year > 0 {
 		diff := sourceYear - match.Year
 		if diff < 0 {
