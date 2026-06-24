@@ -150,7 +150,7 @@ func organizeMetadataMatchTrusted(query string, sourceYear int, match *Match) bo
 			return false
 		}
 	}
-	return true
+	return automaticMetadataTitleTrusted(query, match)
 }
 
 func organizeMatchFromLocalMetadata(local *LocalMetadata) *Match {

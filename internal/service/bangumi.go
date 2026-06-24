@@ -93,11 +93,12 @@ func (b *BangumiProvider) Search(ctx context.Context, query string) (*Match, err
 		title = r.Name
 	}
 	m := &Match{
-		BangumiID: r.ID,
-		Title:     title,
-		Overview:  r.Summary,
-		PosterURL: normalizeBangumiImageURL(r.Images.Large),
-		Rating:    r.Rating.Score,
+		BangumiID:    r.ID,
+		Title:        title,
+		OriginalName: r.Name,
+		Overview:     r.Summary,
+		PosterURL:    normalizeBangumiImageURL(r.Images.Large),
+		Rating:       r.Rating.Score,
 	}
 	if len(r.Air) >= 4 {
 		_, _ = fmt.Sscanf(r.Air[:4], "%d", &m.Year)

@@ -20,10 +20,10 @@ var noiseTokens = []string{
 	"hdrip", "bluray", "blu-ray", "webrip", "web-dl", "web",
 	"x264", "x265", "h264", "h265", "hevc", "avc", "10bit", "8bit", "hi10p", "hi10",
 	"hdr", "hdr10", "sdr", "dts", "ddp", "ddp5", "dd5", "dd2", "eac3", "truehd",
-	"dovi", "atmos", "aac", "ac3", "flac",
+	"dovi", "atmos", "aac", "ac3", "flac", "fps", "hlg", "dv",
 	"remux", "extended", "uncut", "remastered", "repack", "proper", "internal",
 	"limited", "imax", "directors-cut", "directors_cut",
-	"hkfree", "yify", "rarbg", "ettv", "fgt", "tgx", "ctrlhd", "ntb", "flux",
+	"hkfree", "yify", "rarbg", "ettv", "fgt", "tgx", "ctrlhd", "ntb", "flux", "qhstudio",
 
 	// 流媒体平台 / 字幕组 / 国家版本（动漫常见）
 	"netflix", "nf", "amzn", "hulu", "disney", "max", "hbo",
