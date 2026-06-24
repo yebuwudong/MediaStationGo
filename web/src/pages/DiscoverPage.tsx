@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, Sparkles } from 'lucide-react'
+import { AlertTriangle, RefreshCw, Sparkles } from 'lucide-react'
 
 import { discoverAPI, type DiscoverItem, type DiscoverSection } from '../api/discover'
 import { ContentRow, DiscoverSkeleton } from './DiscoverContentRow'
@@ -19,6 +19,8 @@ export function DiscoverPage() {
   const [sectionsReady, setSectionsReady] = useState(false)
   const [loading, setLoading] = useState(false)
   const [activeItem, setActiveItem] = useState<DiscoverItem | null>(null)
+  const [reloadSeq, setReloadSeq] = useState(0)
+  const [imageVersion, setImageVersion] = useState(() => String(Date.now()))
 
   useEffect(() => {
     let cancelled = false
@@ -101,7 +103,7 @@ export function DiscoverPage() {
     return () => {
       cancelled = true
     }
-  }, [sections, sectionsReady, selected])
+  }, [sections, sectionsReady, selected, reloadSeq])
 
   const sectionMap = useMemo(
     () => new Map(sections.map((section) => [section.key, section])),
@@ -117,6 +119,11 @@ export function DiscoverPage() {
       }
       return [...current, key]
     })
+  }
+
+  const refreshDiscover = () => {
+    setImageVersion(String(Date.now()))
+    setReloadSeq((current) => current + 1)
   }
 
   return (
@@ -136,25 +143,36 @@ export function DiscoverPage() {
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          {sections.map((section) => {
-            const active = selected.includes(section.key)
-            return (
-              <button
-                key={section.key}
-                type="button"
-                onClick={() => toggleSection(section.key)}
-                className={
-                  'rounded-full border px-3 py-1.5 text-xs font-semibold transition ' +
-                  (active
-                    ? 'border-primary-400 bg-primary-400/15 text-brand-500'
-                    : 'border-gray-200 bg-white text-gray-500 hover:border-primary-300 hover:text-ink-600')
-                }
-              >
-                {section.label}
-              </button>
-            )
-          })}
+        <div className="flex flex-col gap-3 lg:items-end">
+          <button
+            type="button"
+            onClick={refreshDiscover}
+            disabled={!sectionsReady || selected.length === 0}
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-ink-600 transition hover:border-primary-300 hover:text-brand-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            刷新
+          </button>
+          <div className="flex flex-wrap justify-start gap-2 lg:justify-end">
+            {sections.map((section) => {
+              const active = selected.includes(section.key)
+              return (
+                <button
+                  key={section.key}
+                  type="button"
+                  onClick={() => toggleSection(section.key)}
+                  className={
+                    'rounded-full border px-3 py-1.5 text-xs font-semibold transition ' +
+                    (active
+                      ? 'border-primary-400 bg-primary-400/15 text-brand-500'
+                      : 'border-gray-200 bg-white text-gray-500 hover:border-primary-300 hover:text-ink-600')
+                  }
+                >
+                  {section.label}
+                </button>
+              )
+            })}
+          </div>
         </div>
       </header>
 
@@ -181,6 +199,7 @@ export function DiscoverPage() {
                 key={key}
                 title={sectionMap.get(key)?.label ?? key}
                 items={items}
+                imageVersion={imageVersion}
                 onSelect={setActiveItem}
               />
             )

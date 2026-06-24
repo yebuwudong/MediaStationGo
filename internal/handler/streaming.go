@@ -70,6 +70,9 @@ func stopTranscodeHandler(svc *service.Container) gin.HandlerFunc {
 func imageProxyHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		raw := c.Query("url")
+		if c.Query("retry") != "" || c.Query("refresh") != "" {
+			_ = svc.ImageProxy.RemoveFailed(raw)
+		}
 		// Serve handles upstream errors internally by returning a 1×1 PNG
 		// placeholder, so the only error we can get back here is a malformed
 		// URL. In that case we still return 400 to make the misuse visible.

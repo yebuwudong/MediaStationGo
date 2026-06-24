@@ -151,13 +151,15 @@ export function hlsURL(mediaId: string): string {
 
 // imageURL converts a remote poster URL into a same-origin proxy URL so it
 // can never be blocked by CORS / GFW. Empty strings pass through unchanged.
-export function imageURL(remote?: string, version?: string): string {
+export function imageURL(remote?: string, version?: string, retryFailed = false): string {
   if (!remote) return ''
   const versionQuery = version ? `v=${encodeURIComponent(version)}` : ''
-  if (remote.startsWith('/api/img')) return withQuery(withoutAuthQuery(remote), versionQuery)
-  if (remote.startsWith('/api/cloud/play/')) return withQuery(withoutAuthQuery(remote), versionQuery)
-  if (remote.startsWith('/api/')) return withQuery(withQuery(remote, tokenQuery()), versionQuery)
-  return withQuery(`/api/img?url=${encodeURIComponent(remote)}`, versionQuery)
+  const retryQuery = retryFailed ? 'retry=1' : ''
+  const imageQuery = [versionQuery, retryQuery].filter(Boolean).join('&')
+  if (remote.startsWith('/api/img')) return withQuery(withoutAuthQuery(remote), imageQuery)
+  if (remote.startsWith('/api/cloud/play/')) return withQuery(withoutAuthQuery(remote), imageQuery)
+  if (remote.startsWith('/api/')) return withQuery(withQuery(remote, tokenQuery()), imageQuery)
+  return withQuery(`/api/img?url=${encodeURIComponent(remote)}`, imageQuery)
 }
 
 function withQuery(url: string, query: string): string {

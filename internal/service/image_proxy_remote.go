@@ -38,6 +38,20 @@ func (p *ImageProxy) RemoveCached(raw string) error {
 	return nil
 }
 
+func (p *ImageProxy) RemoveFailed(raw string) error {
+	if !isHTTPish(raw) {
+		return nil
+	}
+	_, _, failPath, err := p.remoteImageCachePaths(raw)
+	if err != nil {
+		return nil
+	}
+	if err := os.Remove(failPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
 // Serve writes the requested image to w. Caller is expected to validate
 // the JWT before invoking it.
 func (p *ImageProxy) Serve(ctx context.Context, w http.ResponseWriter, r *http.Request, raw string) error {
