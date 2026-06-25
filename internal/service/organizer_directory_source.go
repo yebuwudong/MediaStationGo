@@ -210,7 +210,9 @@ func (o *OrganizerService) resolveOrganizeSourceLayoutRoot(ctx context.Context, 
 		layoutRoot = categoryRoot(layoutRoot, sanitizeFilename(layout.Category))
 	}
 	if !matchedLibrary && !req.DryRun {
-		o.ensureOrganizeLibraryForRoot(ctx, layoutRoot, layout.MediaType, layout.Category)
+		if targetLibrary, ok := o.ensureOrganizeLibraryForRoot(ctx, layoutRoot, layout.MediaType, layout.Category); ok {
+			targetLibraryID = targetLibrary.ID
+		}
 	}
 	return layoutRoot, targetLibraryID
 }

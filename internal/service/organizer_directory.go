@@ -48,7 +48,7 @@ func (o *OrganizerService) OrganizeDirectory(ctx context.Context, opts OrganizeO
 	if _, ok := ParseCloudLibraryMount(requestedDest); ok {
 		return nil, errors.New("organize destination must be a local writable media directory; enable cloud transfer in external storage when writing to cloud")
 	}
-	dest := redirectOrganizeStagingRoot(resolveMappedDestinationPath(requestedDest))
+	dest := normalizeOrganizeDestinationRoot(resolveMappedDestinationPath(requestedDest))
 	if dest == "" || dest == "." {
 		return nil, errors.New("destination path required")
 	}

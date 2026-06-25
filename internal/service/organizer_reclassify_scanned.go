@@ -111,10 +111,17 @@ func (o *OrganizerService) reclassifyScannedMedia(ctx context.Context, media mod
 		return false, nil
 	}
 
-	baseRoot := redirectOrganizeStagingRoot(o.resolveBaseRoot(ctx, &lib, ""))
+	baseRoot := normalizeOrganizeDestinationRoot(o.resolveBaseRoot(ctx, &lib, ""))
 	targetLibrary, matched := o.organizeLibraryForLayout(ctx, baseRoot, mediaType, category)
 	if !matched || strings.TrimSpace(targetLibrary.ID) == "" || strings.TrimSpace(targetLibrary.Path) == "" {
-		return false, nil
+		targetRoot := categoryRoot(o.organizeRoot(baseRoot, mediaType, category), category)
+		if dryRun {
+			targetLibrary = model.Library{Path: targetRoot}
+		} else if created, ok := o.ensureOrganizeLibraryForRoot(ctx, targetRoot, mediaType, category); ok {
+			targetLibrary = created
+		} else {
+			return false, nil
+		}
 	}
 	if strings.EqualFold(targetLibrary.ID, lib.ID) && pathWithin(media.Path, targetLibrary.Path) {
 		return false, nil

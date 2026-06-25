@@ -80,6 +80,49 @@ func TestOrganizeDirectoryUsesExplicitCategoryLibraryRoot(t *testing.T) {
 	}
 }
 
+func TestOrganizeDirectoryTreatsCategoryDestAsCollectionRoot(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "downloads", "Some.Show.S01E01.2026.1080p.mkv")
+	dest := filepath.Join(root, "media")
+	writeOrgFile(t, src, "episode")
+
+	repos := newOrganizerTestRepo(t)
+	currentLib := model.Library{Name: "欧美剧", Path: filepath.Join(dest, "电视剧", "欧美剧"), Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &currentLib); err != nil {
+		t.Fatal(err)
+	}
+
+	org := NewOrganizerService(&config.Config{}, zap.NewNop(), repos)
+	res, err := org.OrganizeDirectory(t.Context(), OrganizeOptions{
+		SourcePath:    src,
+		DestPath:      currentLib.Path,
+		MediaType:     "tv",
+		MediaCategory: "国产剧",
+		TransferMode:  TransferCopy,
+	})
+	if err != nil {
+		t.Fatalf("organize category-root dest: %v", err)
+	}
+	if res.Organized != 1 || len(res.Items) != 1 {
+		t.Fatalf("result = %+v, want one organized item", res)
+	}
+
+	wantRoot := filepath.Join(dest, "电视剧", "国产剧")
+	want := filepath.Join(wantRoot, "Some Show", "Season 01", "Some Show - S01E01.mkv")
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("expected sibling category target at %q: %v; items=%#v", want, err, res.Items)
+	}
+	nested := filepath.Join(currentLib.Path, "国产剧", "Some Show", "Season 01", "Some Show - S01E01.mkv")
+	if _, err := os.Stat(nested); !os.IsNotExist(err) {
+		t.Fatalf("must not nest corrected category under current library, stat err=%v", err)
+	}
+
+	var created model.Library
+	if err := repos.DB.Where("path = ?", wantRoot).First(&created).Error; err != nil {
+		t.Fatalf("corrected category library should be auto-created: %v", err)
+	}
+}
+
 func TestOrganizeDirectoryCreatesMissingCategoryLibraryForVisibility(t *testing.T) {
 	root := t.TempDir()
 	srcRoot := filepath.Join(root, "downloads")

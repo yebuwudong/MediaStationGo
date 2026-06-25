@@ -161,24 +161,26 @@ func pathHasDirectChild(path, root, child string) bool {
 	return strings.EqualFold(parts[0], child)
 }
 
-func (o *OrganizerService) ensureOrganizeLibraryForRoot(ctx context.Context, root, mediaType, category string) {
+func (o *OrganizerService) ensureOrganizeLibraryForRoot(ctx context.Context, root, mediaType, category string) (model.Library, bool) {
 	if o == nil || o.repo == nil || o.repo.Library == nil {
-		return
+		return model.Library{}, false
 	}
 	root = filepath.Clean(strings.TrimSpace(root))
 	if root == "" || root == "." {
-		return
+		return model.Library{}, false
 	}
 	if _, ok := ParseCloudLibraryMount(root); ok {
-		return
+		return model.Library{}, false
 	}
 	libraries, err := o.repo.Library.List(ctx)
 	if err != nil {
 		if o.log != nil {
 			o.log.Debug("list libraries before organize auto-create failed", zap.Error(err))
 		}
-		return
+		return model.Library{}, false
 	}
+	var containingLibrary model.Library
+	hasContainingLibrary := false
 	for _, lib := range libraries {
 		if !lib.Enabled || strings.TrimSpace(lib.Path) == "" {
 			continue
@@ -186,9 +188,17 @@ func (o *OrganizerService) ensureOrganizeLibraryForRoot(ctx context.Context, roo
 		if _, ok := ParseCloudLibraryMount(lib.Path); ok {
 			continue
 		}
-		if pathWithin(root, lib.Path) {
-			return
+		lib.Path = filepath.Clean(lib.Path)
+		if strings.EqualFold(lib.Path, root) {
+			return lib, true
 		}
+		if pathWithin(root, lib.Path) {
+			containingLibrary = lib
+			hasContainingLibrary = true
+		}
+	}
+	if strings.TrimSpace(category) == "" && hasContainingLibrary {
+		return containingLibrary, true
 	}
 	name := strings.TrimSpace(category)
 	if name == "" {
@@ -211,7 +221,7 @@ func (o *OrganizerService) ensureOrganizeLibraryForRoot(ctx context.Context, roo
 				zap.String("name", lib.Name),
 				zap.Error(err))
 		}
-		return
+		return model.Library{}, false
 	}
 	if o.log != nil {
 		o.log.Info("organize auto-created missing library",
@@ -219,6 +229,7 @@ func (o *OrganizerService) ensureOrganizeLibraryForRoot(ctx context.Context, roo
 			zap.String("type", lib.Type),
 			zap.String("name", lib.Name))
 	}
+	return lib, true
 }
 
 func organizeLibraryModelType(mediaType string) string {

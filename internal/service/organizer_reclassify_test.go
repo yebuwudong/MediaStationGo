@@ -297,6 +297,64 @@ func TestReclassifyMisclassifiedMediaMovesScannedAnimeToPhysicalAnimeLibrary(t *
 	}
 }
 
+func TestReclassifyMisclassifiedMediaCreatesMissingTargetCategoryLibrary(t *testing.T) {
+	repos := newOrganizerTestRepo(t)
+	cfg := &config.Config{}
+	cfg.Organizer.SmartClassify = true
+
+	root := t.TempDir()
+	dest := filepath.Join(root, "media")
+	euusLib := model.Library{Name: "欧美剧", Path: filepath.Join(dest, "电视剧", "欧美剧"), Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &euusLib); err != nil {
+		t.Fatal(err)
+	}
+
+	wrongPath := filepath.Join(euusLib.Path, "Blades Of The Guardians", "Season 2", "Blades Of The Guardians - S02E01.mkv")
+	writeOrgFile(t, wrongPath, "episode")
+	if err := repos.DB.Create(&model.Media{
+		LibraryID:    euusLib.ID,
+		Title:        "镖人",
+		OriginalName: "Blades Of The Guardians",
+		Path:         wrongPath,
+		SeasonNum:    2,
+		EpisodeNum:   1,
+		TMDbID:       107463,
+		Languages:    "zh",
+		Countries:    "CN",
+		Genres:       "动画,动作冒险",
+		ScrapeStatus: "matched",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	organizer := NewOrganizerService(cfg, zap.NewNop(), repos)
+	res, err := organizer.ReclassifyMisclassifiedMedia(t.Context(), MediaCategoryReclassifyOptions{})
+	if err != nil {
+		t.Fatalf("reclassify media: %v", err)
+	}
+
+	targetRoot := filepath.Join(dest, "动漫", "国漫")
+	want := filepath.Join(targetRoot, "镖人", "Season 02", "镖人 - S02E01.mkv")
+	if res.Reclassified != 1 {
+		t.Fatalf("reclassified = %d, want 1; items=%#v errors=%#v", res.Reclassified, res.Items, res.Errors)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("created category target missing at %q: %v", want, err)
+	}
+
+	var created model.Library
+	if err := repos.DB.Where("path = ?", targetRoot).First(&created).Error; err != nil {
+		t.Fatalf("missing auto-created anime library: %v", err)
+	}
+	var got model.Media
+	if err := repos.DB.First(&got, "path = ?", want).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.LibraryID != created.ID {
+		t.Fatalf("library_id = %q, want auto-created library %q", got.LibraryID, created.ID)
+	}
+}
+
 func TestReclassifyMisclassifiedMediaMovesWesternAnimationToWesternAnimeLibrary(t *testing.T) {
 	repos := newOrganizerTestRepo(t)
 	cfg := &config.Config{}

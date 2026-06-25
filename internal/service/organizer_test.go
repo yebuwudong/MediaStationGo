@@ -207,6 +207,73 @@ func TestOrganizeMediaDoesNotRepeatCategoryWhenLibraryIsCategoryRoot(t *testing.
 	}
 }
 
+func TestOrganizeMediaTreatsCategoryLibraryAsCollectionRoot(t *testing.T) {
+	root := t.TempDir()
+	dest := filepath.Join(root, "media")
+	libraryRoot := filepath.Join(dest, "电视剧", "欧美剧")
+	sourceDir := filepath.Join(root, "downloads")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(sourceDir, "Some Show S01E02.mkv")
+	if err := os.WriteFile(source, []byte("episode"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{})
+	repos := repository.New(db)
+	lib := model.Library{Name: "欧美剧", Path: libraryRoot, Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "Some Show",
+		Path:         source,
+		Container:    "mkv",
+		SeasonNum:    1,
+		EpisodeNum:   2,
+		ScrapeStatus: "matched",
+	}
+	if err := repos.Media.Upsert(t.Context(), &media); err != nil {
+		t.Fatal(err)
+	}
+
+	organizer := NewOrganizerService(&config.Config{}, zap.NewNop(), repos)
+	dst, err := organizer.OrganizeMediaWithOptions(t.Context(), media.ID, OrganizeOptions{
+		MediaType:     "tv",
+		MediaCategory: "国产剧",
+		TransferMode:  TransferCopy,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetRoot := filepath.Join(dest, "电视剧", "国产剧")
+	want := filepath.Join(targetRoot, "Some Show", "Season 01", "Some Show - S01E02.mkv")
+	if dst != want {
+		t.Fatalf("dst = %q, want %q", dst, want)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("organized file missing: %v", err)
+	}
+	nested := filepath.Join(libraryRoot, "国产剧", "Some Show", "Season 01", "Some Show - S01E02.mkv")
+	if _, err := os.Stat(nested); !os.IsNotExist(err) {
+		t.Fatalf("must not nest corrected category under current library, stat err=%v", err)
+	}
+
+	var created model.Library
+	if err := db.Where("path = ?", targetRoot).First(&created).Error; err != nil {
+		t.Fatalf("corrected category library should be auto-created: %v", err)
+	}
+	var refreshed model.Media
+	if err := db.First(&refreshed, "id = ?", media.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.LibraryID != created.ID {
+		t.Fatalf("library_id = %q, want auto-created library %q", refreshed.LibraryID, created.ID)
+	}
+}
+
 func TestOrganizeLibrarySkipsFilesAlreadyInsideLibrary(t *testing.T) {
 	root := t.TempDir()
 	libraryRoot := filepath.Join(root, "media", "电视剧", "国产剧")

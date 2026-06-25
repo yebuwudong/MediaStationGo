@@ -160,6 +160,14 @@ func redirectOrganizeStagingRoot(root string) string {
 	return cleaned
 }
 
+func normalizeOrganizeDestinationRoot(root string) string {
+	cleaned := redirectOrganizeStagingRoot(root)
+	if collectionRoot := organizeMediaCollectionRoot(cleaned); collectionRoot != "" {
+		return collectionRoot
+	}
+	return cleaned
+}
+
 func pathAlreadyEndsWith(path, suffix string) bool {
 	base := strings.TrimSpace(filepath.Base(filepath.Clean(path)))
 	return strings.EqualFold(base, suffix)
