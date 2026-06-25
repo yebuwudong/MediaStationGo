@@ -1,0 +1,195 @@
+package service
+
+import (
+	"testing"
+
+	"github.com/ShukeBta/MediaStationGo/internal/model"
+)
+
+func TestSelectSiteSearchCandidatesOnlyQueuesMissingLocalEpisodes(t *testing.T) {
+	sub := &model.Subscription{Name: "间谍过家家 自动订阅", Filter: "间谍过家家", MediaType: "tv", TotalEpisodes: 3}
+	results := []SearchResult{
+		{Title: "间谍过家家 S01 Complete 1080p", DownloadURL: "https://pt/download/pack", Seeders: 100},
+		{Title: "间谍过家家 S01E01 1080p", DownloadURL: "https://pt/download/1", Seeders: 90},
+		{Title: "间谍过家家 S01E02 1080p", DownloadURL: "https://pt/download/2", Seeders: 80},
+		{Title: "间谍过家家 S01E03 1080p", DownloadURL: "https://pt/download/3", Seeders: 70},
+	}
+	availability := LocalAvailability{
+		TotalEpisodes:       3,
+		LocalMediaCount:     2,
+		MissingEpisodes:     []int{3},
+		ExistingEpisodeKeys: map[string]struct{}{episodeKey(1, 1): {}, episodeKey(1, 2): {}},
+	}
+
+	got := selectSiteSearchCandidates(results, sub, map[string]struct{}{}, availability)
+	if len(got) != 1 || got[0].Episode != 3 {
+		t.Fatalf("selected %#v, want only missing episode 3", got)
+	}
+}
+
+func TestSelectSiteSearchCandidatesWithUnknownTotalSkipsExistingEpisodes(t *testing.T) {
+	sub := &model.Subscription{Name: "葬送的芙莉莲 自动订阅", Filter: "葬送的芙莉莲", MediaType: "anime"}
+	results := []SearchResult{
+		{Title: "葬送的芙莉莲 S01 Complete 1080p", DownloadURL: "https://pt/download/pack", Seeders: 100},
+		{Title: "葬送的芙莉莲 S01E01 1080p", DownloadURL: "https://pt/download/1", Seeders: 90},
+		{Title: "葬送的芙莉莲 S01E02 1080p", DownloadURL: "https://pt/download/2", Seeders: 80},
+		{Title: "葬送的芙莉莲 S01E03 1080p", DownloadURL: "https://pt/download/3", Seeders: 70},
+	}
+	availability := LocalAvailability{
+		LocalMediaCount:     2,
+		ExistingEpisodeKeys: map[string]struct{}{episodeKey(1, 1): {}, episodeKey(1, 2): {}},
+	}
+
+	got := selectSiteSearchCandidates(results, sub, map[string]struct{}{}, availability)
+	if len(got) != 1 || got[0].Episode != 3 {
+		t.Fatalf("selected %#v, want only not-yet-local episode 3", got)
+	}
+}
+
+func TestSelectSiteSearchCandidatesSingleExistingEpisodeIsSkipped(t *testing.T) {
+	sub := &model.Subscription{Name: "葬送的芙莉莲 自动订阅", Filter: "葬送的芙莉莲", MediaType: "anime", TotalEpisodes: 3}
+	results := []SearchResult{
+		{Title: "葬送的芙莉莲 S01E01 1080p", DownloadURL: "https://pt/download/1", Seeders: 90},
+	}
+	availability := LocalAvailability{
+		TotalEpisodes:       3,
+		LocalMediaCount:     1,
+		MissingEpisodes:     []int{2, 3},
+		ExistingEpisodeKeys: map[string]struct{}{episodeKey(1, 1): {}},
+	}
+
+	got := selectSiteSearchCandidates(results, sub, map[string]struct{}{}, availability)
+	if len(got) != 0 {
+		t.Fatalf("selected %#v, want none because E01 already exists", got)
+	}
+}
+
+func TestSelectSiteSearchCandidatesFullPackUsedAsFallbackWhenLibraryPartiallyExists(t *testing.T) {
+	// 本地缺第 3 集,站点只有整季全集包(无单集种)。剧集完结后站点常只挂全集包,
+	// 此时必须用全集包兜底补缺集,否则"补全缺失集"永远匹配为空(用户报告的 bug)。
+	sub := &model.Subscription{Name: "间谍过家家 自动订阅", Filter: "间谍过家家", MediaType: "tv", TotalEpisodes: 3}
+	results := []SearchResult{
+		{Title: "间谍过家家 S01 Complete 1080p", DownloadURL: "https://pt/download/pack", Seeders: 100},
+	}
+	availability := LocalAvailability{
+		TotalEpisodes:       3,
+		LocalMediaCount:     2,
+		MissingEpisodes:     []int{3},
+		ExistingEpisodeKeys: map[string]struct{}{episodeKey(1, 1): {}, episodeKey(1, 2): {}},
+	}
+
+	got := selectSiteSearchCandidates(results, sub, map[string]struct{}{}, availability)
+	if len(got) != 1 {
+		t.Fatalf("selected %#v, want the full pack as fallback to cover missing episode 3", got)
+	}
+	if got[0].Download != "https://pt/download/pack" {
+		t.Fatalf("selected %#v, want the Complete pack", got)
+	}
+}
+
+func TestSelectSiteSearchCandidatesMissingEpisodeCanMatchSubtitleAlias(t *testing.T) {
+	sub := &model.Subscription{Name: "躲在超市后门抽烟的两人 自动订阅", Filter: "躲在超市后门抽烟的两人", MediaType: "tv", TotalEpisodes: 12}
+	results := []SearchResult{
+		{Title: "Smoking Behind the Supermarket with You S01E01 1080p", Subtitle: "躲在超市后门抽烟的两人", DownloadURL: "https://pt/download/1", Seeders: 100},
+		{Title: "Smoking Behind the Supermarket with You S01E12 1080p", Subtitle: "躲在超市后门抽烟的两人", DownloadURL: "https://pt/download/12", Seeders: 80},
+	}
+	existing := map[string]struct{}{}
+	for episode := 1; episode <= 11; episode++ {
+		existing[episodeKey(1, episode)] = struct{}{}
+	}
+	availability := LocalAvailability{
+		TotalEpisodes:       12,
+		LocalMediaCount:     11,
+		MissingEpisodes:     []int{12},
+		ExistingEpisodeKeys: existing,
+	}
+
+	got := selectSiteSearchCandidates(results, sub, map[string]struct{}{}, availability)
+	if len(got) != 1 || got[0].Episode != 12 || got[0].Download != "https://pt/download/12" {
+		t.Fatalf("selected %#v, want subtitle-matched missing episode 12", got)
+	}
+}
+
+func TestSelectSiteSearchCandidatesRelaxesQueryForExistingSeriesMissingEpisodes(t *testing.T) {
+	sub := &model.Subscription{Name: "翘楚 S01E06 自动订阅", Filter: "翘楚 S01E06", MediaType: "tv", TotalEpisodes: 24}
+	results := []SearchResult{
+		{Title: "Qiao Chu 2026 S01E06 2160p WEB-DL", DownloadURL: "https://pt/download/6", Seeders: 10},
+		{Title: "Ashes to Crown 2026 S01E21 2160p WEB-DL", DownloadURL: "https://pt/download/21", Seeders: 8},
+		{Title: "Ashes to Crown 2026 S01E99 2160p WEB-DL", DownloadURL: "https://pt/download/99", Seeders: 99},
+	}
+	availability := LocalAvailability{
+		TotalEpisodes:       24,
+		LocalMediaCount:     1,
+		MissingEpisodes:     []int{21},
+		ExistingEpisodeKeys: map[string]struct{}{episodeKey(1, 6): {}},
+	}
+
+	got, stats := selectSiteSearchCandidatesWithStats(results, sub, map[string]struct{}{}, availability)
+	if len(got) != 1 || got[0].Episode != 21 || got[0].Download != "https://pt/download/21" {
+		t.Fatalf("selected %#v, want relaxed alias-like missing episode 21 only", got)
+	}
+	if stats.QueryMismatch != 3 || stats.RelaxedQueryMatch != 3 || stats.ExistingEpisodeSkipped != 1 || stats.NotMissingEpisodeSkipped != 1 {
+		t.Fatalf("unexpected relaxed stats: %#v", stats)
+	}
+}
+
+func TestAddSiteSearchCandidateAvailabilityTracksRelaxedAliasCandidate(t *testing.T) {
+	sub := &model.Subscription{Name: "翘楚 S01E06 自动订阅", Filter: "翘楚 S01E06", MediaType: "tv", TotalEpisodes: 24}
+	availability := LocalAvailability{
+		TotalEpisodes:       24,
+		LocalMediaCount:     1,
+		MissingEpisodes:     []int{21},
+		ExistingEpisodeKeys: map[string]struct{}{episodeKey(1, 6): {}},
+		MissingEpisodeKeys:  map[string]struct{}{episodeKey(1, 21): {}},
+	}
+	candidate := siteSearchCandidate{
+		Item: SearchResult{
+			Title:       "Ashes to Crown 2026 S01E21 2160p WEB-DL",
+			DownloadURL: "https://pt/download/21",
+		},
+		Download: "https://pt/download/21",
+		GUID:     "site|m-team|ashes-to-crown-21",
+		Season:   1,
+		Episode:  21,
+	}
+
+	addSiteSearchCandidateAvailability(candidate, &availability)
+	availability = NewSubscriptionService(nil, nil, nil, nil, nil, nil).finalizePendingAvailability(sub, availability)
+
+	if _, ok := availability.ExistingEpisodeKeys[episodeKey(1, 21)]; !ok {
+		t.Fatalf("missing relaxed alias candidate E21 key: %#v", availability.ExistingEpisodeKeys)
+	}
+	got := selectSiteSearchCandidates([]SearchResult{candidate.Item}, sub, map[string]struct{}{}, availability)
+	if len(got) != 0 {
+		t.Fatalf("selected %#v, want relaxed alias candidate skipped after dedup availability update", got)
+	}
+}
+
+func TestSelectSiteSearchCandidatesDoesNotRelaxQueryForMovies(t *testing.T) {
+	sub := &model.Subscription{Name: "玩具总动员 5 自动订阅", Filter: "玩具总动员 5 2026", MediaType: "movie"}
+	results := []SearchResult{
+		{Title: "Toy Story 4 2019 2160p WEB-DL", DownloadURL: "https://pt/download/wrong", Seeders: 100},
+	}
+	availability := LocalAvailability{}
+
+	got, stats := selectSiteSearchCandidatesWithStats(results, sub, map[string]struct{}{}, availability)
+	if len(got) != 0 {
+		t.Fatalf("selected %#v, want no relaxed movie match", got)
+	}
+	if stats.QueryMismatch != 1 || stats.RelaxedQueryMatch != 0 {
+		t.Fatalf("unexpected stats: %#v", stats)
+	}
+}
+
+func TestSelectSiteSearchCandidatesSingleExistingMovieIsSkippedWhenNotWashing(t *testing.T) {
+	sub := &model.Subscription{Name: "Inception 自动订阅", Filter: "Inception 2010", MediaType: "movie"}
+	results := []SearchResult{
+		{Title: "Inception 2010 1080p WEB-DL", DownloadURL: "https://pt/download/web", Seeders: 90},
+	}
+	availability := LocalAvailability{LocalMediaCount: 1, InLibrary: true, DownloadedEpisodes: 1, TotalEpisodes: 1}
+
+	got := selectSiteSearchCandidates(results, sub, map[string]struct{}{}, availability)
+	if len(got) != 0 {
+		t.Fatalf("selected %#v, want none because movie already exists and wash is disabled", got)
+	}
+}

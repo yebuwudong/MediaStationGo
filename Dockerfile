@@ -85,24 +85,9 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD busybox wget -q --spider http://127.0.0.1:8080/api/health || exit 1
 
-# Tiny entrypoint that lets us swap to a different UID/GID via PUID/PGID
-# (handy on NAS deployments where bind-mounted volumes belong to a non-root
-# user). When PUID == 0 we skip su-exec entirely and run as root.
-RUN printf '#!/bin/sh\n\
-PUID=${PUID:-$(id -u mediastation)}\n\
-PGID=${PGID:-$(id -g mediastation)}\n\
-if [ "$PUID" != "$(id -u mediastation)" ] || [ "$PGID" != "$(id -g mediastation)" ]; then\n\
-  deluser mediastation 2>/dev/null || true\n\
-  delgroup mediastation 2>/dev/null || true\n\
-  addgroup -g "$PGID" -S mediastation\n\
-  adduser -u "$PUID" -G mediastation -S mediastation\n\
-fi\n\
-chown -R mediastation:mediastation /data /cache 2>/dev/null || true\n\
-chown mediastation:mediastation /media 2>/dev/null || true\n\
-if [ "$PUID" = "0" ]; then\n\
-  exec mediastation-go\n\
-fi\n\
-exec su-exec mediastation mediastation-go\n' > /entrypoint.sh \
-    && chmod +x /entrypoint.sh
+# Tiny entrypoint that lets us run as a NAS host UID/GID via PUID/PGID without
+# rewriting /etc/passwd or /etc/group on every container start.
+COPY docker-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 CMD ["/entrypoint.sh"]

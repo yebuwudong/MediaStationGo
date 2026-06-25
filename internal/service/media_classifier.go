@@ -15,6 +15,9 @@ var (
 	classifierEpisodeRE = regexp.MustCompile(`(?i)\bS\d{1,2}E\d{1,3}\b|第\s*\d+\s*[集期]|(?:^|[\s._-])E\d{1,3}(?:[\s._-]|$)`)
 	classifierSeasonRE  = regexp.MustCompile(`(?i)\bS\d{1,2}\b|第\s*\d+\s*季`)
 	classifierJAVCodeRE = regexp.MustCompile(`(?:^|[\s._\-/\[\]()])[A-Z]{2,6}[-_]?\d{3,5}(?:[\s._\-/\[\]()]|$)`)
+	classifierMovieRE   = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])(?:movies?|films?)(?:[^a-z0-9]|$)`)
+	classifierTVRE      = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])(?:tv|series|shows?|dramas?)(?:[^a-z0-9]|$)`)
+	classifierAnimeRE   = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])(?:anime|bangumi)(?:[^a-z0-9]|$)`)
 )
 
 const DownloadSmartClassifySettingKey = "downloads.smart_classify"
@@ -33,12 +36,16 @@ func classifyMediaCategory(input mediaClassifyInput, categories map[string]strin
 	genres := normalizeTokens(input.Genres...)
 	countries := normalizeTokens(input.Countries...)
 	languages := normalizeTokens(input.Languages...)
-	rawText := input.Title + " " + input.Category + " " + strings.Join(input.Genres, " ")
+	rawTitleText := input.Title + " " + strings.Join(input.Genres, " ")
+	categoryText := strings.ToLower(input.Category)
+	rawText := rawTitleText + " " + input.Category
 	text := strings.ToLower(rawText)
 	hasMetadata := len(genres) > 0 || len(countries) > 0 || len(languages) > 0
+	sourceHint := sourceCategoryHint(input.Category, mediaType, categories)
 
 	isChineseByMetadata := hasAny(languages, "ZH", "ZH-CN", "ZH-TW", "CN", "BO", "ZA") || hasAny(countries, "CN", "TW", "HK", "MO")
-	isChineseByText := containsHan(rawText) || containsAnyText(text, "华语", "国产", "国剧", "国漫")
+	isChineseByText := containsHan(rawTitleText) || containsAnyText(strings.ToLower(rawTitleText), "华语", "国产", "国剧", "国漫")
+	isChineseByCategory := containsAnyText(categoryText, "华语", "国产", "国剧", "大陆剧", "国产电视剧", "国产电影", "国漫", "国产动漫", "国产动画")
 	isChinese := isChineseByMetadata || (!hasMetadata && isChineseByText)
 	// 动漫的中文译名几乎都是纯汉字(如日本动画「葬送的芙莉莲」),用 containsHan
 	// 判中文会把日本动画误判成国漫。动漫只在有元数据或显式中文标记时才算国漫,
@@ -46,12 +53,14 @@ func classifyMediaCategory(input mediaClassifyInput, categories map[string]strin
 	isChineseAnime := isChineseByMetadata || (!hasMetadata && containsAnyText(text, "华语", "国产", "国漫", "國漫", "国创", "国产动漫", "国产动画"))
 	isJapanese := hasAny(languages, "JA", "JP") || hasAny(countries, "JP") || containsJapaneseKana(rawText) || strings.Contains(text, "日番")
 	isKorean := hasAny(languages, "KO", "KR") || hasAny(countries, "KR", "KP") || containsKoreanHangul(rawText)
-	isEastAsian := isJapanese || isKorean || hasAny(countries, "TH", "IN", "SG")
+	isEastAsianByCategory := containsAnyText(categoryText, "日韩剧", "日剧", "韩剧", "日韩电影")
+	isEastAsian := isJapanese || isKorean || hasAny(countries, "TH", "IN", "SG") || (!hasMetadata && isEastAsianByCategory)
 	isWesternByMetadata := hasAny(countries,
 		"US", "GB", "UK", "FR", "DE", "CA", "AU", "NZ", "IE", "NL", "SE", "NO", "DK",
 		"FI", "ES", "IT", "PT", "AT", "CH", "BE", "RU",
 	)
-	isWestern := isWesternByMetadata
+	isWesternByCategory := containsAnyText(categoryText, "欧美剧", "欧美电视剧", "美剧", "英剧", "欧美电影", "外语电影")
+	isWestern := isWesternByMetadata || (!hasMetadata && isWesternByCategory)
 	hasAnimeText := containsAnyText(text, "动画", "动漫", "番剧", "年番", "国漫", "日番", "bangumi", "anime", "b-global", "ani-one", "crunchyroll")
 	hasVarietyText := containsAnyText(text, "综艺", "真人秀", "脱口秀", "晚会", "春晚", "gala", "festival gala", "reality", "talk show")
 	hasDocumentaryText := containsAnyText(text, "纪录", "纪录片", "documentary", "docu", "national geographic", "natgeo")
@@ -80,13 +89,22 @@ func classifyMediaCategory(input mediaClassifyInput, categories map[string]strin
 		if hasGenre("16", "ANIMATION", "动画", "动漫") || hasAnimeText {
 			return categoryName(categories, "animation_movie", "动画电影")
 		}
+		if !hasMetadata && sourceHint != "" {
+			return sourceHint
+		}
 		if isChinese {
 			return categoryName(categories, "chinese_movie", "华语电影")
 		}
 		return categoryName(categories, "foreign_movie", "外语电影")
 	case "anime":
+		if !hasMetadata && sourceHint != "" {
+			return sourceHint
+		}
 		if isChineseAnime {
 			return categoryName(categories, "cn_anime", "国漫")
+		}
+		if isWesternByMetadata || (!hasMetadata && containsAnyText(categoryText, "欧美动漫", "欧美动画", "西方动画")) {
+			return categoryName(categories, "euus_anime", "欧美动漫")
 		}
 		return categoryName(categories, "jp_anime", "日番")
 	case "variety":
@@ -108,9 +126,15 @@ func classifyMediaCategory(input mediaClassifyInput, categories map[string]strin
 			if isChineseAnime {
 				return categoryName(categories, "cn_anime", "国漫")
 			}
+			if isWesternByMetadata || (!hasMetadata && containsAnyText(categoryText, "欧美动漫", "欧美动画", "西方动画")) {
+				return categoryName(categories, "euus_anime", "欧美动漫")
+			}
 			return categoryName(categories, "jp_anime", "日番")
 		}
-		if isChinese {
+		if !hasMetadata && sourceHint != "" {
+			return sourceHint
+		}
+		if isChinese || (!hasMetadata && isChineseByCategory) {
 			return categoryName(categories, "domestic_tv", "国产剧")
 		}
 		if isEastAsian {
@@ -145,11 +169,11 @@ func normalizeMediaType(mediaType, title, category string) string {
 		return "adult"
 	case containsAnyText(raw, "综艺", "真人秀"):
 		return "variety"
-	case containsAnyText(raw, "国漫", "日漫", "日番", "动漫", "动画", "anime", "bangumi") && !containsAnyText(raw, "动画电影"):
+	case (containsAnyText(raw, "国漫", "日漫", "日番", "动漫", "动画") || classifierAnimeRE.MatchString(raw)) && !containsAnyText(raw, "动画电影"):
 		return "anime"
-	case containsAnyText(raw, "电视剧", "国产剧", "欧美剧", "日韩剧", "日剧", "韩剧", "剧集", "tv", "series"):
+	case containsAnyText(raw, "电视剧", "国产剧", "欧美剧", "日韩剧", "日剧", "韩剧", "剧集") || classifierTVRE.MatchString(raw):
 		return "tv"
-	case containsAnyText(raw, "电影", "movie", "film"):
+	case containsAnyText(raw, "电影") || classifierMovieRE.MatchString(raw):
 		return "movie"
 	}
 	text := strings.ToLower(title + " " + category)
@@ -158,13 +182,13 @@ func normalizeMediaType(mediaType, title, category string) string {
 		return "adult"
 	case containsAnyText(text, "综艺", "真人秀", "脱口秀", "晚会", "春晚", "gala", "festival gala", "reality", "talk show"):
 		return "variety"
-	case strings.Contains(text, "movie") || strings.Contains(text, "电影"):
+	case strings.Contains(text, "电影") || classifierMovieRE.MatchString(text):
 		return "movie"
-	case strings.Contains(text, "anime") || strings.Contains(text, "bangumi") || strings.Contains(text, "动漫") || strings.Contains(text, "动画"):
+	case classifierAnimeRE.MatchString(text) || strings.Contains(text, "动漫") || strings.Contains(text, "动画"):
 		return "anime"
 	case strings.Contains(text, "variety") || strings.Contains(text, "综艺") || strings.Contains(text, "真人秀"):
 		return "variety"
-	case classifierEpisodeRE.MatchString(text) || classifierSeasonRE.MatchString(text) || strings.Contains(text, "tv") || strings.Contains(text, "剧集") || strings.Contains(text, "电视剧"):
+	case classifierEpisodeRE.MatchString(text) || classifierSeasonRE.MatchString(text) || classifierTVRE.MatchString(text) || strings.Contains(text, "剧集") || strings.Contains(text, "电视剧"):
 		return "tv"
 	default:
 		return "movie"
@@ -261,6 +285,80 @@ func categoryName(categories map[string]string, key, fallback string) string {
 	return fallback
 }
 
+type sourceCategoryHintDef struct {
+	Key       string
+	Fallback  string
+	MediaType string
+}
+
+var sourceCategoryHints = []sourceCategoryHintDef{
+	{Key: "animation_movie", Fallback: "动画电影", MediaType: "movie"},
+	{Key: "chinese_movie", Fallback: "华语电影", MediaType: "movie"},
+	{Key: "jk_movie", Fallback: "日韩电影", MediaType: "movie"},
+	{Key: "euus_movie", Fallback: "欧美电影", MediaType: "movie"},
+	{Key: "foreign_movie", Fallback: "外语电影", MediaType: "movie"},
+	{Key: "domestic_tv", Fallback: "国产剧", MediaType: "tv"},
+	{Key: "euus_tv", Fallback: "欧美剧", MediaType: "tv"},
+	{Key: "jk_tv", Fallback: "日韩剧", MediaType: "tv"},
+	{Key: "cn_anime", Fallback: "国漫", MediaType: "anime"},
+	{Key: "jp_anime", Fallback: "日番", MediaType: "anime"},
+	{Key: "euus_anime", Fallback: "欧美动漫", MediaType: "anime"},
+	{Key: "variety", Fallback: "综艺", MediaType: "variety"},
+	{Key: "documentary", Fallback: "纪录片", MediaType: "tv"},
+	{Key: "children", Fallback: "儿童", MediaType: "tv"},
+	{Key: "adult", Fallback: "成人", MediaType: "adult"},
+	{Key: "adult_9kg", Fallback: "9KG", MediaType: "adult"},
+	{Key: "adult_jav", Fallback: "番号", MediaType: "adult"},
+}
+
+func sourceCategoryHint(category, mediaType string, categories map[string]string) string {
+	tokens := sourceCategoryTokens(category)
+	if len(tokens) == 0 {
+		return ""
+	}
+	for _, hint := range sourceCategoryHints {
+		if !sourceCategoryCompatible(mediaType, hint.MediaType) {
+			continue
+		}
+		for _, name := range []string{hint.Fallback, categoryName(categories, hint.Key, hint.Fallback)} {
+			if _, ok := tokens[strings.ToLower(strings.TrimSpace(name))]; ok {
+				return categoryName(categories, hint.Key, hint.Fallback)
+			}
+		}
+	}
+	return ""
+}
+
+func sourceCategoryTokens(category string) map[string]struct{} {
+	category = strings.TrimSpace(category)
+	if category == "" {
+		return nil
+	}
+	normalized := strings.NewReplacer("\\", " ", "/", " ", "|", " ", ",", " ", ";", " ").Replace(category)
+	out := map[string]struct{}{
+		strings.ToLower(category): {},
+	}
+	for _, field := range strings.Fields(normalized) {
+		out[strings.ToLower(strings.TrimSpace(field))] = struct{}{}
+	}
+	return out
+}
+
+func sourceCategoryCompatible(mediaType, categoryMediaType string) bool {
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	categoryMediaType = strings.ToLower(strings.TrimSpace(categoryMediaType))
+	if mediaType == "" || categoryMediaType == "" || mediaType == categoryMediaType {
+		return true
+	}
+	if mediaType == "tv" && (categoryMediaType == "anime" || categoryMediaType == "variety") {
+		return true
+	}
+	if categoryMediaType == "adult" {
+		return true
+	}
+	return false
+}
+
 func (o *OrganizerService) categoryMap() map[string]string {
 	if o == nil || o.cfg == nil || o.cfg.Organizer.Categories == nil {
 		return nil
@@ -341,7 +439,7 @@ func (s *SubscriptionService) lookupSubscriptionMetadata(ctx context.Context, me
 				if candidate == "" {
 					continue
 				}
-				match := s.scraper.lookup(ctx, lib, candidate, year)
+				match := s.scraper.lookup(ctx, lib, nil, candidate, year)
 				if match == nil || strings.TrimSpace(match.Title) == "" {
 					continue
 				}

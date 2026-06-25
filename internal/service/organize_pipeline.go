@@ -149,6 +149,7 @@ func (p *OrganizePipelineService) Run(ctx context.Context, req OrganizePipelineR
 			zap.String("dest", res.DestPath),
 			zap.Int("organized", res.Organized),
 			zap.Int("replaced", res.Replaced),
+			zap.Int("reclassified", res.Reclassified),
 			zap.Int("skipped", res.Skipped))
 	}
 
@@ -161,6 +162,7 @@ func (p *OrganizePipelineService) Run(ctx context.Context, req OrganizePipelineR
 			zap.String("dest", firstNonEmpty(res.DestPath, filepath.Dir(path))),
 			zap.Int("organized", res.Organized),
 			zap.Int("replaced", res.Replaced),
+			zap.Int("reclassified", res.Reclassified),
 			zap.Int("skipped", res.Skipped),
 			zap.Int("scrapes", len(res.Scrapes)),
 			zap.Int("errors", len(res.Errors)))
@@ -172,7 +174,7 @@ func organizeFatalResultError(res *OrganizeResult) error {
 	if res == nil || len(res.Errors) == 0 {
 		return nil
 	}
-	if res.Organized > 0 || res.Replaced > 0 {
+	if res.Organized > 0 || res.Replaced > 0 || res.Reclassified > 0 {
 		return nil
 	}
 	samples := organizeErrorSamples(res.Errors, 3)
@@ -212,6 +214,7 @@ func (p *OrganizePipelineService) logOrganizeProblem(req OrganizePipelineRequest
 		zap.String("dest", res.DestPath),
 		zap.Int("organized", res.Organized),
 		zap.Int("replaced", res.Replaced),
+		zap.Int("reclassified", res.Reclassified),
 		zap.Int("skipped", res.Skipped),
 		zap.Int("errors", len(res.Errors)),
 		zap.Strings("error_samples", organizeErrorSamples(res.Errors, 5)),
@@ -260,6 +263,7 @@ func organizeAuditDetail(req OrganizePipelineRequest, res *OrganizeResult, err e
 			fmt.Sprintf("dest=%s", res.DestPath),
 			fmt.Sprintf("organized=%d", res.Organized),
 			fmt.Sprintf("replaced=%d", res.Replaced),
+			fmt.Sprintf("reclassified=%d", res.Reclassified),
 			fmt.Sprintf("skipped=%d", res.Skipped),
 			fmt.Sprintf("errors=%d", len(res.Errors)),
 		)
@@ -355,7 +359,7 @@ func organizeScanRoot(res *OrganizeResult, path string) string {
 
 func organizeItemNeedsVisibilitySync(item OrganizePreviewItem) bool {
 	switch item.Action {
-	case "organize", "replace":
+	case "organize", "replace", "reclassify", "cleanup":
 		return true
 	case "skip":
 		switch item.Reason {

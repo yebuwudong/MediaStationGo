@@ -1,9 +1,13 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -154,6 +158,82 @@ func TestListMediaGroupsMultipleVersionsByDefault(t *testing.T) {
 	}
 }
 
+func TestListLibrarySeriesDoesNotTruncateLargeEpisodeLibraries(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.Library{}, &model.Media{}, &model.Setting{}, &model.PlayProfile{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	lib := model.Library{Name: "国漫", Path: "cloud://openlist/国漫", Type: "anime", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	rows := make([]model.Media, 0, 2001)
+	for i := 1; i <= 2001; i++ {
+		rows = append(rows, model.Media{
+			Base:       model.Base{ID: fmt.Sprintf("ep-%04d", i), CreatedAt: time.Now().Add(time.Duration(i) * time.Second)},
+			LibraryID:  lib.ID,
+			Title:      "大剧",
+			Path:       fmt.Sprintf("cloud://openlist/国漫/大剧 (2026) {tmdb-123}/Season 1/大剧.S01E%04d.mkv", i),
+			SeasonNum:  1,
+			EpisodeNum: i,
+		})
+	}
+	if err := repos.DB.CreateInBatches(rows, 500).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc := &service.Container{
+		Repo:  repos,
+		Media: service.NewMediaService(&config.Config{}, zap.NewNop(), repos),
+	}
+
+	series := requestLibrarySeries(t, svc, "/api/libraries/"+lib.ID+"/series", lib.ID)
+	if series.Total != 1 || len(series.Items) != 1 {
+		t.Fatalf("series response total=%d len=%d body=%#v", series.Total, len(series.Items), series)
+	}
+	if series.Items[0].Count != 2001 {
+		t.Fatalf("series count = %d, want 2001", series.Items[0].Count)
+	}
+	if !strings.HasPrefix(series.Items[0].Key, "series:") ||
+		strings.Contains(series.Items[0].Key, "lib:") ||
+		strings.Contains(series.Items[0].Key, "show:") {
+		t.Fatalf("series key = %q, want compact non-raw key", series.Items[0].Key)
+	}
+	episodes := requestLibrarySeriesEpisodes(t, svc, "/api/libraries/"+lib.ID+"/series/episodes?key="+url.QueryEscape(series.Items[0].Key), lib.ID)
+	if episodes.Total != 2001 || len(episodes.Items) != 2001 {
+		t.Fatalf("episodes total=%d len=%d, want 2001", episodes.Total, len(episodes.Items))
+	}
+	if episodes.Items[0].EpisodeNum != 1 || episodes.Items[len(episodes.Items)-1].EpisodeNum != 2001 {
+		t.Fatalf("episode order first=%d last=%d", episodes.Items[0].EpisodeNum, episodes.Items[len(episodes.Items)-1].EpisodeNum)
+	}
+}
+
+func TestScrapeOptionsFromRequestPreservesEpisodeImagesFalse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/media/ep-1/scrape", bytes.NewBufferString(`{"episode_images":false,"refresh_matched":true}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	options, err := scrapeOptionsFromRequest(c, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.EpisodeArtwork == nil {
+		t.Fatal("EpisodeArtwork is nil, want explicit false")
+	}
+	if *options.EpisodeArtwork {
+		t.Fatal("EpisodeArtwork = true, want false")
+	}
+	if !options.IncludeMatched {
+		t.Fatal("IncludeMatched = false, want true from refresh_matched")
+	}
+}
+
 func requestLibraries(t *testing.T, svc *service.Container, userID, role, path string) []model.Library {
 	t.Helper()
 	w := httptest.NewRecorder()
@@ -177,6 +257,16 @@ type mediaListResponse struct {
 	Total int64               `json:"total"`
 }
 
+type seriesListResponse struct {
+	Items []service.SeriesCard `json:"items"`
+	Total int64                `json:"total"`
+}
+
+type seriesEpisodesResponse struct {
+	Items []model.Media `json:"items"`
+	Total int64         `json:"total"`
+}
+
 func requestMediaList(t *testing.T, svc *service.Container, path, libraryID string) mediaListResponse {
 	t.Helper()
 	w := httptest.NewRecorder()
@@ -192,6 +282,44 @@ func requestMediaList(t *testing.T, svc *service.Container, path, libraryID stri
 	var payload mediaListResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode media list: %v", err)
+	}
+	return payload
+}
+
+func requestLibrarySeries(t *testing.T, svc *service.Container, path, libraryID string) seriesListResponse {
+	t.Helper()
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set(middleware.CtxUserID, "user-1")
+	c.Set(middleware.CtxUserRole, "user")
+	c.Params = gin.Params{{Key: "id", Value: libraryID}}
+	c.Request = httptest.NewRequest(http.MethodGet, path, nil)
+	listLibrarySeriesHandler(svc)(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET %s status = %d body=%s", path, w.Code, w.Body.String())
+	}
+	var payload seriesListResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode series list: %v", err)
+	}
+	return payload
+}
+
+func requestLibrarySeriesEpisodes(t *testing.T, svc *service.Container, path, libraryID string) seriesEpisodesResponse {
+	t.Helper()
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set(middleware.CtxUserID, "user-1")
+	c.Set(middleware.CtxUserRole, "user")
+	c.Params = gin.Params{{Key: "id", Value: libraryID}}
+	c.Request = httptest.NewRequest(http.MethodGet, path, nil)
+	listLibrarySeriesEpisodesHandler(svc)(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET %s status = %d body=%s", path, w.Code, w.Body.String())
+	}
+	var payload seriesEpisodesResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode series episodes: %v", err)
 	}
 	return payload
 }

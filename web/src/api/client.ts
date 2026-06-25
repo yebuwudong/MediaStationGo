@@ -151,16 +151,44 @@ export function hlsURL(mediaId: string): string {
 
 // imageURL converts a remote poster URL into a same-origin proxy URL so it
 // can never be blocked by CORS / GFW. Empty strings pass through unchanged.
-export function imageURL(remote?: string): string {
+export type ImageURLOptions =
+  | boolean
+  | {
+      refreshCache?: boolean
+      retryFailed?: boolean
+    }
+
+export function imageURL(remote?: string, version?: string, options: ImageURLOptions = false): string {
   if (!remote) return ''
-  if (remote.startsWith('/api/img')) return remote
-  if (remote.startsWith('/api/')) return withQuery(remote, tokenQuery())
-  return `/api/img?url=${encodeURIComponent(remote)}&${tokenQuery()}`
+  const versionQuery = version ? `v=${encodeURIComponent(version)}` : ''
+  const retryFailed = typeof options === 'boolean' ? options : Boolean(options.retryFailed)
+  const refreshCache = typeof options === 'boolean' ? false : Boolean(options.refreshCache)
+  const retryQuery = retryFailed ? 'retry=1' : ''
+  const refreshQuery = refreshCache ? 'refresh=1' : ''
+  const imageQuery = [versionQuery, retryQuery, refreshQuery].filter(Boolean).join('&')
+  if (remote.startsWith('/api/img')) return withQuery(withoutAuthQuery(remote), imageQuery)
+  if (remote.startsWith('/api/cloud/play/')) return withQuery(withoutAuthQuery(remote), imageQuery)
+  if (remote.startsWith('/api/')) return withQuery(withQuery(remote, tokenQuery()), imageQuery)
+  return withQuery(`/api/img?url=${encodeURIComponent(remote)}`, imageQuery)
 }
 
 function withQuery(url: string, query: string): string {
   if (!query) return url
   return `${url}${url.includes('?') ? '&' : '?'}${query}`
+}
+
+function withoutAuthQuery(url: string): string {
+  const hashIndex = url.indexOf('#')
+  const beforeHash = hashIndex >= 0 ? url.slice(0, hashIndex) : url
+  const hash = hashIndex >= 0 ? url.slice(hashIndex) : ''
+  const queryIndex = beforeHash.indexOf('?')
+  if (queryIndex < 0) return url
+
+  const path = beforeHash.slice(0, queryIndex)
+  const params = new URLSearchParams(beforeHash.slice(queryIndex + 1))
+  ;['token', 'api_key', 'apiKey', 'ApiKey'].forEach((key) => params.delete(key))
+  const query = params.toString()
+  return `${path}${query ? `?${query}` : ''}${hash}`
 }
 
 // getToken returns the current auth token

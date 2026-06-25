@@ -24,6 +24,7 @@ type DiscoverService struct {
 	log    *zap.Logger
 	tmdb   *TMDbProvider
 	client *http.Client
+	images *ImageProxy
 }
 
 // NewDiscoverService is the constructor.
@@ -74,6 +75,7 @@ func (d *DiscoverService) TMDbSection(ctx context.Context, key string) ([]Extern
 			Rating:           item.Rating,
 			TMDbID:           item.TMDbID,
 			SubscribeKeyword: buildSubscribeKeyword(item.Title, item.Year),
+			SubscribeAliases: buildSubscribeAliases(item.Title, item.OriginalName, item.Year),
 		})
 	}
 	return out, nil
@@ -176,6 +178,10 @@ func tmdbDiscoverPath(key string) string {
 		return "/trending/movie/day"
 	case "tmdb_trending_week", "trending_week":
 		return "/trending/movie/week"
+	case "tmdb_latest_movie", "latest_movie":
+		return "/movie/now_playing"
+	case "tmdb_latest_tv", "latest_tv":
+		return "/tv/on_the_air"
 	case "tmdb_popular_movie", "popular_movie":
 		return "/movie/popular"
 	case "tmdb_popular_tv", "popular_tv":
@@ -257,6 +263,7 @@ func (d *DoubanProvider) Discover(ctx context.Context, key string) ([]ExternalMe
 			Rating:           float32(rating),
 			DoubanID:         subject.ID,
 			SubscribeKeyword: subject.Title,
+			SubscribeAliases: buildSubscribeAliases(subject.Title, "", 0),
 		})
 	}
 	return out, nil
@@ -305,6 +312,7 @@ func (b *BangumiProvider) Calendar(ctx context.Context) ([]ExternalMediaResult, 
 			if poster == "" {
 				poster = item.Images.Common
 			}
+			poster = normalizeBangumiImageURL(poster)
 			year := 0
 			if len(item.AirDate) >= 4 {
 				year, _ = strconv.Atoi(item.AirDate[:4])
@@ -320,6 +328,7 @@ func (b *BangumiProvider) Calendar(ctx context.Context) ([]ExternalMediaResult, 
 				Rating:           item.Rating.Score,
 				BangumiID:        item.ID,
 				SubscribeKeyword: buildSubscribeKeyword(title, year),
+				SubscribeAliases: buildSubscribeAliases(title, item.Name, year),
 			})
 			if len(out) >= 24 {
 				return out, nil

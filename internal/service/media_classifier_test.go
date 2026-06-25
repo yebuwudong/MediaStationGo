@@ -3,9 +3,7 @@ package service
 import (
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -120,6 +118,33 @@ func TestClassifyMediaCategoryMatchesSmartRules(t *testing.T) {
 			want: "未分类",
 		},
 		{
+			name: "latin tv keeps explicit western source category",
+			input: mediaClassifyInput{
+				MediaType: "tv",
+				Title:     "Blades.of.the.Guardians.S02E01.1080p",
+				Category:  "downloads 欧美剧 Blades.of.the.Guardians",
+			},
+			want: "欧美剧",
+		},
+		{
+			name: "generic tv folder is not treated as chinese category",
+			input: mediaClassifyInput{
+				MediaType: "tv",
+				Title:     "The Last of Us S01E01 1080p",
+				Category:  "downloads 电视剧",
+			},
+			want: "未分类",
+		},
+		{
+			name: "gala title overrides wrong western source category",
+			input: mediaClassifyInput{
+				MediaType: "tv",
+				Title:     "HNTV Spring Festival Gala 2026 2160p WEB-DL",
+				Category:  "欧美剧",
+			},
+			want: "综艺",
+		},
+		{
 			name: "platform token alone does not classify romanized drama",
 			input: mediaClassifyInput{
 				MediaType: "tv",
@@ -172,6 +197,36 @@ func TestClassifyMediaCategoryMatchesSmartRules(t *testing.T) {
 			want: "日番",
 		},
 		{
+			name: "western anime metadata uses western anime category",
+			input: mediaClassifyInput{
+				MediaType: "anime",
+				Title:     "Family Guy",
+				Countries: []string{"US"},
+				Genres:    []string{"16"},
+				Category:  "日番",
+			},
+			want: "欧美动漫",
+		},
+		{
+			name: "tv animation with western metadata uses western anime category",
+			input: mediaClassifyInput{
+				MediaType: "tv",
+				Title:     "The Simpsons",
+				Countries: []string{"US"},
+				Genres:    []string{"Animation"},
+			},
+			want: "欧美动漫",
+		},
+		{
+			name: "western anime source category is preserved without metadata",
+			input: mediaClassifyInput{
+				MediaType: "anime",
+				Title:     "The Simpsons S01E01 1080p",
+				Category:  "downloads 欧美动漫",
+			},
+			want: "欧美动漫",
+		},
+		{
 			name: "anime with CN country metadata is cn",
 			input: mediaClassifyInput{
 				MediaType: "anime",
@@ -180,6 +235,15 @@ func TestClassifyMediaCategoryMatchesSmartRules(t *testing.T) {
 				Genres:    []string{"16"},
 			},
 			want: "国漫",
+		},
+		{
+			name: "western movie source category remains western movie",
+			input: mediaClassifyInput{
+				MediaType: "movie",
+				Title:     "Dune 2021 2160p",
+				Category:  "downloads 欧美电影",
+			},
+			want: "欧美电影",
 		},
 		{
 			name: "jav code is adult",
@@ -217,14 +281,27 @@ func TestNormalizeMediaTypeAcceptsChineseLibraryTypes(t *testing.T) {
 	}
 }
 
+func TestNormalizeMediaTypeDoesNotTreatReleaseTokensAsTV(t *testing.T) {
+	tests := []string{
+		"They Will Kill You 2026 1080p HDTV x264",
+		"Some Movie 2026 2160p AppleTV WEB-DL",
+		"Some Movie 2026 2160p ATVP WEB-DL",
+	}
+	for _, input := range tests {
+		t.Run(input, func(t *testing.T) {
+			if got := normalizeMediaType("", input, ""); got != "movie" {
+				t.Fatalf("normalizeMediaType(%q) = %q, want movie", input, got)
+			}
+		})
+	}
+
+	if got := normalizeMediaType("", "The Last of Us", `F:\media\tv\The Last of Us`); got != "tv" {
+		t.Fatalf("standalone tv path token = %q, want tv", got)
+	}
+}
+
 func TestSubscriptionResolveClassifiedSavePath(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Setting{})
 	repos := repository.New(db)
 	if err := repos.Setting.Set(t.Context(), "organizer.smart_classify", "true"); err != nil {
 		t.Fatal(err)

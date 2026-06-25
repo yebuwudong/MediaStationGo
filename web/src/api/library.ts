@@ -1,5 +1,6 @@
 import { api, BATCH_REQUEST_TIMEOUT, LONG_REQUEST_TIMEOUT } from './client'
 import type { Library, Media, ScanResult } from '../types'
+import type { SeriesCard } from '../utils/groupSeries'
 
 export interface MediaPage {
   items: Media[]
@@ -13,6 +14,13 @@ export interface MediaSearchPage {
   total?: number
   page?: number
   page_size?: number
+}
+
+export interface SeriesPage {
+  items: SeriesCard[]
+  total: number
+  page: number
+  page_size: number
 }
 
 export interface ManualScrapeCandidate {
@@ -34,6 +42,15 @@ export interface ManualScrapeCandidate {
   genres?: string[]
   nsfw?: boolean
 }
+
+export interface ScrapeOptions {
+  episode_artwork?: boolean
+  episode_images?: boolean
+  refresh_matched?: boolean
+  include_matched?: boolean
+}
+
+export type ManualScrapeApplyOptions = ScrapeOptions
 
 export interface MediaMetadataUpdate {
   title?: string
@@ -71,13 +88,33 @@ export const libraryAPI = {
   scan: (id: string) =>
     api.post<ScanResult>(`/libraries/${id}/scan`, null, { timeout: BATCH_REQUEST_TIMEOUT }).then((r) => r.data),
 
-  scrape: (id: string) =>
-    api.post(`/libraries/${id}/scrape`, null, { timeout: BATCH_REQUEST_TIMEOUT }).then((r) => r.data),
+  scrape: (id: string, options?: ScrapeOptions) =>
+    api.post(`/libraries/${id}/scrape`, options ?? null, { timeout: BATCH_REQUEST_TIMEOUT }).then((r) => r.data),
 
-  listMedia: (id: string, page = 1, pageSize = 50) =>
+  listMedia: (id: string, page = 1, pageSize = 50, options?: { groupVersions?: boolean }) =>
     api
       .get<MediaPage>(`/libraries/${id}/media`, {
+        params: {
+          page,
+          page_size: pageSize,
+          group_versions: options?.groupVersions === false ? 0 : undefined,
+        },
+        timeout: LONG_REQUEST_TIMEOUT,
+      })
+      .then((r) => r.data),
+
+  listSeries: (id: string, page = 1, pageSize = 500) =>
+    api
+      .get<SeriesPage>(`/libraries/${id}/series`, {
         params: { page, page_size: pageSize },
+        timeout: LONG_REQUEST_TIMEOUT,
+      })
+      .then((r) => r.data),
+
+  listSeriesEpisodes: (id: string, key: string) =>
+    api
+      .get<{ items: Media[]; total: number }>(`/libraries/${id}/series/episodes`, {
+        params: { key },
         timeout: LONG_REQUEST_TIMEOUT,
       })
       .then((r) => r.data),
@@ -87,10 +124,15 @@ export const mediaAPI = {
   search: (q: string, limit = 50) =>
     api.get<MediaSearchPage>('/media', { params: { q, limit } }).then((r) => r.data),
 
-  searchPage: (q: string, page = 1, pageSize = 50) =>
+  searchPage: (q: string, page = 1, pageSize = 50, options?: { groupVersions?: boolean }) =>
     api
       .get<MediaSearchPage>('/media', {
-        params: { q, page, page_size: pageSize },
+        params: {
+          q,
+          page,
+          page_size: pageSize,
+          group_versions: options?.groupVersions === false ? 0 : undefined,
+        },
         timeout: LONG_REQUEST_TIMEOUT,
       })
       .then((r) => r.data),
@@ -105,11 +147,25 @@ export const mediaAPI = {
       .get<{ items: ManualScrapeCandidate[] }>(`/media/${id}/scrape/search`, { params })
       .then((r) => r.data.items),
 
-  applyManualScrape: (id: string, match: ManualScrapeCandidate) =>
-    api.post<Media>(`/media/${id}/scrape/apply`, match, { timeout: LONG_REQUEST_TIMEOUT }).then((r) => r.data),
-
-  applyManualScrapeBatch: (mediaIDs: string[], match: ManualScrapeCandidate) =>
+  applyManualScrape: (id: string, match: ManualScrapeCandidate, options?: ManualScrapeApplyOptions) =>
     api
-      .post<{ applied: number; errors?: string[] }>('/media/scrape/apply', { media_ids: mediaIDs, match }, { timeout: BATCH_REQUEST_TIMEOUT })
+      .post<Media>(
+        `/media/${id}/scrape/apply`,
+        episodeImageOption(options) === undefined ? match : { ...match, episode_images: episodeImageOption(options) },
+        { timeout: LONG_REQUEST_TIMEOUT },
+      )
       .then((r) => r.data),
+
+  applyManualScrapeBatch: (mediaIDs: string[], match: ManualScrapeCandidate, options?: ManualScrapeApplyOptions) =>
+    api
+      .post<{ applied: number; errors?: string[] }>(
+        '/media/scrape/apply',
+        { media_ids: mediaIDs, match, episode_images: episodeImageOption(options) },
+        { timeout: BATCH_REQUEST_TIMEOUT },
+      )
+      .then((r) => r.data),
+}
+
+function episodeImageOption(options?: ScrapeOptions): boolean | undefined {
+  return options?.episode_images ?? options?.episode_artwork
 }

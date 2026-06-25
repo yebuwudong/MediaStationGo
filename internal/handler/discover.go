@@ -26,6 +26,7 @@ func trendingHandler(svc *service.Container) gin.HandlerFunc {
 		if items == nil {
 			items = []service.Match{}
 		}
+		svc.Discover.WarmMatchArtwork(items)
 		c.JSON(http.StatusOK, gin.H{"items": items})
 	}
 }
@@ -41,6 +42,7 @@ func popularHandler(svc *service.Container) gin.HandlerFunc {
 		if items == nil {
 			items = []service.Match{}
 		}
+		svc.Discover.WarmMatchArtwork(items)
 		c.JSON(http.StatusOK, gin.H{"items": items})
 	}
 }

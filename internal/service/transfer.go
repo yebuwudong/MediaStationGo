@@ -101,3 +101,36 @@ func copyFile(src, dst string) error {
 	}
 	return f.Close()
 }
+
+// moveFile tries os.Rename first (instant on same fs), then falls back
+// to copy + remove for cross-device moves.
+//
+// If dst already exists, moveFile returns an error instead of overwriting it.
+// OrganizeMedia checks this before calling transferFile; this remains the
+// second line of defense against different releases collapsing to one name.
+func moveFile(src, dst string) error {
+	if _, err := os.Stat(dst); err == nil {
+		return fmt.Errorf("destination already exists: %s", dst)
+	}
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+	in, err := os.Open(src) // #nosec G304 -- src is selected from configured media/download roots by the organizer.
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644) // #nosec G304,G302 -- dst is organizer-generated; media files must remain readable by local players.
+	if err != nil {
+		return err
+	}
+	if _, werr := io.Copy(f, in); werr != nil {
+		_ = f.Close()
+		_ = os.Remove(dst)
+		return werr
+	}
+	if cerr := f.Close(); cerr != nil {
+		return cerr
+	}
+	return os.Remove(src)
+}

@@ -51,10 +51,12 @@ type User struct {
 	// ShareWarnings counts anti-account-sharing warnings, mainly device
 	// fingerprint mismatches. Once it exceeds the configured threshold a
 	// re-offence disables the account until an admin re-enables it.
-	ShareWarnings   int        `gorm:"default:0" json:"share_warnings"`
-	LastShareWarnAt *time.Time `json:"last_share_warn_at,omitempty"`
-	IsDefaultAdmin  bool       `gorm:"-" json:"is_default_admin,omitempty"`
-	IsProtected     bool       `gorm:"-" json:"is_protected,omitempty"`
+	ShareWarnings       int        `gorm:"default:0" json:"share_warnings"`
+	LastShareWarnAt     *time.Time `json:"last_share_warn_at,omitempty"`
+	IsDefaultAdmin      bool       `gorm:"-" json:"is_default_admin,omitempty"`
+	IsProtected         bool       `gorm:"-" json:"is_protected,omitempty"`
+	RealtimeOnline      bool       `gorm:"-" json:"realtime_online,omitempty"`
+	RealtimeDeviceCount int        `gorm:"-" json:"realtime_device_count,omitempty"`
 }
 
 // Library 表示用户定义的媒体根目录。
@@ -73,6 +75,7 @@ type Media struct {
 	SeriesID     string  `gorm:"index;size:128" json:"series_id,omitempty"`
 	Title        string  `gorm:"size:255;not null" json:"title"`
 	OriginalName string  `gorm:"size:255" json:"original_name,omitempty"`
+	EpisodeTitle string  `gorm:"size:255" json:"episode_title,omitempty"`
 	Path         string  `gorm:"uniqueIndex;size:1024;not null" json:"path"`
 	SizeBytes    int64   `json:"size_bytes"`
 	DurationSec  int     `json:"duration_sec"`
@@ -200,17 +203,17 @@ type PlaylistItem struct {
 // DownloadTask 是待处理（或已完成）的 torrent / HTTP 下载。
 type DownloadTask struct {
 	Base
-	UserID         string  `gorm:"index;size:36" json:"user_id"`
-	SubscriptionID string  `gorm:"index;size:36" json:"subscription_id,omitempty"`
-	Source         string  `gorm:"size:32;not null" json:"source"` // qbittorrent / transmission / http
-	URL            string  `gorm:"size:2048;not null" json:"-"`
-	Title          string  `gorm:"size:512" json:"title,omitempty"`
-	PosterURL      string  `gorm:"size:2048" json:"poster_url,omitempty"`
-	BackdropURL    string  `gorm:"size:2048" json:"backdrop_url,omitempty"`
-	Overview       string  `gorm:"type:text" json:"overview,omitempty"`
-	SavePath       string  `gorm:"size:1024" json:"save_path"`
-	MediaType      string  `gorm:"size:16" json:"media_type,omitempty"`
-	MediaCategory  string  `gorm:"size:128" json:"media_category,omitempty"`
+	UserID         string `gorm:"index;size:36" json:"user_id"`
+	SubscriptionID string `gorm:"index;size:36" json:"subscription_id,omitempty"`
+	Source         string `gorm:"size:32;not null" json:"source"` // qbittorrent / transmission / http
+	URL            string `gorm:"size:2048;not null" json:"-"`
+	Title          string `gorm:"size:512" json:"title,omitempty"`
+	PosterURL      string `gorm:"size:2048" json:"poster_url,omitempty"`
+	BackdropURL    string `gorm:"size:2048" json:"backdrop_url,omitempty"`
+	Overview       string `gorm:"type:text" json:"overview,omitempty"`
+	SavePath       string `gorm:"size:1024" json:"save_path"`
+	MediaType      string `gorm:"size:16" json:"media_type,omitempty"`
+	MediaCategory  string `gorm:"size:128" json:"media_category,omitempty"`
 	// 媒体展示元数据(用于 Telegram 富通知模板等):原始片名/语言/年份/评分/类型。
 	OriginalName     string  `gorm:"size:512" json:"original_name,omitempty"`
 	OriginalLanguage string  `gorm:"size:32" json:"original_language,omitempty"`
@@ -228,38 +231,38 @@ type DownloadTask struct {
 // Subscription 是自动化规则，轮询 RSS 源并将匹配种子排队到配置的下载客户端。
 type Subscription struct {
 	Base
-	UserID        string     `gorm:"index;size:36" json:"user_id"`
-	Name          string     `gorm:"size:128;not null" json:"name"`
-	FeedURL       string     `gorm:"size:2048;not null" json:"feed_url"`
-	Filter        string     `gorm:"size:512" json:"filter"`
-	MediaType     string     `gorm:"size:16" json:"media_type,omitempty"`
-	MediaCategory string     `gorm:"size:128" json:"media_category,omitempty"`
-	SavePath      string     `gorm:"size:1024" json:"save_path,omitempty"`
-	SearchMode    string     `gorm:"size:16;default:keyword" json:"search_mode,omitempty"` // keyword / imdb
-	IMDBID        string     `gorm:"size:32" json:"imdb_id,omitempty"`
-	Source        string     `gorm:"size:32" json:"source,omitempty"`
-	PosterURL     string     `gorm:"size:2048" json:"poster_url,omitempty"`
-	BackdropURL   string     `gorm:"size:2048" json:"backdrop_url,omitempty"`
-	Overview      string     `gorm:"type:text" json:"overview,omitempty"`
+	UserID        string `gorm:"index;size:36" json:"user_id"`
+	Name          string `gorm:"size:128;not null" json:"name"`
+	FeedURL       string `gorm:"size:2048;not null" json:"feed_url"`
+	Filter        string `gorm:"size:512" json:"filter"`
+	MediaType     string `gorm:"size:16" json:"media_type,omitempty"`
+	MediaCategory string `gorm:"size:128" json:"media_category,omitempty"`
+	SavePath      string `gorm:"size:1024" json:"save_path,omitempty"`
+	SearchMode    string `gorm:"size:16;default:keyword" json:"search_mode,omitempty"` // keyword / imdb
+	IMDBID        string `gorm:"size:32" json:"imdb_id,omitempty"`
+	Source        string `gorm:"size:32" json:"source,omitempty"`
+	PosterURL     string `gorm:"size:2048" json:"poster_url,omitempty"`
+	BackdropURL   string `gorm:"size:2048" json:"backdrop_url,omitempty"`
+	Overview      string `gorm:"type:text" json:"overview,omitempty"`
 	// 媒体展示元数据(用于 Telegram 富通知模板等):原始片名/语言/年份/评分/类型。
-	OriginalName     string  `gorm:"size:512" json:"original_name,omitempty"`
-	OriginalLanguage string  `gorm:"size:32" json:"original_language,omitempty"`
-	Year             int     `json:"year,omitempty"`
-	Rating           float32 `json:"rating,omitempty"`
-	Genres           string  `gorm:"size:255" json:"genres,omitempty"` // comma separated
-	Resolution       string  `gorm:"size:32" json:"resolution,omitempty"`      // 2160p / 1080p / 720p / best
-	Quality          string  `gorm:"size:64" json:"quality,omitempty"`         // remux / bluray / web-dl / hdtv
-	Effects          string  `gorm:"size:128" json:"effects,omitempty"`        // hdr,dolby-vision,atmos
-	ReleaseGroups    string  `gorm:"size:255" json:"release_groups,omitempty"` // comma separated
-	ExcludeWords     string  `gorm:"size:255" json:"exclude_words,omitempty"`  // comma separated
-	WashEnabled   bool       `gorm:"default:false" json:"wash_enabled"`
-	WashPriority  string     `gorm:"size:32" json:"wash_priority,omitempty"` // balanced / resolution / quality / effects / seeders
-	TotalEpisodes int        `gorm:"default:0" json:"total_episodes,omitempty"`
-	Priority      int        `gorm:"default:50" json:"priority,omitempty"` // lower is earlier when schedulers sort later
-	Enabled       bool       `gorm:"default:true" json:"enabled"`
-	LastRunAt     *time.Time `json:"last_run_at,omitempty"`
-	ArchivedAt    *time.Time `gorm:"index" json:"archived_at,omitempty"`
-	ArchiveReason string     `gorm:"size:255" json:"archive_reason,omitempty"`
+	OriginalName     string     `gorm:"size:512" json:"original_name,omitempty"`
+	OriginalLanguage string     `gorm:"size:32" json:"original_language,omitempty"`
+	Year             int        `json:"year,omitempty"`
+	Rating           float32    `json:"rating,omitempty"`
+	Genres           string     `gorm:"size:255" json:"genres,omitempty"`         // comma separated
+	Resolution       string     `gorm:"size:32" json:"resolution,omitempty"`      // 2160p / 1080p / 720p / best
+	Quality          string     `gorm:"size:64" json:"quality,omitempty"`         // remux / bluray / web-dl / hdtv
+	Effects          string     `gorm:"size:128" json:"effects,omitempty"`        // hdr,dolby-vision,atmos
+	ReleaseGroups    string     `gorm:"size:255" json:"release_groups,omitempty"` // comma separated
+	ExcludeWords     string     `gorm:"size:255" json:"exclude_words,omitempty"`  // comma separated
+	WashEnabled      bool       `gorm:"default:false" json:"wash_enabled"`
+	WashPriority     string     `gorm:"size:32" json:"wash_priority,omitempty"` // balanced / resolution / quality / effects / seeders
+	TotalEpisodes    int        `gorm:"default:0" json:"total_episodes,omitempty"`
+	Priority         int        `gorm:"default:50" json:"priority,omitempty"` // lower is earlier when schedulers sort later
+	Enabled          bool       `gorm:"default:true" json:"enabled"`
+	LastRunAt        *time.Time `json:"last_run_at,omitempty"`
+	ArchivedAt       *time.Time `gorm:"index" json:"archived_at,omitempty"`
+	ArchiveReason    string     `gorm:"size:255" json:"archive_reason,omitempty"`
 
 	DownloadedEpisodes int   `gorm:"-" json:"downloaded_episodes,omitempty"`
 	LocalMediaCount    int   `gorm:"-" json:"local_media_count,omitempty"`

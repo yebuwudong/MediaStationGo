@@ -24,6 +24,8 @@ type subscriptionReq struct {
 	PosterURL     string `json:"poster_url"`
 	BackdropURL   string `json:"backdrop_url"`
 	Overview      string `json:"overview"`
+	OriginalName  string `json:"original_name"`
+	Year          int    `json:"year"`
 	Resolution    string `json:"resolution"`
 	Quality       string `json:"quality"`
 	Effects       string `json:"effects"`
@@ -62,6 +64,8 @@ func createSubscriptionHandler(svc *service.Container) gin.HandlerFunc {
 			PosterURL:     req.PosterURL,
 			BackdropURL:   req.BackdropURL,
 			Overview:      req.Overview,
+			OriginalName:  req.OriginalName,
+			Year:          req.Year,
 			Resolution:    req.Resolution,
 			Quality:       req.Quality,
 			Effects:       req.Effects,

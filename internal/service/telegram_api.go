@@ -55,6 +55,7 @@ func telegramHTTPClient(timeout time.Duration, cfg map[string]string) *http.Clie
 func telegramHTTPClients(timeout time.Duration, cfg map[string]string) []*http.Client {
 	clients := []*http.Client{}
 	seen := map[string]bool{}
+	customAPIBase := telegramUsesCustomAPIBase(cfg)
 	for _, proxyRaw := range telegramProxyCandidates(cfg) {
 		proxyURL, err := normalizeProxyURL(proxyRaw, "http")
 		if err != nil || proxyURL == nil {
@@ -70,6 +71,9 @@ func telegramHTTPClients(timeout time.Duration, cfg map[string]string) []*http.C
 		clients = append(clients, &http.Client{Timeout: timeout, Transport: transport})
 	}
 	transport := NewExternalTransport()
+	if customAPIBase {
+		transport = NewInternalTransport()
+	}
 	clients = append(clients, &http.Client{Timeout: timeout, Transport: transport})
 	return clients
 }
@@ -87,6 +91,9 @@ func telegramProxyCandidates(cfg map[string]string) []string {
 	if len(out) > 0 {
 		return out
 	}
+	if telegramUsesCustomAPIBase(cfg) {
+		return out
+	}
 	for _, value := range []string{
 		"http://127.0.0.1:10808",
 		"http://127.0.0.1:10809",
@@ -100,6 +107,10 @@ func telegramProxyCandidates(cfg map[string]string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func telegramUsesCustomAPIBase(cfg map[string]string) bool {
+	return telegramAPIBaseURL(cfg) != defaultTelegramAPIBaseURL
 }
 
 func telegramPostForm(ctx context.Context, cfg map[string]string, method string, form url.Values, timeout time.Duration) error {

@@ -12,8 +12,20 @@ import (
 )
 
 type manualScrapeApplyReq struct {
-	MediaIDs []string                    `json:"media_ids"`
-	Match    service.ManualScrapeRequest `json:"match"`
+	MediaIDs       []string                    `json:"media_ids"`
+	Match          service.ManualScrapeRequest `json:"match"`
+	EpisodeArtwork *bool                       `json:"episode_artwork"`
+	EpisodeImages  *bool                       `json:"episode_images"`
+}
+
+func (r manualScrapeApplyReq) episodeArtworkOption() *bool {
+	if r.EpisodeImages != nil {
+		return r.EpisodeImages
+	}
+	if r.EpisodeArtwork != nil {
+		return r.EpisodeArtwork
+	}
+	return r.Match.EpisodeArtworkOption()
 }
 
 const manualScrapeApplyTimeout = 5 * time.Minute
@@ -72,10 +84,11 @@ func manualScrapeApplyBatchHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		applyCtx, cancel := manualScrapeApplyContext(c)
 		defer cancel()
+		options := service.ScrapeOptions{EpisodeArtwork: req.episodeArtworkOption()}
 		applied := 0
 		errorsOut := make([]string, 0)
 		for _, id := range ids {
-			if _, err := svc.Scraper.ApplyManualMatch(applyCtx, id, req.Match); err != nil {
+			if _, err := svc.Scraper.ApplyManualMatchWithOptions(applyCtx, id, req.Match, options); err != nil {
 				errorsOut = append(errorsOut, id+": "+err.Error())
 				continue
 			}

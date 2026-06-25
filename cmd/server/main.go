@@ -218,14 +218,14 @@ func serveSPA(r *gin.Engine, webDir string) {
 	assets.Static("/", filepath.Join(webDir, "assets"))
 	brand := r.Group("/brand")
 	brand.Use(func(c *gin.Context) {
-		c.Header("Cache-Control", "public, max-age=86400")
+		setNoCacheHeaders(c)
 		c.Next()
 	})
 	brand.Static("/", filepath.Join(webDir, "brand"))
-	for _, icon := range []string{"/favicon.ico", "/favicon.svg"} {
-		iconPath := filepath.Join(webDir, strings.TrimPrefix(icon, "/"))
-		r.GET(icon, serveNoCacheFile(iconPath))
-		r.HEAD(icon, serveNoCacheFile(iconPath))
+	for _, rootFile := range []string{"/favicon.ico", "/favicon.svg", "/artwork-cache-sw.js"} {
+		filePath := filepath.Join(webDir, strings.TrimPrefix(rootFile, "/"))
+		r.GET(rootFile, serveNoCacheFile(filePath))
+		r.HEAD(rootFile, serveNoCacheFile(filePath))
 	}
 	r.NoRoute(func(c *gin.Context) {
 		path := c.Request.URL.Path

@@ -6,9 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -17,13 +15,7 @@ import (
 
 func newScannerTestEnv(t *testing.T) (*ScannerService, *repository.Container) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}, &model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.Setting{})
 	repos := repository.New(db)
 	sc := NewScannerService(&config.Config{}, zap.NewNop(), repos, NewHub(zap.NewNop()), nil, nil)
 	return sc, repos
@@ -123,6 +115,60 @@ func TestScanLibrarySkipsUnchangedExistingLocalMedia(t *testing.T) {
 	}
 	if got := countMedia(t, repos); got != 1 {
 		t.Fatalf("media count = %d, want 1", got)
+	}
+}
+
+func TestScanLibrarySkipsUnchangedLocalMetadata(t *testing.T) {
+	sc, repos := newScannerTestEnv(t)
+	root := t.TempDir()
+	lib := model.Library{Name: "Movies", Path: root, Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(root, "Local Metadata (2024).mkv")
+	if err := os.WriteFile(file, []byte("same-size"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nfo := filepath.Join(root, "Local Metadata (2024).nfo")
+	writeTestMovieNFO(t, nfo, "Local Metadata", "2024", "12345")
+
+	first, err := sc.ScanLibrary(t.Context(), lib.ID)
+	if err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+	if first.Added != 1 || first.LocalMetadata != 1 {
+		t.Fatalf("first scan = %#v, want added=1 local_metadata=1", first)
+	}
+	second, err := sc.ScanLibrary(t.Context(), lib.ID)
+	if err != nil {
+		t.Fatalf("second scan: %v", err)
+	}
+	if second.Added != 0 || second.Updated != 0 || second.Skipped != 1 {
+		t.Fatalf("second scan = %#v, want unchanged local metadata skipped", second)
+	}
+
+	writeTestMovieNFO(t, nfo, "Local Metadata Updated", "2024", "12345")
+	third, err := sc.ScanLibrary(t.Context(), lib.ID)
+	if err != nil {
+		t.Fatalf("third scan: %v", err)
+	}
+	if third.Added != 0 || third.Updated != 1 || third.Skipped != 0 {
+		t.Fatalf("third scan = %#v, want local metadata update only", third)
+	}
+	var media model.Media
+	if err := repos.DB.First(&media, "path = ?", file).Error; err != nil {
+		t.Fatal(err)
+	}
+	if media.Title != "Local Metadata Updated" || media.ScrapeStatus != "matched" {
+		t.Fatalf("local metadata was not refreshed: title=%q status=%q", media.Title, media.ScrapeStatus)
+	}
+}
+
+func writeTestMovieNFO(t *testing.T, path, title, year, tmdbID string) {
+	t.Helper()
+	body := `<movie><title>` + title + `</title><year>` + year + `</year><uniqueid type="tmdb">` + tmdbID + `</uniqueid></movie>`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

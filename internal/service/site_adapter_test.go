@@ -11,9 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
-	"gorm.io/gorm"
-
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
@@ -201,13 +198,7 @@ func TestMTeamPublishedAPIRateLimits(t *testing.T) {
 }
 
 func TestPersistentSiteAPIRateLimiterPersistsSlidingWindow(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Setting{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Setting{})
 	repos := repository.New(db)
 	now := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)
 	limiter := newPersistentSiteAPIRateLimiter(repos)
@@ -220,7 +211,7 @@ func TestPersistentSiteAPIRateLimiterPersistsSlidingWindow(t *testing.T) {
 	if err := limiter.Allow(t.Context(), "mteam:test", limit); err != nil {
 		t.Fatalf("second allow: %v", err)
 	}
-	err = limiter.Allow(t.Context(), "mteam:test", limit)
+	err := limiter.Allow(t.Context(), "mteam:test", limit)
 	var limited *siteAPIRateLimitError
 	if !errors.As(err, &limited) {
 		t.Fatalf("third allow error = %v, want siteAPIRateLimitError", err)

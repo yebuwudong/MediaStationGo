@@ -249,6 +249,17 @@ func TestTelegramProxyCandidatesDefaultLocalFallbacks(t *testing.T) {
 	}
 }
 
+func TestTelegramHTTPClientsCustomAPIBaseSkipsDefaultProxyFallback(t *testing.T) {
+	clients := telegramHTTPClients(time.Second, map[string]string{
+		"api_base_url": "http://127.0.0.1:18080",
+	})
+	if len(clients) != 1 {
+		t.Fatalf("clients = %d, want direct client only", len(clients))
+	}
+	if got := telegramClientProxyString(t, clients[0]); got != "" {
+		t.Fatalf("custom api_base_url proxy = %q, want direct", got)
+	}
+}
 func TestTelegramHTTPClientsPreferConfiguredProxy(t *testing.T) {
 	clients := telegramHTTPClients(time.Second, map[string]string{
 		"proxy_url": "http://proxy.example:7890",

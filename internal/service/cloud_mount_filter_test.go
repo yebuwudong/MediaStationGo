@@ -6,22 +6,14 @@ import (
 	"time"
 
 	"github.com/ShukeBta/MediaStationGo/internal/config"
-	"github.com/glebarez/sqlite"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/repository"
 )
 
 func TestFilterDisplayCloudLibrariesPrefersPopulatedCanonicalDuplicate(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
 	repos := repository.New(db)
 	now := time.Now()
 	oldEmpty := model.Library{
@@ -64,13 +56,7 @@ func TestFilterDisplayCloudLibrariesPrefersPopulatedCanonicalDuplicate(t *testin
 }
 
 func TestFilterDisplayCloudLibrariesMergesCloudMountIntoExistingLibrary(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
 	repos := repository.New(db)
 	local := model.Library{Name: "国产剧", Path: "/media/国产剧", Type: "tv", Enabled: true}
 	cloud := model.Library{Name: "OpenList · 国产剧", Path: BuildCloudLibraryPath("openlist", "/国产剧", "/国产剧"), Type: "tv", Enabled: true}
@@ -98,14 +84,38 @@ func TestFilterDisplayCloudLibrariesMergesCloudMountIntoExistingLibrary(t *testi
 	}
 }
 
+func TestFilterDeprecatedNativeCloudLibrariesHidesPopulatedHistory(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	repos := repository.New(db)
+	emptyQuark := model.Library{Name: "旧 Quark 空库", Path: "cloud://quark/0", Type: "movie", Enabled: true}
+	populatedQuark := model.Library{Name: "旧 Quark 有数据", Path: "cloud://quark/archive", Type: "movie", Enabled: true}
+	openList := model.Library{Name: "OpenList", Path: "cloud://openlist", Type: "movie", Enabled: true}
+	for _, lib := range []*model.Library{&emptyQuark, &populatedQuark, &openList} {
+		if err := repos.Library.Create(t.Context(), lib); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repos.DB.Create(&model.Media{
+		LibraryID: populatedQuark.ID,
+		Title:     "历史媒体",
+		Path:      "cloud://quark/archive/movie.mkv",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	filtered := FilterDeprecatedNativeCloudLibraries([]model.Library{emptyQuark, populatedQuark, openList})
+	if got := libraryNames(filtered); !slices.Equal(got, []string{"OpenList"}) {
+		t.Fatalf("filtered names = %#v, want only supported cloud libraries", got)
+	}
+
+	displayed := FilterDisplayCloudLibraries(t.Context(), repos, []model.Library{emptyQuark, populatedQuark, openList})
+	if got := libraryNames(displayed); !slices.Equal(got, []string{"OpenList"}) {
+		t.Fatalf("display names = %#v, want deprecated cloud hidden", got)
+	}
+}
+
 func TestListMediaVisibleIncludesMergedCloudLibraryItems(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
 	repos := repository.New(db)
 	local := model.Library{Name: "国产剧", Path: "/media/国产剧", Type: "tv", Enabled: true}
 	cloud := model.Library{Name: "OpenList · 国产剧", Path: BuildCloudLibraryPath("openlist", "/国产剧", "/国产剧"), Type: "tv", Enabled: true}
@@ -165,13 +175,7 @@ func TestListMediaVisibleIncludesMergedCloudLibraryItems(t *testing.T) {
 }
 
 func TestListMediaVisibleUsesSpecificCloudChildLibraryAsDisplayTarget(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
 	repos := repository.New(db)
 	root := model.Library{Name: "OpenList", Path: "cloud://openlist", Type: "tv", Enabled: true}
 	child := model.Library{Name: "OpenList · 国产剧", Path: BuildCloudLibraryPath("openlist", "/国产剧", "/国产剧"), Type: "tv", Enabled: true}
@@ -205,13 +209,7 @@ func TestListMediaVisibleUsesSpecificCloudChildLibraryAsDisplayTarget(t *testing
 }
 
 func TestStartAllCloudLibraryScansIncludesMergedCloudMounts(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Library{}, &model.Media{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
 	repos := repository.New(db)
 	local := model.Library{Name: "国产剧", Path: "/media/国产剧", Type: "tv", Enabled: true}
 	cloud := model.Library{Name: "OpenList · 国产剧", Path: BuildCloudLibraryPath("openlist", "/国产剧", "/国产剧"), Type: "tv", Enabled: true}
@@ -228,6 +226,64 @@ func TestStartAllCloudLibraryScansIncludesMergedCloudMounts(t *testing.T) {
 	}
 	if len(statuses) != 1 || statuses[0].LibraryID != cloud.ID {
 		t.Fatalf("scan-all statuses = %#v, want merged cloud library queued", statuses)
+	}
+}
+
+func TestAutoCategoryCloudLibrariesDoNotShadowRootOrScan(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	repos := repository.New(db)
+	root := model.Library{Name: "OpenList", Path: "cloud://openlist", Type: "movie", Enabled: true}
+	auto := model.Library{Name: "欧美剧", Path: BuildCloudAutoCategoryLibraryPath("openlist", "电视剧/欧美剧"), Type: "tv", Enabled: true}
+	for _, lib := range []*model.Library{&root, &auto} {
+		if err := repos.Library.Create(t.Context(), lib); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	libs, err := repos.Library.List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shadow := CloudLibraryShadowed(libs, root); shadow != nil {
+		t.Fatalf("auto category should not shadow root scan: %#v", shadow)
+	}
+	display := FilterDisplayCloudLibraries(t.Context(), repos, libs)
+	if len(display) != 2 {
+		t.Fatalf("display libraries = %#v, want root plus auto category", display)
+	}
+	scannable := FilterScannableCloudLibraries(t.Context(), repos, libs)
+	if len(scannable) != 1 || scannable[0].ID != root.ID {
+		t.Fatalf("scannable libraries = %#v, want only root", scannable)
+	}
+
+	scanner := NewScannerService(&config.Config{}, zap.NewNop(), repos, NewHub(zap.NewNop()), nil, nil)
+	statuses, err := scanner.StartAllCloudLibraryScans()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(statuses) != 1 || statuses[0].LibraryID != root.ID {
+		t.Fatalf("scan-all statuses = %#v, want only root queued", statuses)
+	}
+}
+
+func TestStartAllCloudLibraryScansSkipsDeprecatedQuarkMounts(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	repos := repository.New(db)
+	quark := model.Library{Name: "旧 Quark", Path: "cloud://quark/0", Type: "movie", Enabled: true}
+	openList := model.Library{Name: "OpenList", Path: "cloud://openlist", Type: "movie", Enabled: true}
+	for _, lib := range []*model.Library{&quark, &openList} {
+		if err := repos.Library.Create(t.Context(), lib); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scanner := NewScannerService(&config.Config{}, zap.NewNop(), repos, NewHub(zap.NewNop()), nil, nil)
+
+	statuses, err := scanner.StartAllCloudLibraryScans()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(statuses) != 1 || statuses[0].Provider != "openlist" {
+		t.Fatalf("scan-all statuses = %#v, want only openlist", statuses)
 	}
 }
 

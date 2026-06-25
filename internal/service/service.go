@@ -75,6 +75,7 @@ type Container struct {
 	Site             *SiteService
 	Device           *DeviceService
 	Cache            *RuntimeCacheService
+	Sessions         *SessionTrackerService
 
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
@@ -82,179 +83,7 @@ type Container struct {
 
 // New 构建服务容器。
 func New(cfg *config.Config, log *zap.Logger, repos *repository.Container) *Container {
-	ApplyRuntimeSettings(context.Background(), cfg, repos, log)
-
-	hub := NewHub(log)
-	go hub.Run()
-	tasks := NewTaskTrackerService(log, hub)
-
-	// 初始化 SSE Hub
-	sseHub := NewSSEHub(log)
-	go sseHub.Run()
-
-	probe := NewFFprobeService(cfg, log)
-	runtimeCache := NewRuntimeCacheService(cfg, log)
-	if searchBackend := repository.NewOpenSearchMediaBackend(cfg.Search); searchBackend != nil && repos != nil && repos.Media != nil {
-		repos.Media.SetSearchBackend(searchBackend)
-		if log != nil {
-			log.Info("opensearch media search enabled", zap.String("index", cfg.Search.Index), zap.String("url", cfg.Search.OpenSearchURL))
-		}
-	}
-	crypto := NewCryptoService(cfg.Secrets.JWTSecret, log)
-	apiConfig := NewAPIConfigService(log, repos, crypto)
-	tmdb := NewTMDbProvider(cfg, log, apiConfig)
-	bangumi := NewBangumiProvider(cfg, log)
-	thetvdb := NewTheTVDBProvider(cfg, log)
-	douban := NewDoubanProvider(cfg, log)
-	fanart := NewFanartProvider(cfg, log)
-	adult := NewAdultProvider(log, apiConfig)
-	scraper := NewScraperService(cfg, log, repos, tmdb, bangumi, thetvdb, fanart, hub, adult)
-	scraper.SetDouban(douban)
-	organizer := NewOrganizerService(cfg, log, repos)
-	organizer.SetProbe(probe)
-	organizer.SetScraper(scraper)
-	discover := NewDiscoverService(log, tmdb)
-	transcoder := NewTranscoderService(cfg, log, repos, hub)
-	scanner := NewScannerService(cfg, log, repos, hub, probe, scraper)
-	scanner.SetRuntimeCache(runtimeCache)
-	organizePipeline := NewOrganizePipelineService(log, repos, organizer, scanner, tasks)
-	watcher := NewWatcherService(log, repos, scanner)
-	nfo := NewNFOService(log, repos)
-	ai := NewAIService(cfg, log, apiConfig)
-	duplicate := NewDuplicateService(log, repos, hub)
-	filemanager := NewFileManagerService(cfg, log, repos)
-	dlna := NewDLNAService(log)
-	storage := NewStorageService(log, repos)
-	emby := NewEmbyService(cfg, log, repos)
-	backup := NewBackupService(cfg, log, repos.DB)
-	notifier := NewNotifierService(log, repos)
-	notifyChannels := NewNotifyChannelService(log, repos)
-	scanner.SetNotifyChannels(notifyChannels)
-	scraper.SetNotifyChannels(notifyChannels)
-	playProfiles := NewPlayProfileService(log, repos)
-	permissions := NewPermissionService(log, repos)
-	storageCfg := NewStorageConfigService(log, repos, crypto)
-	strmSvc := NewSTRMService(log, repos, cfg)
-	scanner.SetStorageConfig(storageCfg)
-	emby.SetRuntimeCache(runtimeCache)
-	emby.SetCloudProbe(storageCfg, probe)
-	downloadClients := NewDownloadClientService(log, repos)
-	assistant := NewAssistantService(log, repos, ai)
-	scheduler := NewSchedulerService(log, repos, scanner, transcoder, organizer, storageCfg, hub, cfg.Cache.CacheDir)
-	scheduler.SetTaskTracker(tasks)
-	scheduler.SetOrganizePipeline(organizePipeline)
-
-	// 初始化认证相关服务
-	tokenSvc := NewTokenService(cfg, log, repos)
-	authSvc := NewAuthService(cfg, log, repos, tokenSvc, permissions)
-	deviceSvc := NewDeviceService(log, repos)
-	telegramBot := NewTelegramBotService(log, repos, crypto, authSvc)
-	telegramBot.SetDeviceService(deviceSvc)
-	telegramBot.SetBackupService(backup)
-	// Allow the device-enforcement service to DM users (warnings / deletions)
-	// through their Telegram binding before any destructive action.
-	deviceSvc.SetNotifier(telegramBot.NotifyUserByID)
-	apiConfigSvc := NewApiConfigService(cfg, log, repos, crypto)
-	downloadMgr := NewDownloadManager(log, repos, crypto)
-	notifySvc := NewNotifyService(log, repos, crypto)
-
-	// 构建 FlareSolverr URL（如果启用）
-	flareSolverrURL := ""
-	if cfg.FlareSolverr.Enabled && cfg.FlareSolverr.URL != "" {
-		flareSolverrURL = cfg.FlareSolverr.URL
-	}
-	siteSvc := NewSiteService(log, repos, flareSolverrURL)
-	downloads := NewDownloadService(log, repos, hub, organizer, siteSvc)
-	downloads.SetScanner(scanner)
-	downloads.SetTaskTracker(tasks)
-	downloads.SetOrganizePipeline(organizePipeline)
-	downloads.SetNotifyChannels(notifyChannels)
-	subscription := NewSubscriptionService(cfg, log, repos, downloads, siteSvc, hub)
-	subscription.SetScraper(scraper)
-	subscription.SetNotifyChannels(notifyChannels)
-
-	// 让图片代理把媒体库根目录视为可读的本地图片位置：海报/封面等
-	// sidecar 资源就存放在这些（用户自定义、任意）目录下，否则会被
-	// 路径白名单挡掉、退化成占位图导致前端图片不显示。
-	imageProxy := NewImageProxy(cfg, log)
-	imageProxy.SetLibraryRootsProvider(func() []string {
-		libs, err := repos.Library.List(context.Background())
-		if err != nil {
-			return nil
-		}
-		roots := make([]string, 0, len(libs))
-		for _, l := range libs {
-			if strings.TrimSpace(l.Path) != "" {
-				roots = append(roots, l.Path)
-			}
-		}
-		return roots
-	})
-	scanner.SetImageProxy(imageProxy)
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	return &Container{
-		Cfg:              cfg,
-		Log:              log,
-		Repo:             repos,
-		WSHub:            hub,
-		SSEHub:           sseHub,
-		Tasks:            tasks,
-		Auth:             authSvc,
-		Media:            NewMediaService(cfg, log, repos).SetRuntimeCache(runtimeCache),
-		Scan:             scanner,
-		Stream:           NewStreamService(cfg, log, repos, transcoder),
-		Transcoder:       transcoder,
-		FFprobe:          probe,
-		TMDb:             tmdb,
-		Bangumi:          bangumi,
-		TheTVDB:          thetvdb,
-		Fanart:           fanart,
-		Scraper:          scraper,
-		Discover:         discover,
-		Playback:         NewPlaybackService(log, repos),
-		ImageProxy:       imageProxy,
-		Watcher:          watcher,
-		Downloads:        downloads,
-		Subscription:     subscription,
-		Subtitle:         NewSubtitleService(log, repos),
-		Stats:            NewStatsService(log, repos).SetRuntimeCache(runtimeCache),
-		Profile:          NewProfileService(log, repos),
-		Audit:            NewAuditService(log, repos),
-		NFO:              nfo,
-		AI:               ai,
-		APIConfig:        apiConfig,
-		Crypto:           crypto,
-		Duplicate:        duplicate,
-		FileManager:      filemanager,
-		DLNA:             dlna,
-		Scheduler:        scheduler,
-		Storage:          storage,
-		Emby:             emby,
-		Backup:           backup,
-		Notifier:         notifier,
-		NotifyChannels:   notifyChannels,
-		TelegramBot:      telegramBot,
-		PlayProfiles:     playProfiles,
-		Permissions:      permissions,
-		StorageCfg:       storageCfg,
-		STRM:             strmSvc,
-		DownloadClients:  downloadClients,
-		Assistant:        assistant,
-		Organizer:        organizer,
-		OrganizePipeline: organizePipeline,
-		Douban:           douban,
-		Token:            tokenSvc,
-		ApiConfig:        apiConfigSvc,
-		DownloadMgr:      downloadMgr,
-		Notify:           notifySvc,
-		Site:             siteSvc,
-		Device:           deviceSvc,
-		Cache:            runtimeCache,
-		stopCtx:          ctx,
-		stopCancel:       cancel,
-	}
+	return newServiceContainer(cfg, log, repos)
 }
 
 // Boot 启动后台工作进程（watcher, downloads poller, subscription scheduler）。
@@ -480,6 +309,3 @@ func (c *Container) Close() {
 		c.Scheduler.Stop()
 	}
 }
-
-// unused guard
-var _ = time.Now

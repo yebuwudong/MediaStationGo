@@ -27,6 +27,7 @@ func listLibrariesHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		libs = service.FilterDeprecatedNativeCloudLibraries(libs)
 		role, _ := c.Get(middleware.CtxUserRole)
 		includeHidden := role == "admin" && (c.Query("include_hidden") == "1" || c.Query("all") == "1")
 		if !includeHidden {
@@ -109,7 +110,7 @@ func scanLibraryHandler(svc *service.Container) gin.HandlerFunc {
 					"estimate_message": "小目录通常几十秒；几万文件的大目录可能需要数分钟到数小时，取决于网盘接口速度",
 				})
 			}
-			_, _, _ = svc.Scan.StartCloudLibraryScan(id, false)
+			_, _, _ = svc.Scan.StartCloudLibraryScan(id, true)
 			finishHTTPTask(task, nil, "queued", "云盘扫描已加入后台队列", map[string]int64{"queued": 1}, nil)
 			c.JSON(http.StatusAccepted, gin.H{
 				"library_id":       id,
@@ -119,7 +120,7 @@ func scanLibraryHandler(svc *service.Container) gin.HandlerFunc {
 				"probed":           0,
 				"queued":           true,
 				"cloud":            true,
-				"message":          "云盘扫描已在后台运行，发现的媒体会自动加入当前媒体库",
+				"message":          "云盘扫描已在后台运行，发现的媒体会自动加入当前媒体库；若已开启自动刮削，会在扫描后补齐元数据",
 				"estimate_message": "小目录通常几十秒；几万文件的大目录可能需要数分钟到数小时，取决于网盘接口速度",
 			})
 			return
@@ -211,7 +212,7 @@ func listMediaHandler(svc *service.Container) gin.HandlerFunc {
 		if !groupVersions {
 			items, total, err := svc.Media.ListMediaVisible(c.Request.Context(), id, page, size, mediaVisibilityForRequest(c, svc))
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				writeInternalOrCanceled(c, err)
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{
@@ -224,7 +225,7 @@ func listMediaHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		items, total, err := svc.Media.ListMediaVisibleGrouped(c.Request.Context(), id, page, size, mediaVisibilityForRequest(c, svc))
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			writeInternalOrCanceled(c, err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{
