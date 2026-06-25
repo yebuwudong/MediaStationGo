@@ -24,6 +24,8 @@ const EnvPrefix = "MEDIASTATION"
 const (
 	defaultDatabaseMaxOpenConns = 4
 	defaultDatabaseMaxIdleConns = 2
+	defaultLicenseServerURL     = "https://mgosever.3jzs.com"
+	defaultLicenseHMACSecret    = "ms-shared-hmac-secret-key-Mgo-testing" // #nosec G101 -- shared response-signature key for the bundled license bridge.
 )
 
 // Config 是根配置聚合。
@@ -330,8 +332,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("api_config.auto_encrypt", true)
 	v.SetDefault("api_config.default_timeout", 30)
 
-	v.SetDefault("license.server_url", "")
-	v.SetDefault("license.hmac_secret", "")
+	v.SetDefault("license.server_url", defaultLicenseServerURL)
+	v.SetDefault("license.hmac_secret", defaultLicenseHMACSecret)
 }
 
 // normalize 填充派生默认值并自愈空的关键字段。

@@ -157,6 +157,102 @@ func TestLicenseHeartbeatDueUsesTwelveHourWindow(t *testing.T) {
 	}
 }
 
+func TestStartupLicenseHeartbeatIgnoresTwelveHourWindow(t *testing.T) {
+	heartbeatCount := 0
+	maxUsers := 40
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/heartbeat":
+			heartbeatCount++
+			resp := licenseServerSignedResp{
+				Valid:         true,
+				LicenseType:   "subscription",
+				MaxDevices:    2,
+				MaxUsers:      &maxUsers,
+				NextHeartbeat: time.Now().Add(time.Hour).Format(time.RFC3339),
+			}
+			resp.Signature = signLicenseTestPayload("test-secret", resp)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		case "/api/v1/status/device-1":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"valid": true,
+				"license_type": "subscription",
+				"max_devices": 2,
+				"max_users": 40,
+				"unlimited_users": false,
+				"device_name": "NAS",
+				"is_active": true
+			}`))
+		default:
+			t.Fatalf("unexpected upstream path %s", r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+
+	svc := newLicenseHandlerTestService(t)
+	if err := svc.Repo.Setting.Set(t.Context(), licenseServerURLSetting, upstream.URL); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Repo.Setting.Set(t.Context(), licenseHMACSecretSetting, "test-secret"); err != nil {
+		t.Fatal(err)
+	}
+	state := service.LicenseActivationState{
+		Valid:      true,
+		LicenseKey: "MS-ABCD-EFGH-JKLM-NPQR",
+		DeviceID:   "device-1",
+		DeviceName: "NAS",
+		UpdatedAt:  time.Now().Format(time.RFC3339),
+	}
+	if err := persistLicenseState(t.Context(), svc, state); err != nil {
+		t.Fatal(err)
+	}
+
+	refreshed, sent, err := maybeSendStartupLicenseHeartbeat(t.Context(), svc)
+	if err != nil {
+		t.Fatalf("startup heartbeat: %v", err)
+	}
+	if !sent || heartbeatCount != 1 {
+		t.Fatalf("startup heartbeat should be sent once, sent=%v count=%d", sent, heartbeatCount)
+	}
+	if refreshed.MaxUsers == nil || *refreshed.MaxUsers != 40 {
+		t.Fatalf("startup heartbeat should refresh licensed user capacity, got %+v", refreshed)
+	}
+}
+
+func TestStartupLicenseHeartbeatSkipsStateWithoutStoredKey(t *testing.T) {
+	heartbeatCount := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		heartbeatCount++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer upstream.Close()
+
+	svc := newLicenseHandlerTestService(t)
+	if err := svc.Repo.Setting.Set(t.Context(), licenseServerURLSetting, upstream.URL); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Repo.Setting.Set(t.Context(), licenseHMACSecretSetting, "test-secret"); err != nil {
+		t.Fatal(err)
+	}
+	if err := persistLicenseState(t.Context(), svc, service.LicenseActivationState{
+		Valid:     true,
+		DeviceID:  "device-1",
+		UpdatedAt: time.Now().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, sent, err := maybeSendStartupLicenseHeartbeat(t.Context(), svc)
+	if err != nil {
+		t.Fatalf("startup heartbeat should skip without error, got %v", err)
+	}
+	if sent || heartbeatCount != 0 {
+		t.Fatalf("startup heartbeat without stored license key should be skipped, sent=%v count=%d", sent, heartbeatCount)
+	}
+}
+
 func TestLicenseHeartbeatEligibleRequiresActivationState(t *testing.T) {
 	if licenseHeartbeatEligible(service.LicenseActivationState{DeviceID: "device-only"}) {
 		t.Fatalf("device id alone should not trigger automatic license heartbeat")
@@ -164,8 +260,34 @@ func TestLicenseHeartbeatEligibleRequiresActivationState(t *testing.T) {
 	if !licenseHeartbeatEligible(service.LicenseActivationState{LicenseKey: "MS-KEY"}) {
 		t.Fatalf("stored license key should trigger automatic license heartbeat")
 	}
-	if !licenseHeartbeatEligible(service.LicenseActivationState{Valid: true}) {
-		t.Fatalf("valid license state should trigger automatic license heartbeat")
+	if licenseHeartbeatEligible(service.LicenseActivationState{Valid: true}) {
+		t.Fatalf("valid state without stored license key should not trigger automatic license heartbeat")
+	}
+}
+
+func TestLicenseStatusSkipsUnlicensedHeartbeatWithDefaultServer(t *testing.T) {
+	upstreamCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer upstream.Close()
+
+	svc := newLicenseHandlerTestService(t)
+	svc.Cfg.License.ServerURL = upstream.URL
+	svc.Cfg.License.HMACSecret = "test-secret"
+
+	router := gin.New()
+	router.GET("/license/status", licenseStatusHandler(svc))
+	req := httptest.NewRequest(http.MethodGet, "/license/status", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	if upstreamCalls != 0 {
+		t.Fatalf("unlicensed status should not contact license server, got %d calls", upstreamCalls)
 	}
 }
 

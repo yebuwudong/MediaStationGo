@@ -114,7 +114,8 @@ func licenseStatusHandler(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		state, _ := loadLicenseState(c.Request.Context(), svc)
 		client, err := newLicenseClient(c.Request.Context(), svc)
-		if err == nil {
+		hasLicenseKey := strings.TrimSpace(state.LicenseKey) != ""
+		if err == nil && hasLicenseKey {
 			deviceID, idErr := ensureLicenseDeviceID(c.Request.Context(), svc, state.DeviceID)
 			if idErr == nil {
 				deviceName, _ := svc.Repo.Setting.Get(c.Request.Context(), licenseDeviceNameSetting)
@@ -140,6 +141,17 @@ func licenseStatusHandler(svc *service.Container) gin.HandlerFunc {
 						state.Valid = false
 						_ = persistLicenseState(c.Request.Context(), svc, state)
 					}
+				}
+			}
+		} else if err == nil && state.Valid {
+			deviceID, idErr := ensureLicenseDeviceID(c.Request.Context(), svc, state.DeviceID)
+			if idErr == nil {
+				if refreshed, ok, _, getErr := refreshLicenseServerStatus(c.Request.Context(), client, state, deviceID); getErr == nil && ok {
+					state = refreshed
+					_ = persistLicenseState(c.Request.Context(), svc, state)
+				} else if getErr == nil {
+					state.Valid = false
+					_ = persistLicenseState(c.Request.Context(), svc, state)
 				}
 			}
 		}
@@ -179,17 +191,13 @@ func RunLicenseHeartbeatLoop(ctx context.Context, svc *service.Container) {
 	if svc == nil {
 		return
 	}
-	run := func() {
-		state, sent, err := maybeSendLicenseHeartbeat(ctx, svc, licenseHeartbeatInterval)
-		if err != nil {
-			if svc.Log != nil {
-				svc.Log.Warn("license heartbeat failed", zap.Error(err))
-			}
-			return
-		}
-		if sent && svc.Log != nil {
-			svc.Log.Info("license heartbeat sent", zap.String("device_id", state.DeviceID))
-		}
+	run := func(interval time.Duration) {
+		state, sent, err := maybeSendLicenseHeartbeat(ctx, svc, interval)
+		logLicenseHeartbeatResult(svc, state, sent, err)
+	}
+	runStartup := func() {
+		state, sent, err := maybeSendStartupLicenseHeartbeat(ctx, svc)
+		logLicenseHeartbeatResult(svc, state, sent, err)
 	}
 
 	timer := time.NewTimer(licenseHeartbeatStartupDelay)
@@ -198,7 +206,7 @@ func RunLicenseHeartbeatLoop(ctx context.Context, svc *service.Container) {
 	case <-ctx.Done():
 		return
 	case <-timer.C:
-		run()
+		runStartup()
 	}
 
 	ticker := time.NewTicker(licenseHeartbeatCheckInterval)
@@ -208,9 +216,33 @@ func RunLicenseHeartbeatLoop(ctx context.Context, svc *service.Container) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			run()
+			run(licenseHeartbeatInterval)
 		}
 	}
+}
+
+func logLicenseHeartbeatResult(svc *service.Container, state service.LicenseActivationState, sent bool, err error) {
+	if svc == nil || svc.Log == nil {
+		return
+	}
+	if err != nil {
+		svc.Log.Warn("license heartbeat failed", zap.Error(err))
+		return
+	}
+	if sent {
+		svc.Log.Info("license heartbeat sent", zap.String("device_id", state.DeviceID))
+	}
+}
+
+func maybeSendStartupLicenseHeartbeat(ctx context.Context, svc *service.Container) (service.LicenseActivationState, bool, error) {
+	state, err := loadLicenseState(ctx, svc)
+	if err != nil {
+		return state, false, nil
+	}
+	if strings.TrimSpace(state.LicenseKey) == "" {
+		return state, false, nil
+	}
+	return maybeSendLicenseHeartbeat(ctx, svc, 0)
 }
 
 func maybeSendLicenseHeartbeat(ctx context.Context, svc *service.Container, interval time.Duration) (service.LicenseActivationState, bool, error) {
@@ -247,7 +279,7 @@ func maybeSendLicenseHeartbeat(ctx context.Context, svc *service.Container, inte
 }
 
 func licenseHeartbeatEligible(state service.LicenseActivationState) bool {
-	return strings.TrimSpace(state.LicenseKey) != "" || state.Valid
+	return strings.TrimSpace(state.LicenseKey) != ""
 }
 
 func licenseHeartbeatDue(state service.LicenseActivationState, interval time.Duration) bool {

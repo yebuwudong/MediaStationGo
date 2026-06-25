@@ -58,6 +58,9 @@ func TestLoadDefaults(t *testing.T) {
 	if !cfg.Organizer.SmartClassify {
 		t.Fatalf("expected organizer smart classify enabled by default")
 	}
+	if cfg.License.ServerURL != defaultLicenseServerURL || cfg.License.HMACSecret != defaultLicenseHMACSecret {
+		t.Fatalf("expected bundled license bridge defaults, got url=%q secret=%q", cfg.License.ServerURL, cfg.License.HMACSecret)
+	}
 	// Re-loading must reuse the persisted secret on disk.
 	cfg2, err := Load()
 	if err != nil {
@@ -87,6 +90,8 @@ func TestEnvOverride(t *testing.T) {
 	t.Setenv("MEDIASTATION_CACHE_MEDIA_TTL_SECONDS", "30")
 	t.Setenv("MEDIASTATION_SEARCH_BACKEND", "opensearch")
 	t.Setenv("MEDIASTATION_SEARCH_OPENSEARCH_URL", "http://opensearch:9200")
+	t.Setenv("MEDIASTATION_LICENSE_SERVER_URL", "https://license.example.com")
+	t.Setenv("MEDIASTATION_LICENSE_HMAC_SECRET", "override-secret")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
@@ -102,6 +107,9 @@ func TestEnvOverride(t *testing.T) {
 	}
 	if cfg.Search.Backend != "opensearch" || cfg.Search.OpenSearchURL != "http://opensearch:9200" {
 		t.Fatalf("expected opensearch config from env, got backend=%q url=%q", cfg.Search.Backend, cfg.Search.OpenSearchURL)
+	}
+	if cfg.License.ServerURL != "https://license.example.com" || cfg.License.HMACSecret != "override-secret" {
+		t.Fatalf("expected license config from env, got url=%q secret=%q", cfg.License.ServerURL, cfg.License.HMACSecret)
 	}
 }
 

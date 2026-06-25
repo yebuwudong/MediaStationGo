@@ -116,7 +116,7 @@ export const licenseSettingsGroup: SettingGroup = {
       key: 'license.server_url',
       label: 'License Server 地址',
       type: 'text',
-      placeholder: 'http://127.0.0.1:8001',
+      placeholder: 'https://mgosever.3jzs.com',
     },
     {
       key: 'license.hmac_secret',
