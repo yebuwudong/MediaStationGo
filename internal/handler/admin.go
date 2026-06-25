@@ -43,6 +43,7 @@ func createUserHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		refreshLicenseCapacityBestEffort(c.Request.Context(), svc)
 		u, _, err := svc.Auth.Register(c.Request.Context(), req.Username, req.Password)
 		if err != nil {
 			writeUserMutationError(c, svc, err)

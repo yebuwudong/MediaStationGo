@@ -18,7 +18,7 @@ export function LicenseHeader() {
       </div>
       <div>
         <h1 className="font-display text-3xl font-bold text-ink-600">许可证</h1>
-        <p className="text-sm text-ink-50">绑定授权密钥以解锁全部功能</p>
+        <p className="text-sm text-ink-50">绑定授权密钥以提升多用户容量</p>
       </div>
     </div>
   )
@@ -55,7 +55,7 @@ export function LicenseBindPanel({
         </button>
       </form>
       <p className="text-xs text-sand-500">
-        输入从授权服务器获取的许可证密钥，激活后即可使用所有高级功能。
+        输入从授权服务器获取的许可证密钥，激活后按授权额度开放更多平台用户。
       </p>
     </div>
   )
@@ -126,7 +126,7 @@ export function LicenseStatusPanel({
 
       {active && activation && (
         <div className="grid grid-cols-2 gap-3">
-          <StatusBadge label="密钥" value={activation.key ?? activation.key_id} mono />
+          <StatusBadge label="密钥" value={activation.key || activation.key_id} mono />
           <StatusBadge
             label="套餐"
             value={activation.plan ?? 'standard'}

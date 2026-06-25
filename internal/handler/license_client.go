@@ -36,9 +36,13 @@ func newLicenseClient(ctx context.Context, svc *service.Container) (*licenseClie
 	if baseURL == "" {
 		return nil, errors.New("license server url not configured")
 	}
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return nil, errors.New("license hmac secret not configured")
+	}
 	return &licenseClient{
 		baseURL:    baseURL,
-		hmacSecret: strings.TrimSpace(secret),
+		hmacSecret: secret,
 		httpClient: &http.Client{Timeout: 15 * time.Second},
 	}, nil
 }
@@ -93,7 +97,10 @@ func (c *licenseClient) do(req *http.Request, out any) error {
 
 func (c *licenseClient) verifySigned(resp *licenseServerSignedResp) error {
 	if c.hmacSecret == "" {
-		return nil
+		return errors.New("license hmac secret not configured")
+	}
+	if strings.TrimSpace(resp.Signature) == "" {
+		return errors.New("license server signature missing")
 	}
 	unsigned := struct {
 		Valid         bool    `json:"valid"`

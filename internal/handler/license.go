@@ -29,7 +29,10 @@ const (
 )
 
 type licenseActivateReq struct {
-	Key        string `json:"key" binding:"required"`
+	Key string `json:"key" binding:"required"`
+	// DeviceID is accepted for wire compatibility with older web clients but is
+	// intentionally ignored. Licensing binds to this MediaStationGo server
+	// instance, not to the browser that opened the admin page.
 	DeviceID   string `json:"device_id"`
 	DeviceName string `json:"device_name"`
 }
@@ -71,7 +74,7 @@ func licenseActivateHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		deviceID, err := ensureLicenseDeviceID(c.Request.Context(), svc, req.DeviceID)
+		deviceID, err := ensureLicenseDeviceID(c.Request.Context(), svc, "")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -160,6 +163,13 @@ func licenseHeartbeatHandler(svc *service.Container) gin.HandlerFunc {
 		}
 		c.JSON(http.StatusOK, licenseActivationView(state))
 	}
+}
+
+func refreshLicenseCapacityBestEffort(ctx context.Context, svc *service.Container) {
+	if svc == nil || svc.Repo == nil || svc.Repo.Setting == nil {
+		return
+	}
+	_, _, _ = maybeSendLicenseHeartbeat(ctx, svc, 0)
 }
 
 // RunLicenseHeartbeatLoop keeps the license server aware of active deployments.
@@ -431,6 +441,7 @@ func licenseActivationView(state service.LicenseActivationState) gin.H {
 	return gin.H{
 		"id":              state.DeviceID,
 		"key_id":          state.LicenseType,
+		"key":             maskLicenseKey(state.LicenseKey),
 		"device_id":       state.DeviceID,
 		"device_name":     state.DeviceName,
 		"plan":            state.LicenseType,
@@ -442,6 +453,17 @@ func licenseActivationView(state service.LicenseActivationState) gin.H {
 		"heartbeat_at":    updatedAt,
 		"created_at":      updatedAt,
 	}
+}
+
+func maskLicenseKey(key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return ""
+	}
+	if len(key) <= 8 {
+		return key
+	}
+	return key[:5] + "..." + key[len(key)-4:]
 }
 
 func licenseStatusMessage(active bool, clientErr error) string {

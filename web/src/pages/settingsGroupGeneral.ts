@@ -122,7 +122,7 @@ export const licenseSettingsGroup: SettingGroup = {
       key: 'license.hmac_secret',
       label: 'HMAC 签名密钥',
       type: 'text',
-      hint: '必须与 License Server 的 LICENSE_HMAC_SECRET 保持一致；留空则跳过响应签名校验。',
+      hint: '必须与 License Server 的 LICENSE_HMAC_SECRET 保持一致；用于校验多用户授权响应签名。',
     },
   ],
 }

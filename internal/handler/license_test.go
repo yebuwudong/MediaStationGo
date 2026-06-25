@@ -1,12 +1,23 @@
 package handler
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/ShukeBta/MediaStationGo/internal/config"
+	"github.com/ShukeBta/MediaStationGo/internal/model"
+	"github.com/ShukeBta/MediaStationGo/internal/repository"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
+	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
 )
 
 func TestLicenseStatusMaxUsersUsesLicensedLimit(t *testing.T) {
@@ -156,4 +167,109 @@ func TestLicenseHeartbeatEligibleRequiresActivationState(t *testing.T) {
 	if !licenseHeartbeatEligible(service.LicenseActivationState{Valid: true}) {
 		t.Fatalf("valid license state should trigger automatic license heartbeat")
 	}
+}
+
+func TestLicenseActivateBindsServerInstanceNotBrowserFingerprint(t *testing.T) {
+	var upstreamFingerprint string
+	maxUsers := 60
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode upstream payload: %v", err)
+		}
+		upstreamFingerprint, _ = payload["fingerprint"].(string)
+		resp := licenseServerSignedResp{
+			Valid:         true,
+			LicenseType:   "subscription",
+			MaxDevices:    3,
+			MaxUsers:      &maxUsers,
+			NextHeartbeat: time.Now().Add(time.Hour).Format(time.RFC3339),
+		}
+		resp.Signature = signLicenseTestPayload("test-secret", resp)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer upstream.Close()
+
+	svc := newLicenseHandlerTestService(t)
+	if err := svc.Repo.Setting.Set(t.Context(), licenseServerURLSetting, upstream.URL); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Repo.Setting.Set(t.Context(), licenseHMACSecretSetting, "test-secret"); err != nil {
+		t.Fatal(err)
+	}
+
+	router := gin.New()
+	router.POST("/license/activate", licenseActivateHandler(svc))
+	req := httptest.NewRequest(http.MethodPost, "/license/activate", strings.NewReader(`{
+		"key": "MS-ABCD-EFGH-JKLM-NPQR",
+		"device_id": "browser-fingerprint",
+		"device_name": ""
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("activate status = %d body=%s", w.Code, w.Body.String())
+	}
+	if upstreamFingerprint == "" || upstreamFingerprint == "browser-fingerprint" || !strings.HasPrefix(upstreamFingerprint, "msgo-") {
+		t.Fatalf("activation should use server-generated msgo id, got %q", upstreamFingerprint)
+	}
+	stored, err := svc.Repo.Setting.Get(t.Context(), licenseDeviceIDSetting)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored != upstreamFingerprint {
+		t.Fatalf("stored device id = %q, upstream fingerprint = %q", stored, upstreamFingerprint)
+	}
+}
+
+func TestNewLicenseClientRequiresHMACSecret(t *testing.T) {
+	svc := newLicenseHandlerTestService(t)
+	if err := svc.Repo.Setting.Set(t.Context(), licenseServerURLSetting, "http://127.0.0.1:8001"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newLicenseClient(t.Context(), svc); err == nil || !strings.Contains(err.Error(), "hmac secret") {
+		t.Fatalf("expected missing hmac secret error, got %v", err)
+	}
+}
+
+func newLicenseHandlerTestService(t *testing.T) *service.Container {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Setting{}); err != nil {
+		t.Fatal(err)
+	}
+	return &service.Container{
+		Cfg:  &config.Config{},
+		Repo: repository.New(db),
+	}
+}
+
+func signLicenseTestPayload(secret string, resp licenseServerSignedResp) string {
+	unsigned := struct {
+		Valid         bool    `json:"valid"`
+		LicenseType   string  `json:"license_type"`
+		ExpiryDate    *string `json:"expiry_date"`
+		MaxDevices    int     `json:"max_devices"`
+		MaxUsers      *int    `json:"max_users"`
+		DaysRemaining *int    `json:"days_remaining"`
+		NextHeartbeat string  `json:"next_heartbeat"`
+	}{
+		Valid:         resp.Valid,
+		LicenseType:   resp.LicenseType,
+		ExpiryDate:    resp.ExpiryDate,
+		MaxDevices:    resp.MaxDevices,
+		MaxUsers:      resp.MaxUsers,
+		DaysRemaining: resp.DaysRemaining,
+		NextHeartbeat: resp.NextHeartbeat,
+	}
+	payload, _ := json.Marshal(unsigned)
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write(payload)
+	return hex.EncodeToString(mac.Sum(nil))
 }
