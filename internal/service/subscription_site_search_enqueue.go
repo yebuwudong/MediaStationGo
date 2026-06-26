@@ -68,6 +68,7 @@ func (s *SubscriptionService) enqueueSiteSearchCandidate(ctx context.Context, su
 		AllowExistingLibrary: sub.WashEnabled,
 	}); err != nil {
 		if IsDownloadDedupError(err) {
+			state.markCandidateAvailable(candidate)
 			s.logSiteSearchCandidateSkipped(sub, state, candidate, "download_dedup", mediaType, mediaCategory, savePath)
 			return "", nil
 		}

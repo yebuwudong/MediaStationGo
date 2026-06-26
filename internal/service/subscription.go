@@ -315,6 +315,7 @@ func (s *SubscriptionService) enqueueRSSSubscriptionCandidate(ctx context.Contex
 		AllowExistingLibrary: sub.WashEnabled,
 	}); err != nil {
 		if IsDownloadDedupError(err) {
+			state.markCandidateAvailable(candidate)
 			state.markSeen(candidate.GUID)
 			return false
 		}
@@ -355,6 +356,12 @@ func (s *SubscriptionService) finishRSSSubscriptionRun(ctx context.Context, sub 
 func (state *rssSubscriptionRunState) markTitleAvailable(title string) {
 	if state.washOff {
 		addAvailabilityTitle(title, state.availabilityQuery, &state.availability)
+	}
+}
+
+func (state *rssSubscriptionRunState) markCandidateAvailable(candidate siteSearchCandidate) {
+	if state.washOff {
+		addSiteSearchCandidateAvailability(candidate, &state.availability)
 	}
 }
 

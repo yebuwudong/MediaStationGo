@@ -226,7 +226,7 @@ func TestSubscriptionPendingDownloadAvailabilityIncludesLiveQBTorrents(t *testin
 	}
 }
 
-func TestSiteSearchDownloadDedupDoesNotMarkCandidateAvailable(t *testing.T) {
+func TestSiteSearchDownloadDedupMarksCandidateAvailable(t *testing.T) {
 	db := newServiceTestDB(t, &model.DownloadTask{}, &model.Setting{})
 	repos := repository.New(db)
 	sub := &model.Subscription{
@@ -281,10 +281,12 @@ func TestSiteSearchDownloadDedupDoesNotMarkCandidateAvailable(t *testing.T) {
 	if title != "" {
 		t.Fatalf("queued title = %q, want empty on dedup", title)
 	}
-	if _, ok := state.Availability.ExistingEpisodeKeys[episodeKey(1, 7)]; ok {
-		t.Fatalf("deduped candidate should not mark E07 available: %#v", state.Availability.ExistingEpisodeKeys)
+	for _, episode := range []int{7, 8} {
+		if _, ok := state.Availability.ExistingEpisodeKeys[episodeKey(1, episode)]; !ok {
+			t.Fatalf("deduped candidate should mark E%d available: %#v", episode, state.Availability.ExistingEpisodeKeys)
+		}
 	}
-	if len(state.Seen) != 0 {
-		t.Fatalf("deduped candidate should not be marked seen: %#v", state.Seen)
+	if len(state.Seen) != 1 || state.Seen[0] != "site|mteam|nanyang-7-8" {
+		t.Fatalf("deduped candidate should be marked seen: %#v", state.Seen)
 	}
 }
