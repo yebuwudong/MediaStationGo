@@ -1,6 +1,8 @@
 package service
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -102,6 +104,89 @@ func TestSubscriptionPendingDownloadAvailabilityIncludesQueuedTasks(t *testing.T
 	got := selectSiteSearchCandidates(results, sub, map[string]struct{}{}, availability)
 	if len(got) != 1 || got[0].Episode != 3 {
 		t.Fatalf("selected %#v, want only not-yet-downloaded episode 3", got)
+	}
+}
+
+func TestSubscriptionPendingDownloadAvailabilityUsesOriginalNameAliasForTasks(t *testing.T) {
+	db := newServiceTestDB(t, &model.DownloadTask{})
+	repos := repository.New(db)
+	if err := repos.Download.Create(t.Context(), &model.DownloadTask{
+		Source:   "qbittorrent",
+		URL:      "https://pt/download/7-8",
+		Title:    "Archives The Nanyang Mystery 2026 S01E07-S01E08 2160p WEB-DL",
+		SavePath: "/downloads/tv",
+		Status:   "queued",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewSubscriptionService(nil, nil, repos, nil, nil, nil)
+	sub := &model.Subscription{
+		Name:          "南部档案 自动订阅",
+		Filter:        "南部档案 2026",
+		OriginalName:  "Archives The Nanyang Mystery",
+		MediaType:     "tv",
+		SavePath:      "/downloads/tv",
+		TotalEpisodes: 33,
+	}
+
+	availability := svc.pendingDownloadAvailability(t.Context(), sub)
+	if availability.DownloadedEpisodes != 2 {
+		t.Fatalf("downloaded episodes = %d, want 2", availability.DownloadedEpisodes)
+	}
+	for _, episode := range []int{7, 8} {
+		if _, ok := availability.ExistingEpisodeKeys[episodeKey(1, episode)]; !ok {
+			t.Fatalf("missing pending E%02d key: %#v", episode, availability.ExistingEpisodeKeys)
+		}
+	}
+	got := selectSiteSearchCandidates([]SearchResult{
+		{Title: "Archives The Nanyang Mystery 2026 S01E07-S01E08 2160p WEB-DL", SearchKeyword: "南部档案 2026", DownloadURL: "https://pt/download/7-8", Seeders: 80},
+	}, sub, map[string]struct{}{}, availability)
+	if len(got) != 0 {
+		t.Fatalf("selected %#v, want existing alias range to satisfy E07-E08", got)
+	}
+}
+
+func TestSubscriptionPendingDownloadAvailabilityUsesOriginalNameAliasForLiveTorrents(t *testing.T) {
+	qb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			_, _ = w.Write([]byte("Ok."))
+		case "/api/v2/torrents/info":
+			_, _ = w.Write([]byte(`[{"hash":"abc123","name":"Archives The Nanyang Mystery 2026 S01E29-E33 2160p WEB-DL","save_path":"/downloads/tv","state":"downloading","progress":0.3}]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer qb.Close()
+
+	db := newServiceTestDB(t, &model.DownloadTask{}, &model.DownloadClient{}, &model.Setting{})
+	repos := repository.New(db)
+	downloads := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
+	downloads.qb.Configure(QBitConfig{BaseURL: qb.URL, Username: "admin", Password: "admin"})
+	svc := NewSubscriptionService(nil, nil, repos, downloads, nil, nil)
+	sub := &model.Subscription{
+		Name:          "南部档案 自动订阅",
+		Filter:        "南部档案 2026",
+		OriginalName:  "Archives The Nanyang Mystery",
+		MediaType:     "tv",
+		SavePath:      "/downloads/tv",
+		TotalEpisodes: 33,
+	}
+
+	availability := svc.pendingDownloadAvailability(t.Context(), sub)
+	if availability.DownloadedEpisodes != 5 {
+		t.Fatalf("downloaded episodes = %d, want 5", availability.DownloadedEpisodes)
+	}
+	for _, episode := range []int{29, 30, 31, 32, 33} {
+		if _, ok := availability.ExistingEpisodeKeys[episodeKey(1, episode)]; !ok {
+			t.Fatalf("missing live E%02d key: %#v", episode, availability.ExistingEpisodeKeys)
+		}
+	}
+	got := selectSiteSearchCandidates([]SearchResult{
+		{Title: "Archives The Nanyang Mystery 2026 S01E29-E33 2160p WEB-DL", SearchKeyword: "南部档案 2026", DownloadURL: "https://pt/download/29-33", Seeders: 80},
+	}, sub, map[string]struct{}{}, availability)
+	if len(got) != 0 {
+		t.Fatalf("selected %#v, want existing live alias range to satisfy E29-E33", got)
 	}
 }
 

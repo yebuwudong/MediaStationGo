@@ -19,13 +19,13 @@ func (s *SubscriptionService) pendingDownloadAvailability(ctx context.Context, s
 	if sub != nil {
 		out.TotalEpisodes = sub.TotalEpisodes
 	}
-	query := availabilityQuery(subscriptionName(sub), subscriptionFilter(sub))
-	if query == "" {
+	queries := subscriptionAvailabilityQueries(sub)
+	if len(queries) == 0 {
 		return s.finalizePendingAvailability(sub, out)
 	}
 	root := s.subscriptionBaseSavePath(ctx, sub)
 	if root != "" {
-		_ = scanDownloadPath(ctx, root, query, func(path string, season, episode int) bool {
+		_ = scanDownloadPathAny(ctx, root, queries, func(path string, season, episode int) bool {
 			out.LocalMediaCount++
 			if refs := episodeRefsFromTitle(path); len(refs) > 0 {
 				for _, ref := range refs {
@@ -37,8 +37,8 @@ func (s *SubscriptionService) pendingDownloadAvailability(ctx context.Context, s
 			return true
 		})
 	}
-	s.addDownloadTaskAvailability(ctx, sub, query, &out)
-	s.addLiveTorrentAvailability(ctx, query, &out)
+	s.addDownloadTaskAvailability(ctx, sub, queries, &out)
+	s.addLiveTorrentAvailability(ctx, queries, &out)
 	return s.finalizePendingAvailability(sub, out)
 }
 
@@ -58,7 +58,7 @@ func (s *SubscriptionService) EnrichProgress(ctx context.Context, items []model.
 	}
 }
 
-func (s *SubscriptionService) addDownloadTaskAvailability(ctx context.Context, sub *model.Subscription, query string, out *LocalAvailability) {
+func (s *SubscriptionService) addDownloadTaskAvailability(ctx context.Context, sub *model.Subscription, queries []string, out *LocalAvailability) {
 	if s == nil || s.repo == nil || s.repo.Download == nil || out == nil {
 		return
 	}
@@ -82,7 +82,7 @@ func (s *SubscriptionService) addDownloadTaskAvailability(ctx context.Context, s
 			addTrustedAvailabilityTitle(row.Title, 0, 0, false, out)
 			continue
 		}
-		addAvailabilityTitle(row.Title, query, out)
+		addAvailabilityTitleAny(row.Title, queries, out)
 	}
 }
 
@@ -93,7 +93,7 @@ func (s *SubscriptionService) downloadTaskCountsAsPending(ctx context.Context, r
 	return s.downloads.subscriptionDownloadTaskStillLive(ctx, row)
 }
 
-func (s *SubscriptionService) addLiveTorrentAvailability(ctx context.Context, query string, out *LocalAvailability) {
+func (s *SubscriptionService) addLiveTorrentAvailability(ctx context.Context, queries []string, out *LocalAvailability) {
 	if s == nil || s.downloads == nil || s.downloads.qb == nil || out == nil {
 		return
 	}
@@ -102,7 +102,7 @@ func (s *SubscriptionService) addLiveTorrentAvailability(ctx context.Context, qu
 		return
 	}
 	for _, torrent := range live {
-		addAvailabilityTitle(torrent.Name, query, out)
+		addAvailabilityTitleAny(torrent.Name, queries, out)
 	}
 }
 
@@ -110,7 +110,7 @@ func addAvailabilityTitle(title, query string, out *LocalAvailability) {
 	if out == nil || strings.TrimSpace(title) == "" || strings.TrimSpace(query) == "" {
 		return
 	}
-	if !strings.Contains(normalizeAvailabilityComparable(title), normalizeAvailabilityComparable(query)) {
+	if !availabilityTitleMatchesAny(title, []string{query}) {
 		return
 	}
 	out.LocalMediaCount++
@@ -126,6 +126,30 @@ func addAvailabilityTitle(title, query string, out *LocalAvailability) {
 	if isSeriesPackTitle(title) {
 		out.HasSeriesPack = true
 	}
+}
+
+func addAvailabilityTitleAny(title string, queries []string, out *LocalAvailability) {
+	if !availabilityTitleMatchesAny(title, queries) {
+		return
+	}
+	addTrustedAvailabilityTitle(title, 0, 0, false, out)
+}
+
+func availabilityTitleMatchesAny(title string, queries []string) bool {
+	titleKey := normalizeAvailabilityComparable(title)
+	if titleKey == "" {
+		return false
+	}
+	for _, query := range queries {
+		queryKey := normalizeAvailabilityComparable(query)
+		if queryKey == "" {
+			continue
+		}
+		if strings.Contains(titleKey, queryKey) {
+			return true
+		}
+	}
+	return false
 }
 
 func addSiteSearchCandidateAvailability(candidate siteSearchCandidate, out *LocalAvailability) {
@@ -230,6 +254,20 @@ func subscriptionFilter(sub *model.Subscription) string {
 		return ""
 	}
 	return sub.Filter
+}
+
+func subscriptionAvailabilityQueries(sub *model.Subscription) []string {
+	if sub == nil {
+		return nil
+	}
+	values := []string{availabilityQuery(subscriptionName(sub), subscriptionFilter(sub))}
+	for _, keyword := range siteSearchKeywords(sub) {
+		values = append(values, cleanAvailabilityTitle(keyword))
+	}
+	if original := cleanAvailabilityTitle(sub.OriginalName); original != "" {
+		values = append(values, original)
+	}
+	return compactUniqueStrings(values...)
 }
 
 func mergeLocalAvailability(values ...LocalAvailability) LocalAvailability {
@@ -343,6 +381,10 @@ func (s *SubscriptionService) downloadPathHasCandidate(ctx context.Context, sub 
 }
 
 func scanDownloadPath(ctx context.Context, root, query string, visit func(path string, season, episode int) bool) error {
+	return scanDownloadPathAny(ctx, root, []string{query}, visit)
+}
+
+func scanDownloadPathAny(ctx context.Context, root string, queries []string, visit func(path string, season, episode int) bool) error {
 	if strings.TrimSpace(root) == "" {
 		return nil
 	}
@@ -350,8 +392,7 @@ func scanDownloadPath(ctx context.Context, root, query string, visit func(path s
 	if err != nil || !info.IsDir() {
 		return nil
 	}
-	normalizedQuery := normalizeAvailabilityComparable(query)
-	if normalizedQuery == "" {
+	if len(queries) == 0 {
 		return nil
 	}
 	visited := 0
@@ -375,7 +416,7 @@ func scanDownloadPath(ctx context.Context, root, query string, visit func(path s
 		if visited > 10000 {
 			return filepath.SkipAll
 		}
-		if !strings.Contains(normalizeAvailabilityComparable(path), normalizedQuery) {
+		if !availabilityTitleMatchesAny(path, queries) {
 			return nil
 		}
 		season, episode := ParseEpisode(path)
