@@ -315,8 +315,17 @@ func (s *SubscriptionService) enqueueRSSSubscriptionCandidate(ctx context.Contex
 		AllowExistingLibrary: sub.WashEnabled,
 	}); err != nil {
 		if IsDownloadDedupError(err) {
-			state.markCandidateAvailable(candidate)
-			state.markSeen(candidate.GUID)
+			if s.subscriptionCandidateConfirmedAvailable(ctx, sub, candidate) {
+				state.markCandidateAvailable(candidate)
+				return false
+			}
+			if s.log != nil {
+				s.log.Info("subscription dedup candidate not confirmed available",
+					zap.String("title", item.Title),
+					zap.String("media_type", mediaType),
+					zap.String("media_category", mediaCategory),
+					zap.String("save_path", savePath))
+			}
 			return false
 		}
 		s.log.Warn("subscription enqueue failed",

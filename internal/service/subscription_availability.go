@@ -156,6 +156,35 @@ func addSiteSearchCandidateAvailability(candidate siteSearchCandidate, out *Loca
 	addTrustedAvailabilityTitle(subscriptionSearchResultText(candidate.Item), candidate.Season, candidate.Episode, candidate.Pack, out)
 }
 
+func (s *SubscriptionService) subscriptionCandidateConfirmedAvailable(ctx context.Context, sub *model.Subscription, candidate siteSearchCandidate) bool {
+	availability := mergeLocalAvailability(
+		SubscriptionLocalAvailability(ctx, s.repo, sub),
+		s.pendingDownloadAvailability(ctx, sub),
+	)
+	return candidateAvailableInAvailability(sub, candidate, availability)
+}
+
+func candidateAvailableInAvailability(sub *model.Subscription, candidate siteSearchCandidate, availability LocalAvailability) bool {
+	mediaType := normalizeMediaType(subscriptionMediaType(sub), subscriptionName(sub)+" "+subscriptionFilter(sub), "")
+	if !isSubscriptionSeriesType(mediaType) {
+		return availability.LocalMediaCount > 0 || availability.InLibrary
+	}
+	episodes := candidateEpisodeNumbers(candidate)
+	if len(episodes) == 0 {
+		return availability.HasSeriesPack
+	}
+	season := candidate.Season
+	if season <= 0 {
+		season = 1
+	}
+	for _, episode := range episodes {
+		if _, ok := availability.ExistingEpisodeKeys[episodeKey(season, episode)]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func addTrustedAvailabilityTitle(title string, season, episode int, pack bool, out *LocalAvailability) {
 	if out == nil {
 		return

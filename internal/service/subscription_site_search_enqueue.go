@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 
 	"go.uber.org/zap"
 
@@ -44,6 +45,7 @@ func (s *SubscriptionService) enqueueSiteSearchCandidate(ctx context.Context, su
 	mediaType, mediaCategory := s.classifySubscriptionItem(ctx, sub, matchText, item.Category)
 	if s.shouldSkipExistingTorrent(ctx, mediaType, candidate) {
 		state.markCandidateAvailable(candidate)
+		state.markCandidateSeen(candidate.GUID)
 		s.logSiteSearchCandidateSkipped(sub, state, candidate, "existing_torrent", mediaType, "", "")
 		return "", nil
 	}
@@ -52,6 +54,7 @@ func (s *SubscriptionService) enqueueSiteSearchCandidate(ctx context.Context, su
 	savePath := s.resolveSubscriptionSavePath(ctx, sub, mediaType, mediaCategory)
 	if s.downloadPathHasCandidate(ctx, sub, matchText, savePath) {
 		state.markCandidateAvailable(candidate)
+		state.markCandidateSeen(candidate.GUID)
 		s.logSiteSearchCandidateSkipped(sub, state, candidate, "download_path_has_candidate", mediaType, mediaCategory, savePath)
 		return "", nil
 	}
@@ -68,8 +71,12 @@ func (s *SubscriptionService) enqueueSiteSearchCandidate(ctx context.Context, su
 		AllowExistingLibrary: sub.WashEnabled,
 	}); err != nil {
 		if IsDownloadDedupError(err) {
-			state.markCandidateAvailable(candidate)
-			s.logSiteSearchCandidateSkipped(sub, state, candidate, "download_dedup", mediaType, mediaCategory, savePath)
+			if s.subscriptionCandidateConfirmedAvailable(ctx, sub, candidate) {
+				state.markCandidateAvailable(candidate)
+				s.logSiteSearchCandidateSkipped(sub, state, candidate, "download_dedup", mediaType, mediaCategory, savePath)
+				return "", nil
+			}
+			s.logSiteSearchCandidateSkipped(sub, state, candidate, "download_dedup_unconfirmed", mediaType, mediaCategory, savePath)
 			return "", nil
 		}
 		s.logSiteSearchEnqueueFailed(sub, state, candidate, mediaType, mediaCategory, savePath, err)
@@ -77,15 +84,22 @@ func (s *SubscriptionService) enqueueSiteSearchCandidate(ctx context.Context, su
 	}
 
 	state.markCandidateAvailable(candidate)
+	state.markCandidateSeen(candidate.GUID)
 	s.logSiteSearchCandidateQueued(sub, state, candidate, mediaType, mediaCategory, savePath)
 	return item.Title, nil
 }
 
 func (state *siteSearchRunState) markCandidateAvailable(candidate siteSearchCandidate) {
 	addSiteSearchCandidateAvailability(candidate, &state.Availability)
-	state.Seen = append(state.Seen, candidate.GUID)
+}
+
+func (state *siteSearchRunState) markCandidateSeen(guid string) {
+	if strings.TrimSpace(guid) == "" {
+		return
+	}
+	state.Seen = append(state.Seen, guid)
 	if state.SeenSet != nil {
-		state.SeenSet[candidate.GUID] = struct{}{}
+		state.SeenSet[guid] = struct{}{}
 	}
 }
 

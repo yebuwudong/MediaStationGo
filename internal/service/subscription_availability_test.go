@@ -286,7 +286,7 @@ func TestSiteSearchDownloadDedupMarksCandidateAvailable(t *testing.T) {
 			t.Fatalf("deduped candidate should mark E%d available: %#v", episode, state.Availability.ExistingEpisodeKeys)
 		}
 	}
-	if len(state.Seen) != 1 || state.Seen[0] != "site|mteam|nanyang-7-8" {
-		t.Fatalf("deduped candidate should be marked seen: %#v", state.Seen)
+	if len(state.Seen) != 0 {
+		t.Fatalf("deduped candidate should stay retryable instead of being marked seen: %#v", state.Seen)
 	}
 }

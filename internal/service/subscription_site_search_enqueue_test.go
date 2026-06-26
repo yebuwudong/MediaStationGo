@@ -71,8 +71,8 @@ func TestEnqueueSiteSearchDedupMarksEnglishRangeAvailableForChineseSubscription(
 			t.Fatalf("availability missing E%d after dedup range: %#v", episode, state.Availability.ExistingEpisodeKeys)
 		}
 	}
-	if _, ok := state.SeenSet[candidate.GUID]; !ok {
-		t.Fatalf("seen set missing candidate guid after dedup")
+	if _, ok := state.SeenSet[candidate.GUID]; ok {
+		t.Fatalf("deduped candidate should not be marked seen before the next availability scan")
 	}
 }
 

@@ -264,6 +264,34 @@ func TestAddSiteSearchCandidateAvailabilityTracksEpisodeRange(t *testing.T) {
 	}
 }
 
+func TestCandidateAvailableInAvailabilityRequiresFullRangeCoverage(t *testing.T) {
+	sub := &model.Subscription{Name: "南部档案 自动订阅", Filter: "南部档案", MediaType: "tv", TotalEpisodes: 33}
+	candidate := siteSearchCandidate{
+		Item: SearchResult{
+			Title:       "Archives The Nanyang Mystery 2026 S01E29-E33 2160p WEB-DL",
+			DownloadURL: "https://pt/download/29-33",
+		},
+		Season:   1,
+		Episode:  29,
+		Episodes: []int{29, 30, 31, 32, 33},
+		Pack:     true,
+	}
+	availability := LocalAvailability{
+		TotalEpisodes:       33,
+		ExistingEpisodeKeys: map[string]struct{}{episodeKey(1, 29): {}, episodeKey(1, 30): {}},
+	}
+
+	if candidateAvailableInAvailability(sub, candidate, availability) {
+		t.Fatal("partial range availability must not confirm a deduped subscription candidate")
+	}
+	for episode := 31; episode <= 33; episode++ {
+		availability.ExistingEpisodeKeys[episodeKey(1, episode)] = struct{}{}
+	}
+	if !candidateAvailableInAvailability(sub, candidate, availability) {
+		t.Fatal("complete range availability should confirm a deduped subscription candidate")
+	}
+}
+
 func TestShouldSkipExistingTorrentKeepsSeriesRangeCandidate(t *testing.T) {
 	svc := &SubscriptionService{downloads: &DownloadService{}}
 	candidate := siteSearchCandidate{
