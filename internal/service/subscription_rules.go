@@ -13,9 +13,15 @@ var (
 	seasonOnlyRE = regexp.MustCompile(`(?i)(?:^|[\s._-])(?:s|season)\s*\d{1,2}(?:[\s._-]|$)|第\s*\d+\s*季`)
 )
 
-// defaultExcludeWords 是默认过滤的「垃圾版本」排除清单，对所有订阅生效，
-// 与用户自定义排除词合并。拉丁词在 containsAnyExcludeToken 里按词边界匹配以避免子串误伤。
+// defaultExcludeWords 是默认过滤的「垃圾版本」排除清单，对所有订阅生效。
+// 拉丁词在 containsAnyExcludeToken 里按词边界匹配以避免子串误伤。
 const defaultExcludeWords = "cam,ts,tc,telesync,telecine,hdcam,hdts,枪版,抢先,抢鲜,预告,trailer,sample"
+
+// defaultCompatibilityExcludeWords 是面向自动订阅的兼容性默认排除清单。
+// 仅在用户未真正自定义排除词时启用，避免默认命中 DoVi/H.265/10bit/杜比音轨等版本。
+const defaultCompatibilityExcludeWords = "dovi,dv,dolby vision,dolby,杜比视界,杜比,h265,h.265,h-265,h_265,h 265,hevc,x265,10bit,10-bit,10 bit,hi10p,atmos,truehd,ddp,dd+,eac3"
+
+const legacyFrontendExcludeWords = "cam,ts,tc,枪版"
 
 func matchesSubscriptionRules(sub *model.Subscription, title string) bool {
 	titleFold := strings.ToLower(title)
@@ -24,6 +30,9 @@ func matchesSubscriptionRules(sub *model.Subscription, title string) bool {
 	}
 	if sub == nil {
 		return true
+	}
+	if shouldApplyDefaultCompatibilityExcludes(sub.ExcludeWords) && containsAnyExcludeToken(titleFold, defaultCompatibilityExcludeWords) {
+		return false
 	}
 	if sub.ExcludeWords != "" && containsAnyExcludeToken(titleFold, sub.ExcludeWords) {
 		return false
@@ -41,6 +50,24 @@ func matchesSubscriptionRules(sub *model.Subscription, title string) bool {
 		return false
 	}
 	return true
+}
+
+func shouldApplyDefaultCompatibilityExcludes(excludeWords string) bool {
+	normalized := normalizeExcludeWords(excludeWords)
+	return normalized == "" || normalized == normalizeExcludeWords(legacyFrontendExcludeWords)
+}
+
+func normalizeExcludeWords(csv string) string {
+	parts := make([]string, 0)
+	for _, token := range strings.FieldsFunc(strings.ToLower(csv), func(r rune) bool {
+		return r == ',' || r == '/' || r == '|' || r == ';' || r == '，'
+	}) {
+		token = strings.TrimSpace(token)
+		if token != "" {
+			parts = append(parts, token)
+		}
+	}
+	return strings.Join(parts, ",")
 }
 
 func subscriptionCandidateScore(sub *model.Subscription, item SearchResult) int {

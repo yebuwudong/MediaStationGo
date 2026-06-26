@@ -39,6 +39,45 @@ func TestMatchesSubscriptionRulesDefaultExcludesJunkReleases(t *testing.T) {
 	}
 }
 
+func TestMatchesSubscriptionRulesDefaultExcludesCompatibilityReleases(t *testing.T) {
+	cases := []struct {
+		name string
+		sub  *model.Subscription
+	}{
+		{name: "empty exclude words", sub: &model.Subscription{}},
+		{name: "legacy frontend defaults", sub: &model.Subscription{ExcludeWords: "cam,ts,tc,枪版"}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			for _, title := range []string{
+				"Some Movie 2024 2160p DoVi H.265 10bit",
+				"Some Movie 2024 2160p H-265",
+				"Some Movie 2024 1080p HEVC",
+				"Some Movie 2024 1080p x265",
+				"Some Movie 2024 2160p Dolby Vision Atmos",
+				"某电影 2024 1080p 杜比全景声",
+				"Some Anime 2024 1080p Hi10P",
+			} {
+				if matchesSubscriptionRules(c.sub, title) {
+					t.Errorf("expected default compatibility rules to exclude %q", title)
+				}
+			}
+		})
+	}
+}
+
+func TestMatchesSubscriptionRulesCustomExcludeWordsCanOptOutOfCompatibilityDefaults(t *testing.T) {
+	sub := &model.Subscription{ExcludeWords: "sample"}
+	title := "Some Movie 2024 2160p DoVi HEVC 10bit"
+	if !matchesSubscriptionRules(sub, title) {
+		t.Fatalf("custom exclude words should not force default compatibility excludes for %q", title)
+	}
+	if matchesSubscriptionRules(sub, "Some Movie 2024 1080p SAMPLE") {
+		t.Fatal("custom exclude words should still apply")
+	}
+}
+
 func TestMatchesSubscriptionRulesWordBoundaryAvoidsFalsePositives(t *testing.T) {
 	sub := &model.Subscription{}
 	// "ts" / "cam" / "tc" 作为子串出现在合法标题里时不应被默认排除误伤。

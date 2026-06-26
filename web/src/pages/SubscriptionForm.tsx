@@ -110,7 +110,7 @@ export function SubscriptionForm({ values, editing, onSubmit, onCancelEdit, onCh
       />
       <input
         className="input-base"
-        placeholder="排除词，如 cam,ts,tc"
+        placeholder="排除词，如 cam,ts,dovi,h265,10bit,杜比"
         value={values.excludeWords}
         onChange={(e) => onChange('excludeWords', e.target.value)}
       />

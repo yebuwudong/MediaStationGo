@@ -16,6 +16,9 @@ export interface SubscriptionFormValues {
   washPriority: string
 }
 
+export const defaultSubscriptionExcludeWords =
+  'cam,ts,tc,枪版,dovi,dv,dolby vision,dolby,杜比视界,杜比,h265,h.265,h-265,h_265,hevc,x265,10bit,10-bit,hi10p,atmos,truehd,ddp,dd+,eac3'
+
 export const defaultSubscriptionFormValues: SubscriptionFormValues = {
   name: '',
   feed: '',
@@ -29,7 +32,7 @@ export const defaultSubscriptionFormValues: SubscriptionFormValues = {
   quality: '',
   effects: '',
   releaseGroups: '',
-  excludeWords: 'cam,ts,tc,枪版',
+  excludeWords: defaultSubscriptionExcludeWords,
   washEnabled: false,
   washPriority: 'balanced',
 }

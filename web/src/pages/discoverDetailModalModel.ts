@@ -1,6 +1,7 @@
 import type { DiscoverItem } from '../api/discover'
 import { buildSiteSearchFeedURL, buildSubscriptionAliases } from '../api/subscriptions'
 import { buildSubscribeKeyword } from './discoverPageModel'
+import { defaultSubscriptionExcludeWords } from './subscriptionFormModel'
 
 export type DiscoverSubscriptionForm = {
   keyword: string
@@ -34,7 +35,7 @@ export function initialDiscoverSubscriptionForm(item: DiscoverItem): DiscoverSub
     quality: '',
     effects: '',
     release_groups: '',
-    exclude_words: 'cam,ts,tc,枪版',
+    exclude_words: defaultSubscriptionExcludeWords,
     wash_enabled: false,
     wash_priority: 'balanced',
     save_path: '',
