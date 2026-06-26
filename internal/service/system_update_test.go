@@ -65,6 +65,29 @@ func TestDockerDigestHelpers(t *testing.T) {
 	}
 }
 
+func TestSystemUpdateCustomFallback(t *testing.T) {
+	status := systemUpdateCustomFallback(SystemUpdateStatus{}, systemUpdateFallback{
+		command:        "echo update",
+		customMessage:  "custom",
+		customDetails:  "custom details",
+		defaultMessage: "default",
+		defaultDetails: "default details",
+	})
+	if !status.CanApply || status.Message != "custom" || status.Details != "custom details" {
+		t.Fatalf("custom fallback = %#v", status)
+	}
+
+	status = systemUpdateCustomFallback(SystemUpdateStatus{}, systemUpdateFallback{
+		customMessage:  "custom",
+		customDetails:  "custom details",
+		defaultMessage: "default",
+		defaultDetails: "default details",
+	})
+	if status.CanApply || status.Message != "default" || status.Details != "default details" {
+		t.Fatalf("default fallback = %#v", status)
+	}
+}
+
 func TestSystemUpdateOutputDetailsKeepsTail(t *testing.T) {
 	lines := make([]string, 0, 14)
 	for i := 0; i < 14; i++ {
