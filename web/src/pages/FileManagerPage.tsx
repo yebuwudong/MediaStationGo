@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ChevronUp } from 'lucide-react'
 
 import { filesAPI, type FileEntry, type FileListing } from '../api/files'
 import { libraryAPI } from '../api/library'
@@ -163,6 +164,22 @@ export function FileManagerPage() {
 
       {!loading && data && !data.path && data.roots && (
         <FileBrowserRoots roots={data.roots} onOpen={setPath} />
+      )}
+
+      {!loading && data?.path && data.parent && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--app-border)] bg-[var(--app-surface)] px-3 py-2 shadow-sm">
+          <button
+            className="inline-flex h-9 items-center gap-2 rounded-lg border border-[var(--app-border)] bg-[var(--app-surface-strong)] px-3 text-sm font-medium text-[var(--app-text)] transition hover:border-primary-400/50 hover:text-primary-500"
+            onClick={() => setPath(data.parent || '')}
+            title="返回上级目录"
+          >
+            <ChevronUp size={16} />
+            上一级
+          </button>
+          <span className="min-w-0 flex-1 truncate text-right font-mono text-xs text-[var(--app-muted)]" title={data.path}>
+            {data.path}
+          </span>
+        </div>
       )}
 
       {!loading && data?.entries && data.entries.length > 0 && (
