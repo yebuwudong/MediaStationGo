@@ -417,3 +417,56 @@ func TestApplyManualMatchSavesSelectedCloudMatchWhenDetailsSlow(t *testing.T) {
 		t.Fatalf("manual cloud match was not saved: title=%q status=%q tmdb=%d", got.Title, got.ScrapeStatus, got.TMDbID)
 	}
 }
+
+func TestApplyManualMovieMatchClearsEpisodeMarkers(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Library{}, &model.Series{}, &model.Media{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	log := zap.NewNop()
+	scraper := NewScraperService(&config.Config{}, log, repos, nil, nil, nil, nil, NewHub(log))
+
+	lib := model.Library{Name: "欧美剧", Path: "/media/tv/euus", Type: "tv", Enabled: true}
+	if err := repos.DB.Create(&lib).Error; err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "错误剧集标题",
+		Path:         "/media/tv/euus/Dune/Season 01/Dune - S01E202.mkv",
+		SeasonNum:    1,
+		EpisodeNum:   202,
+		EpisodeTitle: "第 202 集",
+		SeriesID:     "series:wrong",
+		TMDbID:       999999,
+		TheTVDBID:    "888",
+		ScrapeStatus: "matched",
+	}
+	if err := repos.DB.Create(&media).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := scraper.ApplyManualMatch(t.Context(), media.ID, ManualScrapeRequest{
+		Source:    "manual",
+		MediaType: "movie",
+		Title:     "Dune",
+		Year:      2021,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var got model.Media
+	if err := repos.DB.First(&got, "id = ?", media.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.SeasonNum != 0 || got.EpisodeNum != 0 || got.EpisodeTitle != "" || got.SeriesID != "" {
+		t.Fatalf("episode markers were not cleared: %#v", got)
+	}
+	if got.TMDbID != 0 || got.TheTVDBID != "" {
+		t.Fatalf("stale external IDs were not cleared for manual movie fallback: tmdb=%d thetvdb=%q", got.TMDbID, got.TheTVDBID)
+	}
+}

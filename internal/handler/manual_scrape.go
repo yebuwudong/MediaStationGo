@@ -67,7 +67,7 @@ func manualScrapeApplyOneHandler(svc *service.Container) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		reclassifyMediaAfterScrape(applyCtx, svc, mediaID)
+		reclassifyMediaAfterScrapeWithTypeHints(applyCtx, svc, map[string]string{mediaID: req.MediaType}, mediaID)
 		if refreshed, _ := svc.Repo.Media.FindByID(applyCtx, mediaID); refreshed != nil {
 			media = refreshed
 		}
@@ -97,7 +97,7 @@ func manualScrapeApplyBatchHandler(svc *service.Container) gin.HandlerFunc {
 				errorsOut = append(errorsOut, id+": "+err.Error())
 				continue
 			}
-			reclassifyMediaAfterScrape(applyCtx, svc, id)
+			reclassifyMediaAfterScrapeWithTypeHints(applyCtx, svc, map[string]string{id: req.Match.MediaType}, id)
 			applied++
 		}
 		if applied == 0 && len(errorsOut) > 0 {

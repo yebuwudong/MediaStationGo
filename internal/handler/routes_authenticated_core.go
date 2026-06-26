@@ -23,6 +23,7 @@ func registerAuthedUserAndLicenseRoutes(authed *gin.RouterGroup, svc *service.Co
 func registerAuthedLibraryRoutes(authed *gin.RouterGroup, svc *service.Container) {
 	authed.GET("/libraries", listLibrariesHandler(svc))
 	authed.POST("/libraries", middleware.AdminRequired(), createLibraryHandler(svc))
+	authed.GET("/libraries/:id", getLibraryHandler(svc))
 	authed.DELETE("/libraries/:id", middleware.AdminRequired(), deleteLibraryHandler(svc))
 	authed.GET("/libraries/:id/roots", middleware.AdminRequired(), listLibraryRootsHandler(svc))
 	authed.POST("/libraries/:id/roots", middleware.AdminRequired(), createLibraryRootHandler(svc))

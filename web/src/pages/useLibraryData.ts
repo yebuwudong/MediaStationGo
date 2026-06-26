@@ -27,10 +27,24 @@ export function useLibraryData(libraryID: string, selectedSeries: SeriesCard | n
 
   useEffect(() => {
     if (!libraryID) return
-    libraryAPI.list().then((all) => {
-      const lib = all.find((item) => item.id === libraryID) ?? null
-      setLibrary(lib)
-    })
+    let cancelled = false
+    setLoading(true)
+    setLibrary(null)
+    setItems([])
+    setServerSeriesCards([])
+    setSeriesEpisodeItems([])
+    libraryAPI.get(libraryID)
+      .then((lib) => {
+        if (!cancelled) setLibrary(lib)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLibrary(null)
+          setLoading(false)
+          toast.error('媒体库不存在或无权限')
+        }
+      })
+    return () => { cancelled = true }
   }, [libraryID])
 
   useEffect(() => {

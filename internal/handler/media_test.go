@@ -95,6 +95,35 @@ func TestListLibrariesIncludeHiddenNormalizesCloudDisplayNames(t *testing.T) {
 	}
 }
 
+func TestGetLibraryAllowsEmptyLibrary(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.Library{}, &model.Media{}, &model.Setting{}, &model.PlayProfile{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	lib := model.Library{Name: "空媒体库", Path: "/media/empty", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	svc := &service.Container{
+		Repo:  repos,
+		Media: service.NewMediaService(&config.Config{}, zap.NewNop(), repos),
+	}
+
+	got := requestLibrary(t, svc, "user-1", "user", "/api/libraries/"+lib.ID, lib.ID)
+	if got.ID != lib.ID || got.Name != "空媒体库" {
+		t.Fatalf("library detail = %#v, want empty library detail", got)
+	}
+	media := requestMediaList(t, svc, "/api/libraries/"+lib.ID+"/media", lib.ID)
+	if media.Total != 0 || len(media.Items) != 0 {
+		t.Fatalf("empty library media = %#v, want no items", media)
+	}
+}
+
 func TestListMediaGroupsMultipleVersionsByDefault(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -250,6 +279,25 @@ func requestLibraries(t *testing.T, svc *service.Container, userID, role, path s
 		t.Fatalf("decode libraries: %v", err)
 	}
 	return libs
+}
+
+func requestLibrary(t *testing.T, svc *service.Container, userID, role, path, libraryID string) model.Library {
+	t.Helper()
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set(middleware.CtxUserID, userID)
+	c.Set(middleware.CtxUserRole, role)
+	c.Params = gin.Params{{Key: "id", Value: libraryID}}
+	c.Request = httptest.NewRequest(http.MethodGet, path, nil)
+	getLibraryHandler(svc)(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET %s status = %d body=%s", path, w.Code, w.Body.String())
+	}
+	var lib model.Library
+	if err := json.Unmarshal(w.Body.Bytes(), &lib); err != nil {
+		t.Fatalf("decode library: %v", err)
+	}
+	return lib
 }
 
 type mediaListResponse struct {

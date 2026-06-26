@@ -156,6 +156,7 @@ func (s *ScraperService) applyProviderMatchWithOptions(ctx context.Context, m *m
 	if len(match.Languages) > 0 {
 		updates["languages"] = strings.Join(match.Languages, ",")
 	}
+	applyScrapeMediaTypeResets(updates, match)
 
 	if err := s.repo.DB.Model(&model.Media{}).Where("id = ?", m.ID).
 		Updates(updates).Error; err != nil {
@@ -187,4 +188,29 @@ func (s *ScraperService) applyProviderMatchWithOptions(ctx context.Context, m *m
 		"source":     map[bool]string{true: "adult"}[match.NSFW],
 	})
 	return nil
+}
+
+func applyScrapeMediaTypeResets(updates map[string]any, match *Match) {
+	if updates == nil || match == nil {
+		return
+	}
+	switch normalizeOrganizeMediaType(match.MediaType) {
+	case "movie", "adult":
+		updates["season_num"] = 0
+		updates["episode_num"] = 0
+		updates["episode_title"] = ""
+		updates["series_id"] = ""
+		if match.TMDbID <= 0 {
+			updates["tm_db_id"] = 0
+		}
+		if match.BangumiID <= 0 {
+			updates["bangumi_id"] = 0
+		}
+		if strings.TrimSpace(match.DoubanID) == "" {
+			updates["douban_id"] = ""
+		}
+		if strings.TrimSpace(match.TheTVDBID) == "" {
+			updates["thetvdb_id"] = ""
+		}
+	}
 }

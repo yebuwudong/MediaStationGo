@@ -15,9 +15,10 @@ import (
 // MediaCategoryReclassifyOptions controls the metadata-based category audit.
 // Empty LibraryIDs means all enabled local libraries.
 type MediaCategoryReclassifyOptions struct {
-	LibraryIDs []string
-	MediaIDs   []string
-	DryRun     bool
+	LibraryIDs     []string
+	MediaIDs       []string
+	MediaTypeHints map[string]string
+	DryRun         bool
 }
 
 // ReclassifyMisclassifiedMedia corrects already-scanned local media whose
@@ -37,6 +38,7 @@ func (o *OrganizerService) ReclassifyMisclassifiedMedia(ctx context.Context, opt
 	for _, id := range filterIDs {
 		filter[id] = struct{}{}
 	}
+	typeHints := normalizeReclassifyMediaTypeHints(opts.MediaTypeHints)
 	libByID := make(map[string]model.Library, len(libraries))
 	for _, lib := range libraries {
 		if !lib.Enabled || strings.TrimSpace(lib.ID) == "" {
@@ -67,7 +69,7 @@ func (o *OrganizerService) ReclassifyMisclassifiedMedia(ctx context.Context, opt
 			if !ok {
 				continue
 			}
-			changed, err := o.reclassifyScannedMedia(ctx, rows[i], lib, opts.DryRun, res)
+			changed, err := o.reclassifyScannedMedia(ctx, rows[i], lib, typeHints[rows[i].ID], opts.DryRun, res)
 			if err != nil {
 				res.Errors = append(res.Errors, fmt.Sprintf("%s: %s", rows[i].Title, err.Error()))
 				if o.log != nil {
@@ -89,19 +91,37 @@ func (o *OrganizerService) ReclassifyMisclassifiedMedia(ctx context.Context, opt
 	return res, err
 }
 
-func (o *OrganizerService) reclassifyScannedMedia(ctx context.Context, media model.Media, lib model.Library, dryRun bool, res *OrganizeResult) (bool, error) {
+func normalizeReclassifyMediaTypeHints(values map[string]string) map[string]string {
+	out := make(map[string]string, len(values))
+	for id, value := range values {
+		id = strings.TrimSpace(id)
+		mediaType := normalizeOrganizeMediaType(value)
+		if id != "" && mediaType != "" {
+			out[id] = mediaType
+		}
+	}
+	return out
+}
+
+func (o *OrganizerService) reclassifyScannedMedia(ctx context.Context, media model.Media, lib model.Library, mediaTypeHint string, dryRun bool, res *OrganizeResult) (bool, error) {
 	if res == nil || !lib.Enabled || strings.TrimSpace(media.Path) == "" {
 		return false, nil
 	}
 	if mount, ok := ParseCloudLibraryMount(lib.Path); ok {
-		return o.reclassifyCloudScannedMedia(ctx, media, lib, mount, dryRun, res)
+		return o.reclassifyCloudScannedMedia(ctx, media, lib, mount, mediaTypeHint, dryRun, res)
 	}
 	if !organizeFileExists(media.Path) {
 		return false, nil
 	}
 
 	mediaType := normalizeOrganizeMediaType(lib.Type)
+	if mediaTypeHint != "" {
+		mediaType = mediaTypeHint
+	}
 	metadataMatch := organizeMatchFromMedia(&media)
+	if metadataMatch != nil && mediaTypeHint != "" {
+		metadataMatch.MediaType = mediaTypeHint
+	}
 	if !mediaHasReliableCategoryMetadata(media) {
 		metadataMatch = o.lookupReclassifyMetadata(ctx, media, lib, mediaType)
 		if metadataMatch == nil {
@@ -198,6 +218,11 @@ func (o *OrganizerService) reclassifyScannedMediaLibraryOnly(ctx context.Context
 		return true, nil
 	}
 	updates := map[string]any{"library_id": targetLib.ID, "series_id": ""}
+	if normalizeOrganizeMediaType(mediaType) == "movie" {
+		updates["season_num"] = 0
+		updates["episode_num"] = 0
+		updates["episode_title"] = ""
+	}
 	applyReclassifyMatchUpdates(updates, metadataMatch)
 	if err := o.repo.DB.WithContext(ctx).
 		Model(&model.Media{}).

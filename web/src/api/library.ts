@@ -87,6 +87,13 @@ export const libraryAPI = {
       })
       .then((r) => r.data),
 
+  get: (id: string, options?: { includeHidden?: boolean }) =>
+    api
+      .get<Library>(`/libraries/${id}`, {
+        params: options?.includeHidden ? { include_hidden: 1 } : undefined,
+      })
+      .then((r) => r.data),
+
   create: (name: string, path: string, type: string) =>
     api.post<Library>('/libraries', { name, path, type }).then((r) => r.data),
 

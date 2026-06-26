@@ -9,10 +9,17 @@ import (
 )
 
 func reclassifyMediaAfterScrape(ctx context.Context, svc *service.Container, mediaIDs ...string) int {
+	return reclassifyMediaAfterScrapeWithTypeHints(ctx, svc, nil, mediaIDs...)
+}
+
+func reclassifyMediaAfterScrapeWithTypeHints(ctx context.Context, svc *service.Container, mediaTypeHints map[string]string, mediaIDs ...string) int {
 	if svc == nil || svc.Organizer == nil {
 		return 0
 	}
-	res, err := svc.Organizer.ReclassifyMisclassifiedMedia(ctx, service.MediaCategoryReclassifyOptions{MediaIDs: mediaIDs})
+	res, err := svc.Organizer.ReclassifyMisclassifiedMedia(ctx, service.MediaCategoryReclassifyOptions{
+		MediaIDs:       mediaIDs,
+		MediaTypeHints: mediaTypeHints,
+	})
 	if err != nil {
 		if svc.Log != nil {
 			svc.Log.Warn("scrape reclassify media failed", zap.Strings("media_ids", mediaIDs), zap.Error(err))

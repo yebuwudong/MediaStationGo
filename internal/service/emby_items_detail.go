@@ -93,30 +93,24 @@ func (e *EmbyService) LatestItems(ctx context.Context, userID, parentID string, 
 		}
 		q = q.Where("library_id IN ?", e.mergedLibraryIDs(ctx, parentID))
 	}
+	rowLimit := limit * 4
+	if rowLimit < 100 {
+		rowLimit = 100
+	}
+	if rowLimit > 500 {
+		rowLimit = 500
+	}
 	var rows []model.Media
-	if err := q.Order("media.created_at desc").Limit(limit).Find(&rows).Error; err != nil {
+	if err := q.Order("media.created_at desc").Limit(rowLimit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	favs := map[string]bool{}
-	if userID != "" && len(rows) > 0 {
-		mediaIDs := make([]string, 0, len(rows))
-		for _, row := range rows {
-			if strings.TrimSpace(row.ID) != "" {
-				mediaIDs = append(mediaIDs, row.ID)
-			}
-		}
-		if len(mediaIDs) == 0 {
-			mediaIDs = []string{"__none__"}
-		}
-		var fr []model.Favorite
-		_ = e.repo.DB.WithContext(ctx).Where("user_id = ? AND media_id IN ?", userID, mediaIDs).Find(&fr).Error
-		for _, f := range fr {
-			favs[f.MediaID] = true
-		}
+	rows = e.collapseMediaVersionRows(ctx, rows)
+	if len(rows) > limit {
+		rows = rows[:limit]
 	}
-	out := make([]map[string]any, 0, len(rows))
-	for _, m := range rows {
-		out = append(out, e.itemPayload(ctx, &m, favs[m.ID], 0))
+	out, err := e.payloadsForMedia(ctx, rows, userID)
+	if err != nil {
+		return nil, err
 	}
 	if e.cache != nil {
 		e.cache.SetJSON(ctx, cacheKey, embyLatestCacheValue{Items: out}, time.Duration(e.mediaCacheTTLSeconds())*time.Second)

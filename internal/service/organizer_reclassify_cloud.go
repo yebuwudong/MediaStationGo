@@ -9,9 +9,15 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
 
-func (o *OrganizerService) reclassifyCloudScannedMedia(ctx context.Context, media model.Media, lib model.Library, mount CloudMountInfo, dryRun bool, res *OrganizeResult) (bool, error) {
+func (o *OrganizerService) reclassifyCloudScannedMedia(ctx context.Context, media model.Media, lib model.Library, mount CloudMountInfo, mediaTypeHint string, dryRun bool, res *OrganizeResult) (bool, error) {
 	mediaType := normalizeOrganizeMediaType(lib.Type)
+	if mediaTypeHint != "" {
+		mediaType = mediaTypeHint
+	}
 	metadataMatch := organizeMatchFromMedia(&media)
+	if metadataMatch != nil && mediaTypeHint != "" {
+		metadataMatch.MediaType = mediaTypeHint
+	}
 	if !mediaHasReliableCategoryMetadata(media) {
 		metadataMatch = o.lookupReclassifyMetadata(ctx, media, lib, mediaType)
 		if metadataMatch == nil {
@@ -67,6 +73,11 @@ func (o *OrganizerService) reclassifyCloudScannedMedia(ctx context.Context, medi
 	updates := map[string]any{
 		"library_id": targetLibrary.ID,
 		"series_id":  "",
+	}
+	if normalizeOrganizeMediaType(mediaType) == "movie" {
+		updates["season_num"] = 0
+		updates["episode_num"] = 0
+		updates["episode_title"] = ""
 	}
 	applyReclassifyMatchUpdates(updates, metadataMatch)
 	if err := o.repo.DB.WithContext(ctx).Model(&model.Media{}).Where("id = ?", media.ID).Updates(updates).Error; err != nil {

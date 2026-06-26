@@ -262,3 +262,63 @@ func TestReclassifyMisclassifiedMediaRetriesNoMatchMetadata(t *testing.T) {
 		t.Fatalf("row after metadata retry = %#v, want domestic matched metadata", got)
 	}
 }
+
+func TestReclassifyMisclassifiedMediaHonorsManualMovieHint(t *testing.T) {
+	repos := newOrganizerTestRepo(t)
+	cfg := &config.Config{}
+	cfg.Organizer.SmartClassify = true
+
+	root := t.TempDir()
+	dest := filepath.Join(root, "media")
+	euusLib := model.Library{Name: "欧美剧", Path: filepath.Join(dest, "电视剧", "欧美剧"), Type: "tv", Enabled: true}
+	foreignMovieLib := model.Library{Name: "外语电影", Path: filepath.Join(dest, "电影", "外语电影"), Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &euusLib); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Library.Create(t.Context(), &foreignMovieLib); err != nil {
+		t.Fatal(err)
+	}
+
+	wrongPath := filepath.Join(euusLib.Path, "Dune", "Season 01", "Dune - S01E202.mkv")
+	writeOrgFile(t, wrongPath, "movie")
+	media := model.Media{
+		LibraryID:    euusLib.ID,
+		Title:        "Dune",
+		OriginalName: "Dune",
+		Path:         wrongPath,
+		SeasonNum:    1,
+		EpisodeNum:   202,
+		TMDbID:       438631,
+		Languages:    "en",
+		Countries:    "US",
+		Genres:       "科幻,冒险",
+		Year:         2021,
+		ScrapeStatus: "matched",
+	}
+	if err := repos.DB.Create(&media).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	organizer := NewOrganizerService(cfg, zap.NewNop(), repos)
+	res, err := organizer.ReclassifyMisclassifiedMedia(t.Context(), MediaCategoryReclassifyOptions{
+		MediaIDs:       []string{media.ID},
+		MediaTypeHints: map[string]string{media.ID: "movie"},
+	})
+	if err != nil {
+		t.Fatalf("reclassify media: %v", err)
+	}
+	want := filepath.Join(foreignMovieLib.Path, "Dune (2021)", "Dune (2021).mkv")
+	if res.Reclassified != 1 {
+		t.Fatalf("reclassified = %d, want 1; items=%#v errors=%#v", res.Reclassified, res.Items, res.Errors)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("manual movie reclassify target missing at %q: %v", want, err)
+	}
+	var got model.Media
+	if err := repos.DB.First(&got, "id = ?", media.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.LibraryID != foreignMovieLib.ID || got.Path != want || got.SeasonNum != 0 || got.EpisodeNum != 0 || got.SeriesID != "" {
+		t.Fatalf("row after manual movie hint = %#v, want foreign movie library with episode markers cleared", got)
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/ShukeBta/MediaStationGo/internal/middleware"
+	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
 
@@ -46,6 +47,37 @@ func listLibrariesHandler(svc *service.Container) gin.HandlerFunc {
 			libs = service.NormalizeCloudLibraryDisplayNames(libs)
 		}
 		c.JSON(http.StatusOK, libs)
+	}
+}
+
+func getLibraryHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		lib, err := svc.Repo.Library.FindByID(c.Request.Context(), c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if lib == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		libs := service.FilterDeprecatedNativeCloudLibraries([]model.Library{*lib})
+		if len(libs) == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		role, _ := c.Get(middleware.CtxUserRole)
+		includeHidden := role == "admin" && (c.Query("include_hidden") == "1" || c.Query("all") == "1")
+		if includeHidden {
+			c.JSON(http.StatusOK, service.NormalizeCloudLibraryDisplayNames(libs)[0])
+			return
+		}
+		libs = service.FilterDisplayCloudLibraries(c.Request.Context(), svc.Repo, libs)
+		if len(libs) == 0 || !service.LibraryVisibleForUser(c.Request.Context(), svc.Repo, libs[0], mediaVisibilityForRequest(c, svc)) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		c.JSON(http.StatusOK, libs[0])
 	}
 }
 
