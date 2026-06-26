@@ -1,4 +1,5 @@
-import { Link } from 'react-router-dom'
+import { useEffect, useRef } from 'react'
+import { Link, useLocation } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { ChevronDown, LogOut, Settings, User as UserIcon, UserCog } from 'lucide-react'
 import clsx from 'clsx'
@@ -35,10 +36,44 @@ export function LayoutUserMenu({
   onSwitchProfile,
   onLogout,
 }: LayoutUserMenuProps) {
+  const location = useLocation()
+  const rootRef = useRef<HTMLDivElement>(null)
+  const lastLocationRef = useRef(`${location.pathname}${location.search}`)
+
+  useEffect(() => {
+    if (!isOpen) return undefined
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const root = rootRef.current
+      const target = event.target
+      if (!root || !(target instanceof Node) || root.contains(target)) return
+      onClose()
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown, true)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown, true)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isOpen, onClose])
+
+  useEffect(() => {
+    const nextLocation = `${location.pathname}${location.search}`
+    if (lastLocationRef.current === nextLocation) return
+    lastLocationRef.current = nextLocation
+    if (isOpen) onClose()
+  }, [isOpen, location.pathname, location.search, onClose])
+
   return (
-    <div className="relative">
+    <div ref={rootRef} className="relative" data-testid="layout-user-menu">
       <button
         onClick={onToggle}
+        aria-expanded={isOpen}
+        aria-haspopup="menu"
         className="flex items-center gap-2.5 rounded-full border border-[var(--app-border)] p-1 pr-3 transition-all hover:bg-[var(--app-hover)]"
       >
         <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-[#111827] to-[#1f2937] font-display text-xs font-bold text-white shadow-sm">
@@ -55,55 +90,53 @@ export function LayoutUserMenu({
 
       <AnimatePresence>
         {isOpen && (
-          <>
-            <div className="fixed inset-0 z-10" onClick={onClose} />
-            <motion.div
-              initial={{ opacity: 0, y: 10, scale: 0.95 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 10, scale: 0.95 }}
-              transition={{ duration: 0.15 }}
-              className="absolute right-0 z-20 mt-3 w-56 origin-top-right rounded-2xl border border-[var(--app-border)] bg-[var(--app-panel)] p-2 shadow-xl"
-            >
-              <UserMenuLink to="/profile" icon={<UserIcon size={16} />} label="个人基本信息" onClick={onClose} />
-              {user?.role === 'admin' && (
-                <UserMenuLink to="/admin" icon={<Settings size={16} />} label="管理主控制台" onClick={onClose} />
-              )}
-              <div className="my-1.5 border-t border-[var(--app-border)]" />
-              <div className="px-3 py-2">
-                <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-[var(--app-muted)]">
-                  当前观影 Profile
-                </p>
-                <div className="space-y-1">
+          <motion.div
+            initial={{ opacity: 0, y: 10, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+            transition={{ duration: 0.15 }}
+            role="menu"
+            className="absolute right-0 z-50 mt-3 w-56 origin-top-right rounded-2xl border border-[var(--app-border)] bg-[var(--app-panel)] p-2 shadow-xl"
+          >
+            <UserMenuLink to="/profile" icon={<UserIcon size={16} />} label="个人基本信息" onClick={onClose} />
+            {user?.role === 'admin' && (
+              <UserMenuLink to="/admin" icon={<Settings size={16} />} label="管理主控制台" onClick={onClose} />
+            )}
+            <div className="my-1.5 border-t border-[var(--app-border)]" />
+            <div className="px-3 py-2">
+              <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-[var(--app-muted)]">
+                当前观影 Profile
+              </p>
+              <div className="space-y-1">
+                <button
+                  onClick={onUseDefaultProfile}
+                  className={profileButtonClass(!activeProfileId)}
+                >
+                  <span>账号默认</span>
+                  <span>{!activeProfileId ? '使用中' : ''}</span>
+                </button>
+                {profiles.map((profile) => (
                   <button
-                    onClick={onUseDefaultProfile}
-                    className={profileButtonClass(!activeProfileId)}
+                    key={profile.id}
+                    onClick={() => onSwitchProfile(profile)}
+                    className={profileButtonClass(activeProfileId === profile.id)}
                   >
-                    <span>账号默认</span>
-                    <span>{!activeProfileId ? '使用中' : ''}</span>
+                    <span className="truncate">{profile.name}</span>
+                    <span className="ml-2 shrink-0">{profile.allow_adult ? '成人' : '安全'}</span>
                   </button>
-                  {profiles.map((profile) => (
-                    <button
-                      key={profile.id}
-                      onClick={() => onSwitchProfile(profile)}
-                      className={profileButtonClass(activeProfileId === profile.id)}
-                    >
-                      <span className="truncate">{profile.name}</span>
-                      <span className="ml-2 shrink-0">{profile.allow_adult ? '成人' : '安全'}</span>
-                    </button>
-                  ))}
-                </div>
+                ))}
               </div>
-              <UserMenuLink to="/play-profiles" icon={<UserCog size={16} />} label="管理观影 Profile" onClick={onClose} />
-              <div className="my-1.5 border-t border-[var(--app-border)]" />
-              <button
-                onClick={onLogout}
-                className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm text-red-500 transition-colors hover:bg-[var(--app-danger-soft)]"
-              >
-                <LogOut size={16} />
-                <span>安全登出系统</span>
-              </button>
-            </motion.div>
-          </>
+            </div>
+            <UserMenuLink to="/play-profiles" icon={<UserCog size={16} />} label="管理观影 Profile" onClick={onClose} />
+            <div className="my-1.5 border-t border-[var(--app-border)]" />
+            <button
+              onClick={onLogout}
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm text-red-500 transition-colors hover:bg-[var(--app-danger-soft)]"
+            >
+              <LogOut size={16} />
+              <span>安全登出系统</span>
+            </button>
+          </motion.div>
         )}
       </AnimatePresence>
     </div>

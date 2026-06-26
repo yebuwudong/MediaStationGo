@@ -63,6 +63,7 @@ type Container struct {
 	Permissions      *PermissionService
 	StorageCfg       *StorageConfigService
 	STRM             *STRMService
+	SystemUpdate     *SystemUpdateService
 	DownloadClients  *DownloadClientService
 	Assistant        *AssistantService
 	Organizer        *OrganizerService

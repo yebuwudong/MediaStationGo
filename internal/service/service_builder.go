@@ -45,6 +45,7 @@ func (b *serviceContainerBuilder) startRealtimeServices() {
 	b.c.WSHub = NewHub(b.log)
 	go b.c.WSHub.Run()
 	b.c.Tasks = NewTaskTrackerService(b.log, b.c.WSHub)
+	b.c.SystemUpdate = NewSystemUpdateService(b.cfg, b.log, b.repos, b.c.Tasks)
 
 	b.c.SSEHub = NewSSEHub(b.log)
 	go b.c.SSEHub.Run()

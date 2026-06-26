@@ -79,6 +79,9 @@ func registerAdminDownloadClientRoutes(admin *gin.RouterGroup, svc *service.Cont
 
 func registerAdminSystemRoutes(admin *gin.RouterGroup, svc *service.Container) {
 	admin.POST("/system/scheduler/:name/trigger", schedulerTriggerHandler(svc))
+	admin.GET("/system/update", systemUpdateStatusHandler(svc))
+	admin.POST("/system/update/check", systemUpdateCheckHandler(svc))
+	admin.POST("/system/update/apply", systemUpdateApplyHandler(svc))
 }
 
 func registerAdminBackupRoutes(admin *gin.RouterGroup, svc *service.Container) {

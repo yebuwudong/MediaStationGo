@@ -64,6 +64,11 @@ services:
       #   - D:/Downloads:/downloads
       - ./downloads:/downloads
 
+      # 管理面板「系统更新」需要访问 Docker 引擎。
+      # 需要一键更新 Docker 镜像时取消下一行注释；如果提示权限不足，
+      # 请确认 PUID/PGID 对 /var/run/docker.sock 有读写权限。
+      # - /var/run/docker.sock:/var/run/docker.sock
+
     environment:
       TZ: Asia/Shanghai
 
@@ -93,6 +98,9 @@ services:
       # - 确认迁移完成后，建议改成 /data/no-sqlite-migration.db 这类不存在的路径。
       MEDIASTATION_DATABASE_DB_PATH: /data/mediastation.db
       MEDIASTATION_CACHE_CACHE_DIR: /cache
+
+      # 管理面板热更新默认拉取此镜像，并用 Watchtower 一次性重建当前容器。
+      MEDIASTATION_UPDATE_IMAGE: ghcr.io/shukebta/mediastation-go:latest
 
       # 路径换算配置。
       # 如果上面 volumes 的 ./media 改成 /vol1/1000/Media，

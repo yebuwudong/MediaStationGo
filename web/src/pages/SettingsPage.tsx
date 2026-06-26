@@ -7,6 +7,7 @@ import { libraryAPI } from '../api/library'
 import type { Library, Setting } from '../types'
 import { SettingRow } from './SettingsRow'
 import { ALL_KEYS, GROUPS } from './settingsGroups'
+import { SystemUpdatePanel } from './SystemUpdatePanel'
 
 export function SettingsPage() {
   const [activeGroup, setActiveGroup] = useState(GROUPS[0].key)
@@ -104,31 +105,34 @@ export function SettingsPage() {
       )}
 
       {!loading && (
-        <form onSubmit={onSave} className="glass-panel space-y-4">
-          {group.description && <p className="text-xs text-sand-500">{group.description}</p>}
-          {group.items.map((it) => (
-            <SettingRow
-              key={it.key}
-              def={it}
-              value={values[it.key] ?? it.defaultValue ?? ''}
-              onChange={(v) => onChange(it.key, v)}
-              libraries={libraries}
-            />
-          ))}
-          <div className="flex items-center justify-between pt-2">
-            <span className="text-xs text-sand-500">
-              {dirty.size > 0 ? `有 ${dirty.size} 项未保存` : '所有更改已保存'}
-            </span>
-            <button
-              type="submit"
-              disabled={saving || dirty.size === 0}
-              className="neon-button disabled:opacity-50"
-            >
-              {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-              保存
-            </button>
-          </div>
-        </form>
+        <div className="space-y-4">
+          {group.key === 'system-update' && <SystemUpdatePanel />}
+          <form onSubmit={onSave} className="glass-panel space-y-4">
+            {group.description && <p className="text-xs text-sand-500">{group.description}</p>}
+            {group.items.map((it) => (
+              <SettingRow
+                key={it.key}
+                def={it}
+                value={values[it.key] ?? it.defaultValue ?? ''}
+                onChange={(v) => onChange(it.key, v)}
+                libraries={libraries}
+              />
+            ))}
+            <div className="flex items-center justify-between pt-2">
+              <span className="text-xs text-sand-500">
+                {dirty.size > 0 ? `有 ${dirty.size} 项未保存` : '所有更改已保存'}
+              </span>
+              <button
+                type="submit"
+                disabled={saving || dirty.size === 0}
+                className="neon-button disabled:opacity-50"
+              >
+                {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                保存
+              </button>
+            </div>
+          </form>
+        </div>
       )}
     </div>
   )
