@@ -42,7 +42,9 @@ export function useLibrarySeriesSelection({
   const selectedEpisodes = useMemo(() => {
     const sourceItems = isSeriesLibrary ? seriesEpisodeItems : items
     if (!selectedSeries || sourceItems.length === 0) return []
-    const eps = sourceItems.filter((m) => getSeriesKey(m) === selectedSeries.key)
+    const eps = isSeriesLibrary
+      ? sourceItems
+      : sourceItems.filter((m) => getSeriesKey(m) === selectedSeries.key)
     const seasons = new Map<number, Media[]>()
     for (const ep of eps) {
       const s = ep.episode_num > 0 ? (ep.season_num ?? 0) : (ep.season_num || 1)
