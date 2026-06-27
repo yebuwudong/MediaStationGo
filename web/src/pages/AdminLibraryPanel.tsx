@@ -1,4 +1,5 @@
-import { AdminLibraryCreateForm, AdminLibraryTable } from './AdminLibraryPanelSections'
+import { AdminLibraryCreateForm } from './AdminLibraryPanelSections'
+import { AdminLibraryTable } from './AdminLibraryTable'
 import { useAdminLibraryPanel } from './useAdminLibraryPanel'
 
 export function AdminLibraryPanel() {
