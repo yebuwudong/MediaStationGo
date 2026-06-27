@@ -90,6 +90,20 @@ func TestDeleteSubscriptionRemovesDownloaderTaskAndSeenState(t *testing.T) {
 	if count != 0 {
 		t.Fatalf("active subscription count = %d, want 0", count)
 	}
+	var deleted model.Subscription
+	if err := db.Unscoped().Where("id = ?", sub.ID).First(&deleted).Error; err != nil {
+		t.Fatal(err)
+	}
+	if deleted.Enabled {
+		t.Fatal("deleted subscription stayed enabled; active legacy compatibility would show it again")
+	}
+	active, err := repos.Subscription.List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("active subscriptions = %#v, want deleted subscription hidden", active)
+	}
 }
 
 func TestDeletedDownloadTaskDoesNotBlockSubscriptionReadd(t *testing.T) {
@@ -98,5 +112,69 @@ func TestDeletedDownloadTaskDoesNotBlockSubscriptionReadd(t *testing.T) {
 	}
 	if downloadTaskBlocksReadd("removed") {
 		t.Fatal("removed download task must not block subscription re-add")
+	}
+}
+
+func TestListIncludesEnabledSoftDeletedActiveSubscription(t *testing.T) {
+	db := newServiceTestDB(t, &model.Subscription{})
+	repos := repository.New(db)
+	sub := &model.Subscription{
+		Name:    "Hidden Active 自动订阅",
+		FeedURL: "site-search://search?keyword=Hidden%20Active",
+		Filter:  "Hidden Active",
+		Enabled: true,
+	}
+	if err := repos.Subscription.Create(t.Context(), sub); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Where("id = ?", sub.ID).Delete(&model.Subscription{}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	active, err := repos.Subscription.List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 1 || active[0].ID != sub.ID {
+		t.Fatalf("active subscriptions = %#v, want soft-deleted enabled subscription recovered", active)
+	}
+}
+
+func TestDeleteRecoveredSoftDeletedSubscriptionClearsSeenAndHidesIt(t *testing.T) {
+	db := newServiceTestDB(t, &model.Subscription{}, &model.Setting{}, &model.DownloadTask{})
+	repos := repository.New(db)
+	svc := NewSubscriptionService(nil, zap.NewNop(), repos, nil, nil, NewHub(zap.NewNop()))
+	sub := &model.Subscription{
+		Name:    "Recovered Hidden 自动订阅",
+		FeedURL: "site-search://search?keyword=Recovered%20Hidden",
+		Filter:  "Recovered Hidden",
+		Enabled: true,
+	}
+	if err := repos.Subscription.Create(t.Context(), sub); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Setting.Set(t.Context(), "subscription."+sub.ID+".seen", "old-guid"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Where("id = ?", sub.ID).Delete(&model.Subscription{}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Delete(t.Context(), sub.ID); err != nil {
+		t.Fatal(err)
+	}
+	active, err := repos.Subscription.List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("active subscriptions = %#v, want recovered deleted subscription hidden", active)
+	}
+	seen, err := repos.Setting.Get(t.Context(), "subscription."+sub.ID+".seen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seen != "" {
+		t.Fatalf("seen state = %q, want cleared", seen)
 	}
 }

@@ -138,7 +138,12 @@ func (s *SubscriptionService) Delete(ctx context.Context, id string) error {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
-		return s.repo.DB.WithContext(ctx).Where("id = ?", id).Delete(&model.Subscription{}).Error
+		if err := s.repo.DB.WithContext(ctx).Unscoped().Where("id = ?", id).First(&sub).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			return err
+		}
 	}
 	if err := s.deleteSubscriptionDownloads(ctx, &sub); err != nil {
 		return err
@@ -146,7 +151,15 @@ func (s *SubscriptionService) Delete(ctx context.Context, id string) error {
 	if s.repo.Setting != nil {
 		_ = s.repo.Setting.Delete(ctx, fmt.Sprintf("subscription.%s.seen", id))
 	}
-	return s.repo.DB.Where("id = ?", id).Delete(&model.Subscription{}).Error
+	return s.repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Unscoped().Model(&model.Subscription{}).Where("id = ?", id).Update("enabled", false).Error; err != nil {
+			return err
+		}
+		if sub.DeletedAt.Valid {
+			return nil
+		}
+		return tx.Where("id = ?", id).Delete(&model.Subscription{}).Error
+	})
 }
 
 // RunNow forces a poll for one subscription, ignoring its schedule. Used

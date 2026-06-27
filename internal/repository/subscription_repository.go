@@ -21,7 +21,11 @@ func (r *SubscriptionRepository) Create(ctx context.Context, s *model.Subscripti
 // intentionally excluded from scheduler polling and the active management list.
 func (r *SubscriptionRepository) List(ctx context.Context) ([]model.Subscription, error) {
 	var rows []model.Subscription
-	err := r.db.WithContext(ctx).Where("archived_at IS NULL").Order("created_at desc").Find(&rows).Error
+	err := r.db.WithContext(ctx).Unscoped().
+		Where("archived_at IS NULL").
+		Where("deleted_at IS NULL OR enabled = ?", true).
+		Order("created_at desc").
+		Find(&rows).Error
 	return rows, err
 }
 

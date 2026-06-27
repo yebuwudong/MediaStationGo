@@ -268,3 +268,50 @@ func TestRestoreArchivedSubscriptionReturnsToActiveAndClearsSeenState(t *testing
 		t.Fatalf("seen state = %q, want cleared", seen)
 	}
 }
+
+func TestRestoreSoftDeletedArchivedSubscriptionReturnsToActive(t *testing.T) {
+	db := newServiceTestDB(t, &model.Subscription{}, &model.Setting{})
+	repos := repository.New(db)
+	svc := NewSubscriptionService(nil, zap.NewNop(), repos, nil, nil, NewHub(zap.NewNop()))
+	sub := &model.Subscription{
+		Name:          "Legacy Hidden History 自动订阅",
+		FeedURL:       "https://rss.example/feed",
+		Filter:        "Legacy Hidden History",
+		MediaType:     "tv",
+		TotalEpisodes: 12,
+	}
+	if err := repos.Subscription.Create(t.Context(), sub); err != nil {
+		t.Fatal(err)
+	}
+	archivedAt := time.Now()
+	if err := repos.Subscription.Archive(t.Context(), sub.ID, "订阅完成：12/12", archivedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Where("id = ?", sub.ID).Delete(&model.Subscription{}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	restored, err := svc.Restore(t.Context(), sub.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.ArchivedAt != nil || restored.ArchiveReason != "" || !restored.Enabled || restored.TotalEpisodes != 0 {
+		t.Fatalf("restored subscription not reset: %#v", restored)
+	}
+	active, err := repos.Subscription.List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 1 || active[0].ID != sub.ID {
+		t.Fatalf("active subscriptions = %#v, want restored legacy subscription", active)
+	}
+	var deletedCount int64
+	if err := db.Unscoped().Model(&model.Subscription{}).
+		Where("id = ? AND deleted_at IS NOT NULL", sub.ID).
+		Count(&deletedCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if deletedCount != 0 {
+		t.Fatal("restored subscription kept deleted_at set")
+	}
+}

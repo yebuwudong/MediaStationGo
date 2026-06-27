@@ -20,24 +20,22 @@ func (s *SubscriptionService) History(ctx context.Context) ([]model.Subscription
 // rule can match resources again when it is run next.
 func (s *SubscriptionService) Restore(ctx context.Context, id string) (*model.Subscription, error) {
 	var sub model.Subscription
-	if err := s.repo.DB.WithContext(ctx).Where("id = ?", id).First(&sub).Error; err != nil {
+	if err := s.repo.DB.WithContext(ctx).Unscoped().Where("id = ?", id).First(&sub).Error; err != nil {
 		return nil, err
 	}
-	if err := s.repo.DB.WithContext(ctx).Model(&model.Subscription{}).
+	if err := s.repo.DB.WithContext(ctx).Unscoped().Model(&model.Subscription{}).
 		Where("id = ?", id).
 		Updates(map[string]any{
 			"enabled":        true,
+			"archived_at":    nil,
 			"archive_reason": "",
+			"deleted_at":     nil,
 			// 重置为 0:此前可能被 feed 低估并锁死(updateSubscriptionTotalEpisodes
 			// 只增不减,resolveSubscriptionTotalEpisodes 见 >0 即不再回查元数据)。
 			// 归零后下次 run 会从 TMDb/豆瓣等权威源重算真实总集数,避免恢复后
 			// 因"误判已无缺集"而不再搜索资源。
 			"total_episodes": 0,
 		}).Error; err != nil {
-		return nil, err
-	}
-	if err := s.repo.DB.WithContext(ctx).
-		Exec("UPDATE subscriptions SET archived_at = NULL WHERE id = ?", id).Error; err != nil {
 		return nil, err
 	}
 	if s.repo.Setting != nil {
