@@ -58,8 +58,10 @@ func TestDownloadCompleteNotificationPayloadUsesTaskMetadata(t *testing.T) {
 	if !strings.Contains(body, "任务：正式标题") {
 		t.Fatalf("body should prefer task title, got %q", body)
 	}
-	if !strings.Contains(body, "保存路径：/downloads/show/Release.Name.S01E02.1080p.mkv") {
-		t.Fatalf("body should include content path, got %q", body)
+	for _, private := range []string{"保存路径", "/downloads/show", "Hash", "done123"} {
+		if strings.Contains(body, private) {
+			t.Fatalf("body should not expose %q, got %q", private, body)
+		}
 	}
 	for key, want := range map[string]interface{}{
 		"resource_title":    "Release.Name.S01E02.1080p",

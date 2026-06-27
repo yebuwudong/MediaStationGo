@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
@@ -33,7 +32,7 @@ func (d *DownloadService) notifyDownloadComplete(ctx context.Context, torrent QB
 
 func downloadCompleteNotificationPayload(torrent QBitTorrent, task *model.DownloadTask) (string, map[string]interface{}) {
 	name := downloadCompleteNotificationName(torrent, task)
-	body := fmt.Sprintf("任务：%s\n保存路径：%s\nHash：%s", name, firstNonEmpty(torrent.ContentPath, torrent.SavePath), torrent.Hash)
+	body := "任务：" + name
 	data := downloadCompleteNotificationData(torrent, task)
 	return body, data
 }
