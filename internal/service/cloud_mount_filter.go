@@ -231,5 +231,51 @@ func CloudLibraryMergeKey(lib model.Library) (string, bool) {
 	if name == "" {
 		return "", false
 	}
-	return strings.ToLower(strings.TrimSpace(lib.Type)) + "\x00" + name, true
+	typeKey := cloudLibraryMergeTypeKey(lib.Type)
+	return typeKey + "\x00" + cloudLibraryMergeNameKey(typeKey, name), true
+}
+
+func cloudLibraryMergeTypeKey(libraryType string) string {
+	switch strings.ToLower(strings.TrimSpace(libraryType)) {
+	case "tv", "anime", "variety":
+		return "tvshows"
+	default:
+		return strings.ToLower(strings.TrimSpace(libraryType))
+	}
+}
+
+func cloudLibraryMergeNameKey(typeKey, name string) string {
+	switch typeKey {
+	case "movie":
+		switch name {
+		case "国产电影", "大陆电影", "华语电影":
+			return "华语电影"
+		case "外语电影", "欧美电影", "日韩电影", "日本电影", "韩国电影":
+			return "外语电影"
+		case "纪录", "纪录片":
+			return "纪录片"
+		case "演唱会", "concert":
+			return "演唱会"
+		case "动画电影", "动漫电影":
+			return "动画电影"
+		}
+	case "tvshows":
+		switch name {
+		case "国产剧", "大陆剧", "华语剧", "国剧":
+			return "国产剧"
+		case "欧美剧", "美剧", "英剧":
+			return "欧美剧"
+		case "日韩剧", "日剧", "韩剧":
+			return "日韩剧"
+		case "国漫", "国产动漫", "国产动画":
+			return "国漫"
+		case "日番", "日漫", "番剧", "日本动漫", "日本动画":
+			return "日番"
+		case "欧美动漫", "欧美动画", "西方动画":
+			return "欧美动漫"
+		case "纪录", "纪录片":
+			return "纪录片"
+		}
+	}
+	return name
 }

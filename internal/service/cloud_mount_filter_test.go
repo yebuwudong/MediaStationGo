@@ -84,6 +84,61 @@ func TestFilterDisplayCloudLibrariesMergesCloudMountIntoExistingLibrary(t *testi
 	}
 }
 
+func TestFilterDisplayCloudLibrariesMergesEpisodicTypeAliases(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	repos := repository.New(db)
+	local := model.Library{Name: "国漫", Path: "/media/动漫/国漫", Type: "tv", Enabled: true}
+	cloud := model.Library{Name: "OpenList · 国漫", Path: BuildCloudLibraryPath("openlist", "/国漫", "/国漫"), Type: "anime", Enabled: true}
+	movie := model.Library{Name: "国漫", Path: BuildCloudLibraryPath("openlist", "/电影/国漫", "/电影/国漫"), Type: "movie", Enabled: true}
+	for _, lib := range []*model.Library{&local, &cloud, &movie} {
+		if err := repos.Library.Create(t.Context(), lib); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	filtered := FilterDisplayCloudLibraries(t.Context(), repos, []model.Library{local, cloud, movie})
+	if got := libraryNames(filtered); !slices.Equal(got, []string{"国漫", "国漫"}) {
+		t.Fatalf("filtered names = %#v, want local episodic plus separate movie library", got)
+	}
+	if filtered[0].ID != local.ID || filtered[1].ID != movie.ID {
+		t.Fatalf("filtered libraries = %#v, want anime cloud merged into local tv but movie kept", filtered)
+	}
+
+	merged := MergedLibraryIDs([]model.Library{local, cloud, movie}, local)
+	if !slices.Equal(merged, []string{local.ID, cloud.ID}) {
+		t.Fatalf("merged ids = %#v, want local tv + cloud anime only", merged)
+	}
+}
+
+func TestFilterDisplayCloudLibrariesMergesCategoryNameAliases(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
+	repos := repository.New(db)
+	foreignMovie := model.Library{Name: "外语电影", Path: "/media/电影/外语电影", Type: "movie", Enabled: true}
+	westernMovie := model.Library{Name: "OpenList · 欧美电影", Path: BuildCloudLibraryPath("openlist", "/欧美电影", "/欧美电影"), Type: "movie", Enabled: true}
+	eastAsianMovie := model.Library{Name: "OpenList · 日韩电影", Path: BuildCloudLibraryPath("openlist", "/日韩电影", "/日韩电影"), Type: "movie", Enabled: true}
+	jpAnime := model.Library{Name: "日番", Path: "/media/动漫/日番", Type: "tv", Enabled: true}
+	jpAnimeCloud := model.Library{Name: "OpenList · 日漫", Path: BuildCloudLibraryPath("openlist", "/日漫", "/日漫"), Type: "anime", Enabled: true}
+	for _, lib := range []*model.Library{&foreignMovie, &westernMovie, &eastAsianMovie, &jpAnime, &jpAnimeCloud} {
+		if err := repos.Library.Create(t.Context(), lib); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	filtered := FilterDisplayCloudLibraries(t.Context(), repos, []model.Library{foreignMovie, westernMovie, eastAsianMovie, jpAnime, jpAnimeCloud})
+	if got := libraryNames(filtered); !slices.Equal(got, []string{"外语电影", "日番"}) {
+		t.Fatalf("filtered names = %#v, want user-facing alias libraries only", got)
+	}
+
+	movieMerged := MergedLibraryIDs([]model.Library{foreignMovie, westernMovie, eastAsianMovie, jpAnime, jpAnimeCloud}, foreignMovie)
+	if !slices.Equal(movieMerged, []string{foreignMovie.ID, westernMovie.ID, eastAsianMovie.ID}) {
+		t.Fatalf("movie merged ids = %#v, want foreign movie aliases", movieMerged)
+	}
+	animeMerged := MergedLibraryIDs([]model.Library{foreignMovie, westernMovie, eastAsianMovie, jpAnime, jpAnimeCloud}, jpAnime)
+	if !slices.Equal(animeMerged, []string{jpAnime.ID, jpAnimeCloud.ID}) {
+		t.Fatalf("anime merged ids = %#v, want jp anime aliases", animeMerged)
+	}
+}
+
 func TestFilterDeprecatedNativeCloudLibrariesHidesPopulatedHistory(t *testing.T) {
 	db := newServiceTestDB(t, &model.Library{}, &model.Media{})
 	repos := repository.New(db)
