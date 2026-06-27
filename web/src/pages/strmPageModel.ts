@@ -145,7 +145,7 @@ function stripLibraryCategoryAfterSTRMRoot(raw: string) {
   if (strmIndex < 0 || strmIndex >= parts.length - 1) return ''
   const tail = parts.slice(strmIndex + 1).filter((part) => part.trim())
   const categoryParts = categoryPartsFromPath(tail)
-  if (!categoryParts?.length) return ''
+  if (!categoryParts || categoryParts.length < 2) return ''
   return trimPath(parts.slice(0, strmIndex + 1).join('/'))
 }
 

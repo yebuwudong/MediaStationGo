@@ -197,9 +197,12 @@ const EPISODE_ONLY_TITLE_RE =
 const EPISODE_TITLE_RE =
   /^第\s*[0-9一二三四五六七八九十百零两]+\s*[集期话話](?:\s*[上下])?\s*[:：].+/
 
+const EPISODIC_RELEASE_TITLE_RE =
+  /(?:^|\s)(?:s\d{1,2}\s*e\d{1,3}|season\s*\d{1,2}\s*(?:episode|ep)\s*\d{1,3}|\d{1,2}x\d{1,3}|e(?:p(?:isode)?)?\s*\d{1,3})(?:\s|$)/i
+
 function unsafeEpisodeTitle(title: string): boolean {
   const value = title.trim()
-  return EPISODE_ONLY_TITLE_RE.test(value) || EPISODE_TITLE_RE.test(value)
+  return EPISODE_ONLY_TITLE_RE.test(value) || EPISODE_TITLE_RE.test(value) || EPISODIC_RELEASE_TITLE_RE.test(normalizeTitle(value))
 }
 
 export function seriesTitleFromPath(path?: string): string {

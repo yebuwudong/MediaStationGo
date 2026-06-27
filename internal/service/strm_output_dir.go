@@ -29,40 +29,22 @@ func strmLibrarySpecificOutputDir(base string, lib *model.Library) string {
 	if outputDir == "" || outputDir == "." || lib == nil {
 		return outputDir
 	}
-	outputDir = stripSTRMLibraryCategoryAfterRoot(outputDir)
 	subdir := strmLibraryOutputSubdir(*lib)
 	if subdir == "" || strmPathHasSuffix(outputDir, subdir) || pathAlreadyEndsWith(outputDir, filepath.Base(subdir)) {
 		return outputDir
 	}
+	if tail := strmMissingCategoryTail(outputDir, subdir); tail != "" {
+		return filepath.Join(outputDir, tail)
+	}
 	return filepath.Join(outputDir, subdir)
 }
 
-func stripSTRMLibraryCategoryAfterRoot(pathValue string) string {
-	normalized := filepath.ToSlash(filepath.Clean(strings.TrimSpace(pathValue)))
-	parts := strings.Split(normalized, "/")
-	strmIndex := -1
-	for i, part := range parts {
-		if strings.EqualFold(strings.TrimSpace(part), "strm") {
-			strmIndex = i
-		}
+func strmMissingCategoryTail(outputDir, subdir string) string {
+	parts := strmSlashParts(subdir)
+	if len(parts) < 2 || !pathAlreadyEndsWith(outputDir, parts[0]) {
+		return ""
 	}
-	if strmIndex < 0 || strmIndex >= len(parts)-1 {
-		return pathValue
-	}
-	tail := make([]string, 0, len(parts)-strmIndex-1)
-	for _, part := range parts[strmIndex+1:] {
-		if strings.TrimSpace(part) != "" {
-			tail = append(tail, part)
-		}
-	}
-	if len(strmCategoryPartsFromPath(tail)) == 0 {
-		return pathValue
-	}
-	root := strings.Join(parts[:strmIndex+1], "/")
-	if root == "" {
-		return pathValue
-	}
-	return filepath.FromSlash(root)
+	return filepath.Join(parts[1:]...)
 }
 
 func strmPathHasSuffix(pathValue, suffix string) bool {

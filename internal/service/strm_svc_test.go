@@ -232,8 +232,8 @@ func TestSTRMLibraryOutputSubdirUsesLibraryCategoryPath(t *testing.T) {
 	}
 }
 
-func TestSTRMLibrarySpecificOutputDirStripsPreviousLibraryCategory(t *testing.T) {
-	base := filepath.Join(t.TempDir(), "strm", "电影", "演唱会")
+func TestSTRMLibrarySpecificOutputDirPreservesExplicitCategoryRoot(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "strm", "电视剧")
 	lib := model.Library{
 		Name: "国产剧",
 		Path: BuildCloudLibraryPath("openlist", "/电视剧/国产剧", "/电视剧/国产剧"),
@@ -241,7 +241,7 @@ func TestSTRMLibrarySpecificOutputDirStripsPreviousLibraryCategory(t *testing.T)
 	}
 
 	got := strmLibrarySpecificOutputDir(base, &lib)
-	want := filepath.Join(filepath.Dir(filepath.Dir(base)), "电视剧", "国产剧")
+	want := filepath.Join(base, "国产剧")
 	if got != want {
 		t.Fatalf("strmLibrarySpecificOutputDir() = %q, want %q", got, want)
 	}
