@@ -3,11 +3,9 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"go.uber.org/zap"
 
@@ -212,89 +210,6 @@ func (s *ScannerService) finishLocalLibraryScan(ctx context.Context, lib *model.
 	if scanHasImportChanges(res) && autoScrape && s.scraper != nil && s.scraper.AnyEnabled() && s.autoScrapeEnabled(ctx) {
 		s.startAutoScrape(ctx, lib.ID)
 	}
-}
-
-func (s *ScannerService) scanMountedCloudLibrary(ctx context.Context, lib *model.Library, mount CloudMountInfo, autoScrape bool) (*ScanResult, error) {
-	if IsDeprecatedNativeCloudProvider(mount.Provider) {
-		return &ScanResult{LibraryID: lib.ID, Skipped: 1}, nil
-	}
-	if CloudLibraryAutoCategory(*lib) {
-		res := &ScanResult{LibraryID: lib.ID, Skipped: 1}
-		s.log.Info("skip auto category cloud library scan",
-			zap.String("library_id", lib.ID),
-			zap.String("provider", mount.Provider))
-		s.hub.Publish("scan", map[string]any{
-			"library_id":    lib.ID,
-			"finished":      true,
-			"skipped":       res.Skipped,
-			"cloud":         true,
-			"auto_category": true,
-		})
-		return res, nil
-	}
-	if shadow := s.shadowedCloudLibrary(ctx, lib); shadow != nil {
-		res := &ScanResult{LibraryID: lib.ID, Skipped: 1}
-		s.log.Warn("skip shadowed cloud library scan",
-			zap.String("library_id", lib.ID),
-			zap.String("shadowed_by", shadow.Library.ID),
-			zap.String("provider", mount.Provider))
-		s.hub.Publish("scan", map[string]any{
-			"library_id": lib.ID,
-			"finished":   true,
-			"skipped":    res.Skipped,
-			"cloud":      true,
-			"shadowed":   true,
-		})
-		return res, nil
-	}
-	scanCtx, finish, err := s.beginCloudScan(ctx, lib, mount)
-	if err != nil {
-		if errors.Is(err, ErrCloudScanAlreadyRunning) {
-			return &ScanResult{LibraryID: lib.ID, Skipped: 1}, nil
-		}
-		return nil, err
-	}
-	release, err := s.acquireCloudScanSlot(scanCtx, lib.ID)
-	if err != nil {
-		res := &ScanResult{LibraryID: lib.ID}
-		if finish != nil {
-			finish(res, err)
-		}
-		return res, err
-	}
-	defer release()
-	res, err := s.scanCloudLibrary(scanCtx, lib, mount, autoScrape)
-	if finish != nil {
-		finish(res, err)
-	}
-	return res, err
-}
-
-func (s *ScannerService) notifyScanFinished(lib *model.Library, res *ScanResult, err error, cloud bool) {
-	if s == nil || s.notify == nil || lib == nil || res == nil {
-		return
-	}
-	if err != nil {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			s.notify.Broadcast(ctx, "MediaStationGo 扫描异常", fmt.Sprintf("媒体库：%s\n错误：%s", lib.Name, err.Error()), EventSystemAlert)
-		}()
-		return
-	}
-	if res.Added+res.Updated <= 0 {
-		return
-	}
-	source := "本地媒体库"
-	if cloud {
-		source = "网盘媒体库"
-	}
-	body := fmt.Sprintf("%s：%s\n新增：%d\n更新：%d\n跳过：%d\n移除：%d", source, lib.Name, res.Added, res.Updated, res.Skipped, res.Removed)
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		s.notify.Broadcast(ctx, "MediaStationGo 入库完成", body, EventLibraryIngest)
-	}()
 }
 
 // IngestPath ingests a single file into the given library without walking the
