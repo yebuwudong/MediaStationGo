@@ -88,6 +88,11 @@ func (o *OrganizerService) OrganizeMediaWithOptions(ctx context.Context, mediaID
 
 	// Skip if already in place.
 	if req.media.Path == dst.path {
+		if !req.dryRun {
+			if err := o.persistOrganizedMediaMetadata(ctx, req.media); err != nil {
+				return "", err
+			}
+		}
 		return dst.path, nil
 	}
 	if req.dryRun {
@@ -136,7 +141,7 @@ func (o *OrganizerService) OrganizeLibraryWithOptions(ctx context.Context, libra
 	}
 	res := &OrganizeResult{SourcePath: sourceRoot, DestPath: baseRoot, DryRun: opts.DryRun}
 	for i := range rows {
-		if changed, err := o.reclassifyScannedMedia(ctx, rows[i], *lib, "", opts.DryRun, res); err != nil {
+		if changed, err := o.reclassifyScannedMedia(ctx, rows[i], *lib, "", opts, opts.DryRun, res); err != nil {
 			res.Errors = append(res.Errors, fmt.Sprintf("%s: %s", rows[i].Title, err.Error()))
 			continue
 		} else if changed {

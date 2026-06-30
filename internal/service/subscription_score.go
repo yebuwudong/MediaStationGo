@@ -7,12 +7,25 @@ import (
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
 
+var (
+	dolbyVisionTokenRE = regexp.MustCompile(`\bdv\b`)
+	webDLTokenRE       = regexp.MustCompile(`\bweb[\s._-]?dl\b`)
+	webRipTokenRE      = regexp.MustCompile(`\bweb[\s._-]?rip\b`)
+	bluRayTokenRE      = regexp.MustCompile(`\b(?:blu[\s._-]?ray|bdrip|bdremux|uhd[\s._-]?blu[\s._-]?ray)\b`)
+)
+
+const (
+	defaultSubscriptionFreePromotionScore = 50_000
+	washSubscriptionFreePromotionScore    = 25
+)
+
 func subscriptionCandidateScore(sub *model.Subscription, item SearchResult) int {
 	title := strings.ToLower(subscriptionSearchResultText(item))
 	score := item.Seeders
-	if sub == nil || !sub.WashEnabled {
+	if !subscriptionAllowsWash(sub) {
+		score += detectDefaultSubscriptionQualityScore(title)*1_000_000 + detectResolutionScore(title)*100_000
 		if item.Free {
-			score += 25
+			score += defaultSubscriptionFreePromotionScore
 		}
 		return score
 	}
@@ -37,7 +50,7 @@ func subscriptionCandidateScore(sub *model.Subscription, item SearchResult) int 
 		score += resolutionScore*500 + qualityScore*300 + effectScore*150
 	}
 	if item.Free {
-		score += 25
+		score += washSubscriptionFreePromotionScore
 	}
 	return score
 }
@@ -52,7 +65,7 @@ func containsAnyEffect(titleFold, csv string) bool {
 		}
 		switch token {
 		case "dolby-vision", "dolby vision", "dv":
-			if strings.Contains(titleFold, "dolby vision") || strings.Contains(titleFold, "dovi") || regexp.MustCompile(`\bdv\b`).MatchString(titleFold) {
+			if strings.Contains(titleFold, "dolby vision") || strings.Contains(titleFold, "dovi") || dolbyVisionTokenRE.MatchString(titleFold) {
 				return true
 			}
 		default:
@@ -80,15 +93,32 @@ func titleMatchesResolution(titleFold, resolution string) bool {
 func titleMatchesQuality(titleFold, quality string) bool {
 	switch strings.ToLower(strings.TrimSpace(quality)) {
 	case "webdl", "web-dl":
-		return strings.Contains(titleFold, "web-dl") || strings.Contains(titleFold, "webdl")
+		return webDLTokenRE.MatchString(titleFold)
+	case "webrip", "web-rip":
+		return webRipTokenRE.MatchString(titleFold)
 	case "bluray", "blu-ray":
-		return strings.Contains(titleFold, "bluray") || strings.Contains(titleFold, "blu-ray") || strings.Contains(titleFold, "bdrip")
+		return bluRayTokenRE.MatchString(titleFold)
 	case "remux":
 		return strings.Contains(titleFold, "remux")
 	case "hdtv":
 		return strings.Contains(titleFold, "hdtv")
 	default:
 		return strings.Contains(titleFold, strings.ToLower(strings.TrimSpace(quality)))
+	}
+}
+
+func detectDefaultSubscriptionQualityScore(titleFold string) int {
+	switch {
+	case titleMatchesQuality(titleFold, "web-dl"):
+		return 5
+	case titleMatchesQuality(titleFold, "web-rip"):
+		return 4
+	case titleMatchesQuality(titleFold, "bluray"), titleMatchesQuality(titleFold, "remux"):
+		return 3
+	case titleMatchesQuality(titleFold, "hdtv"):
+		return 2
+	default:
+		return 1
 	}
 }
 

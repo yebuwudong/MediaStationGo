@@ -240,6 +240,7 @@ func (r *MediaRepository) applyMediaUpsertUpdates(ctx context.Context, m *model.
 	// 回写 ID / 不可变字段，让 caller 拿到完整的现有行。
 	*m = existing
 	if fresh, err := r.FindByID(ctx, existing.ID); err == nil && fresh != nil {
+		*m = *fresh
 		r.indexMediaBestEffort(ctx, *fresh)
 	}
 	return nil

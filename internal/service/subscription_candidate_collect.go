@@ -2,10 +2,13 @@ package service
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
+
+var looseSubscriptionEpisodeRE = regexp.MustCompile(`(?i)(?:^|[\s._\-\[\(])0?(\d{1,3})(?:v\d+)?(?:$|[\s._\-\]\)])`)
 
 func collectSiteSearchCandidates(results []SearchResult, sub *model.Subscription, seenSet map[string]struct{}, allowQueryMismatch bool, stats *siteSearchSelectionStats) []siteSearchCandidate {
 	candidates := make([]siteSearchCandidate, 0, len(results))
@@ -20,7 +23,7 @@ func collectSiteSearchCandidates(results []SearchResult, sub *model.Subscription
 				continue
 			}
 		}
-		if !matchesSubscriptionRules(sub, matchText) {
+		if !matchesSubscriptionRules(sub, matchText) || !matchesSubscriptionTorrentRules(sub, item) {
 			stats.RuleMismatch++
 			continue
 		}
@@ -37,8 +40,13 @@ func collectSiteSearchCandidates(results []SearchResult, sub *model.Subscription
 			stats.Seen++
 			continue
 		}
+		refs := subscriptionCandidateEpisodeRefs(sub, matchText)
 		season, episode := ParseEpisode(matchText)
-		episodes := episodeNumbersFromRefs(episodeRefsFromTitle(matchText), season)
+		if episode <= 0 && len(refs) > 0 {
+			season = refs[0].Season
+			episode = refs[0].Episode
+		}
+		episodes := episodeNumbersFromRefs(refs, season)
 		score := subscriptionCandidateScore(sub, item)
 		stats.Prepared++
 		candidates = append(candidates, siteSearchCandidate{
@@ -78,7 +86,7 @@ func shouldRelaxSiteSearchQueryMatch(sub *model.Subscription, local LocalAvailab
 }
 
 func subscriptionSearchResultText(item SearchResult) string {
-	return strings.TrimSpace(strings.Join([]string{item.Title, item.Subtitle}, " "))
+	return strings.TrimSpace(strings.Join([]string{item.Title, item.Subtitle, item.Labels}, " "))
 }
 
 func selectRSSSubscriptionCandidates(items []rssItem, sub *model.Subscription, filter *regexp.Regexp, seenSet map[string]struct{}, local LocalAvailability) []siteSearchCandidate {
@@ -94,7 +102,8 @@ func selectRSSSubscriptionCandidates(items []rssItem, sub *model.Subscription, f
 		if filter != nil && !filter.MatchString(title) {
 			continue
 		}
-		if !matchesSubscriptionRules(sub, title) {
+		searchItem := SearchResult{Title: title}
+		if !matchesSubscriptionRules(sub, title) || !matchesSubscriptionTorrentRules(sub, searchItem) {
 			continue
 		}
 		download := strings.TrimSpace(item.Enclosure.URL)
@@ -108,9 +117,14 @@ func selectRSSSubscriptionCandidates(items []rssItem, sub *model.Subscription, f
 		if _, ok := seenSet[guid]; ok {
 			continue
 		}
-		searchItem := SearchResult{Title: title, DownloadURL: download}
+		searchItem.DownloadURL = download
+		refs := subscriptionCandidateEpisodeRefs(sub, title)
 		season, episode := ParseEpisode(title)
-		episodes := episodeNumbersFromRefs(episodeRefsFromTitle(title), season)
+		if episode <= 0 && len(refs) > 0 {
+			season = refs[0].Season
+			episode = refs[0].Episode
+		}
+		episodes := episodeNumbersFromRefs(refs, season)
 		candidates = append(candidates, siteSearchCandidate{
 			Item:     searchItem,
 			Download: download,
@@ -123,6 +137,74 @@ func selectRSSSubscriptionCandidates(items []rssItem, sub *model.Subscription, f
 		})
 	}
 	return selectPreparedSubscriptionCandidates(candidates, sub, local)
+}
+
+func subscriptionCandidateEpisodeRefs(sub *model.Subscription, text string) []episodeRef {
+	if refs := episodeRefsFromTitle(text); len(refs) > 0 {
+		return refs
+	}
+	if sub == nil || !isSubscriptionSeriesType(sub.MediaType) || isSeriesPackTitle(text) || patSeasonOnly.MatchString(text) {
+		return nil
+	}
+	episode := inferLooseSubscriptionEpisode(maskSubscriptionTitleQueries(sub, text))
+	if episode <= 0 {
+		return nil
+	}
+	return []episodeRef{{Season: 1, Episode: episode}}
+}
+
+func maskSubscriptionTitleQueries(sub *model.Subscription, text string) string {
+	if sub == nil || strings.TrimSpace(text) == "" {
+		return text
+	}
+	out := text
+	outFold := strings.ToLower(out)
+	for _, query := range subscriptionTitleMatchQueries(sub) {
+		query = strings.TrimSpace(query)
+		if query == "" {
+			continue
+		}
+		queryFold := strings.ToLower(query)
+		for {
+			idx := strings.Index(outFold, queryFold)
+			if idx < 0 {
+				break
+			}
+			out = out[:idx] + strings.Repeat(" ", len(query)) + out[idx+len(query):]
+			outFold = strings.ToLower(out)
+		}
+	}
+	return out
+}
+
+func inferLooseSubscriptionEpisode(text string) int {
+	for _, match := range looseSubscriptionEpisodeRE.FindAllStringSubmatchIndex(text, -1) {
+		if len(match) < 4 || match[2] < 0 || match[3] < 0 {
+			continue
+		}
+		if isDecimalFractionMatch(text, match[2]) {
+			continue
+		}
+		value, err := strconv.Atoi(text[match[2]:match[3]])
+		if err != nil || !looksLikeLooseEpisodeNumber(value) {
+			continue
+		}
+		return value
+	}
+	return 0
+}
+
+func isDecimalFractionMatch(text string, digitStart int) bool {
+	return digitStart >= 2 && text[digitStart-1] == '.' && text[digitStart-2] >= '0' && text[digitStart-2] <= '9'
+}
+
+func looksLikeLooseEpisodeNumber(value int) bool {
+	switch {
+	case value <= 0, value > 200:
+		return false
+	default:
+		return true
+	}
 }
 
 func episodeNumbersFromRefs(refs []episodeRef, fallbackSeason int) []int {

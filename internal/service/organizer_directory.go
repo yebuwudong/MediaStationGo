@@ -49,7 +49,9 @@ func (o *OrganizerService) OrganizeDirectory(ctx context.Context, opts OrganizeO
 	if _, ok := ParseCloudLibraryMount(requestedDest); ok {
 		return nil, errors.New("organize destination must be a local writable media directory; enable cloud transfer in external storage when writing to cloud")
 	}
-	dest := normalizeOrganizeDestinationRoot(resolveMappedDestinationPath(requestedDest))
+	resolvedDest := resolveMappedDestinationPath(requestedDest)
+	mediaTypeOverride, mediaCategoryOverride := o.effectiveOrganizeOverrides(opts, resolvedDest)
+	dest := normalizeOrganizeDestinationRoot(resolvedDest)
 	if dest == "" || dest == "." {
 		return nil, errors.New("destination path required")
 	}
@@ -84,8 +86,8 @@ func (o *OrganizerService) OrganizeDirectory(ctx context.Context, opts OrganizeO
 			SourceRoot:            filepath.Dir(source),
 			DestRoot:              dest,
 			Mode:                  mode,
-			MediaTypeOverride:     opts.MediaType,
-			MediaCategoryOverride: opts.MediaCategory,
+			MediaTypeOverride:     mediaTypeOverride,
+			MediaCategoryOverride: mediaCategoryOverride,
 			DryRun:                opts.DryRun,
 			AllowReplaceExisting:  opts.AllowReplaceExisting,
 			MetadataCache:         metadataCache,
@@ -120,8 +122,8 @@ func (o *OrganizerService) OrganizeDirectory(ctx context.Context, opts OrganizeO
 			SourceRoot:            source,
 			DestRoot:              dest,
 			Mode:                  mode,
-			MediaTypeOverride:     opts.MediaType,
-			MediaCategoryOverride: opts.MediaCategory,
+			MediaTypeOverride:     mediaTypeOverride,
+			MediaCategoryOverride: mediaCategoryOverride,
 			DryRun:                opts.DryRun,
 			AllowReplaceExisting:  opts.AllowReplaceExisting,
 			MetadataCache:         metadataCache,

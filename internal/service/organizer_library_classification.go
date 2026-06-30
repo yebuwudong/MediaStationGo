@@ -56,12 +56,12 @@ func (o *OrganizerService) organizeCategoryAliases(mediaType, category string) m
 		add("美漫", categoryName(categories, "us_anime", "美漫"))
 	case normalizeOrganizeCategoryKey(categoryName(categories, "other_anime", "其他")), "其他", "其他动漫", "其它动漫":
 		add("其他", categoryName(categories, "other_anime", "其他"))
-	case normalizeOrganizeCategoryKey(categoryName(categories, "domestic_tv", "国产剧")), "国产剧", "国剧", "大陆剧", "国产电视剧":
-		add("国产剧", categoryName(categories, "domestic_tv", "国产剧"))
-	case normalizeOrganizeCategoryKey(categoryName(categories, "euus_tv", "欧美剧")), "欧美剧", "欧美电视剧":
-		add("欧美剧", categoryName(categories, "euus_tv", "欧美剧"))
-	case normalizeOrganizeCategoryKey(categoryName(categories, "jk_tv", "日韩剧")), "日韩剧", "日剧", "韩剧":
-		add("日韩剧", categoryName(categories, "jk_tv", "日韩剧"))
+	case normalizeOrganizeCategoryKey(categoryName(categories, "domestic_tv", "国产剧")), "国产剧", "国剧", "大陆剧", "华语剧", "国产电视剧", "大陆电视剧", "华语电视剧", "港剧", "台剧", "港台剧":
+		add("国产剧", "国剧", "大陆剧", "华语剧", "国产电视剧", "大陆电视剧", "华语电视剧", "港剧", "台剧", "港台剧", categoryName(categories, "domestic_tv", "国产剧"))
+	case normalizeOrganizeCategoryKey(categoryName(categories, "euus_tv", "欧美剧")), "欧美剧", "欧美电视剧", "美剧", "英剧":
+		add("欧美剧", "欧美电视剧", "美剧", "英剧", categoryName(categories, "euus_tv", "欧美剧"))
+	case normalizeOrganizeCategoryKey(categoryName(categories, "jk_tv", "日韩剧")), "日韩剧", "日韩电视剧", "日剧", "韩剧", "泰剧":
+		add("日韩剧", "日韩电视剧", "日剧", "韩剧", "泰剧", categoryName(categories, "jk_tv", "日韩剧"))
 	case normalizeOrganizeCategoryKey(categoryName(categories, "variety", "综艺")), "综艺", "真人秀":
 		add("综艺", categoryName(categories, "variety", "综艺"))
 	case normalizeOrganizeCategoryKey(categoryName(categories, "documentary", "纪录片")), "纪录片", "纪录":

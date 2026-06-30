@@ -3,6 +3,7 @@ package service
 type ScrapeOptions struct {
 	RetryNoMatch        bool
 	IncludeMatched      bool
+	RefreshWeakMatched  bool
 	EpisodeArtwork      *bool
 	DeferEpisodeDetails bool
 }

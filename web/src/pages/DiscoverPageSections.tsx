@@ -152,9 +152,10 @@ function DiscoverRowErrors({
   sectionLabel: SectionLabel
 }) {
   return (
-    <div className="flex items-start gap-3 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4">
-      <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-400" />
-      <div className="space-y-1 text-sm text-amber-200">
+    <div className="flex items-start gap-3 rounded-lg border border-amber-300/70 bg-amber-50 px-3 py-2 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+      <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-500" />
+      <div className="space-y-1 text-xs">
+        <p className="font-semibold">部分推荐源暂不可用，其他已加载内容不受影响。</p>
         {Object.entries(rowErrors).map(([key, message]) => (
           <p key={key}>{sectionLabel(key)}：{message}</p>
         ))}

@@ -23,6 +23,7 @@ func (s *ScraperService) matchFromMediaExternalIDs(ctx context.Context, m *model
 		}
 		if match := s.manualTMDbMatchByID(ctx, m.TMDbID, normalizeMediaType(mediaType, m.Title, "")); match != nil {
 			if s.mediaExternalIDMatchTrusted(m, lib, match, "tmdb") {
+				preferExistingLocalizedEpisodeTitle(m, lib, match)
 				return match
 			}
 		}
@@ -30,6 +31,7 @@ func (s *ScraperService) matchFromMediaExternalIDs(ctx context.Context, m *model
 	if strings.TrimSpace(m.DoubanID) != "" && s.douban != nil && s.douban.Enabled() {
 		if match, err := s.douban.GetMatchByID(ctx, strings.TrimSpace(m.DoubanID)); err == nil && match != nil {
 			if s.mediaExternalIDMatchTrusted(m, lib, match, "douban") {
+				preferExistingLocalizedEpisodeTitle(m, lib, match)
 				return match
 			}
 		} else if err != nil {
@@ -39,6 +41,7 @@ func (s *ScraperService) matchFromMediaExternalIDs(ctx context.Context, m *model
 	if m.BangumiID > 0 && s.bangumi != nil && s.bangumi.Enabled() {
 		if match, err := s.bangumi.GetSubject(ctx, m.BangumiID); err == nil && match != nil {
 			if s.mediaExternalIDMatchTrusted(m, lib, match, "bangumi") {
+				preferExistingLocalizedEpisodeTitle(m, lib, match)
 				return match
 			}
 		} else if err != nil {
@@ -48,6 +51,7 @@ func (s *ScraperService) matchFromMediaExternalIDs(ctx context.Context, m *model
 	if strings.TrimSpace(m.TheTVDBID) != "" && s.thetvdb != nil && s.thetvdb.Enabled() {
 		if match, err := s.thetvdb.GetSeriesMatchByID(ctx, strings.TrimSpace(m.TheTVDBID)); err == nil && match != nil {
 			if s.mediaExternalIDMatchTrusted(m, lib, match, "thetvdb") {
+				preferExistingLocalizedEpisodeTitle(m, lib, match)
 				return match
 			}
 		} else if err != nil {
@@ -61,7 +65,13 @@ func (s *ScraperService) mediaExternalIDMatchTrusted(m *model.Media, lib *model.
 	if match == nil || strings.TrimSpace(match.Title) == "" {
 		return false
 	}
+	if mediaPathHintMatchesExternalID(m, lib, match, source) {
+		return true
+	}
 	if !mediaIsEpisodic(m, lib) {
+		return true
+	}
+	if mediaExternalIDSourceMatches(m, match, source) && mediaExternalIDLanguageFallbackTrusted(m, match) {
 		return true
 	}
 	for _, candidate := range scrapeQueryCandidates(m, lib) {
@@ -84,6 +94,69 @@ func (s *ScraperService) mediaExternalIDMatchTrusted(m *model.Media, lib *model.
 			zap.String("thetvdb_id", match.TheTVDBID))
 	}
 	return false
+}
+
+func mediaExternalIDSourceMatches(m *model.Media, match *Match, source string) bool {
+	if m == nil || match == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "tmdb":
+		return m.TMDbID > 0 && match.TMDbID == m.TMDbID
+	case "bangumi":
+		return m.BangumiID > 0 && match.BangumiID == m.BangumiID
+	case "douban":
+		return strings.TrimSpace(m.DoubanID) != "" &&
+			strings.TrimSpace(match.DoubanID) == strings.TrimSpace(m.DoubanID)
+	case "thetvdb":
+		return strings.TrimSpace(m.TheTVDBID) != "" &&
+			strings.TrimSpace(match.TheTVDBID) == strings.TrimSpace(m.TheTVDBID)
+	default:
+		return false
+	}
+}
+
+func mediaPathHintMatchesExternalID(m *model.Media, lib *model.Library, match *Match, source string) bool {
+	if m == nil || match == nil {
+		return false
+	}
+	_, hints := pathHintMetadata(m.Path, mediaIsEpisodic(m, lib))
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "tmdb":
+		return hints.TMDbID > 0 && hints.TMDbID == match.TMDbID
+	case "bangumi":
+		return hints.BangumiID > 0 && hints.BangumiID == match.BangumiID
+	case "douban":
+		return strings.TrimSpace(hints.DoubanID) != "" &&
+			strings.TrimSpace(hints.DoubanID) == strings.TrimSpace(match.DoubanID)
+	case "thetvdb":
+		return strings.TrimSpace(hints.TheTVDBID) != "" &&
+			strings.TrimSpace(hints.TheTVDBID) == strings.TrimSpace(match.TheTVDBID)
+	default:
+		return false
+	}
+}
+
+func mediaExternalIDLanguageFallbackTrusted(m *model.Media, match *Match) bool {
+	if m == nil || match == nil || containsCJK(match.Title) {
+		return false
+	}
+	title := strings.TrimSpace(m.Title)
+	return title != "" &&
+		containsCJK(title) &&
+		!unsafeAutomaticEpisodeQuery(title) &&
+		!organizeMediaTitleLooksLikeRelease(title)
+}
+
+func preferExistingLocalizedEpisodeTitle(m *model.Media, lib *model.Library, match *Match) {
+	if !mediaIsEpisodic(m, lib) || !mediaExternalIDLanguageFallbackTrusted(m, match) {
+		return
+	}
+	title := strings.TrimSpace(m.Title)
+	if strings.TrimSpace(match.OriginalName) == "" {
+		match.OriginalName = strings.TrimSpace(match.Title)
+	}
+	match.Title = title
 }
 
 func (s *ScraperService) applyFanartArtwork(ctx context.Context, match *Match) {

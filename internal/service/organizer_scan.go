@@ -164,7 +164,9 @@ func (s *ScannerService) scrapeOrganizeTargets(ctx context.Context, targets []mo
 		// Organize is an explicit ingest workflow: after rename/classification,
 		// previously failed no_match rows should be retried so the operator does
 		// not need to run a separate manual scrape.
-		result, err := s.scraper.EnrichLibraryDetailedWithOptions(ctx, lib.ID, skipEpisodeArtworkOptions(true))
+		options := skipEpisodeArtworkOptions(true)
+		options.RefreshWeakMatched = true
+		result, err := s.scraper.EnrichLibraryDetailedWithOptions(ctx, lib.ID, options)
 		if err != nil {
 			summary.Error = err.Error()
 		} else {

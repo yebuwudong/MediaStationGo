@@ -142,12 +142,16 @@ type StrmGenerateFormProps = Pick<
   | 'baseURL'
   | 'outputDir'
   | 'overwrite'
+  | 'includeLocal'
+  | 'preserveTree'
   | 'generating'
   | 'onGenerate'
   | 'setGenerateLibraryID'
   | 'setBaseURL'
   | 'setOutputDir'
   | 'setOverwrite'
+  | 'setIncludeLocal'
+  | 'setPreserveTree'
 >
 
 export function StrmGenerateForm({
@@ -156,12 +160,16 @@ export function StrmGenerateForm({
   baseURL,
   outputDir,
   overwrite,
+  includeLocal,
+  preserveTree,
   generating,
   onGenerate,
   setGenerateLibraryID,
   setBaseURL,
   setOutputDir,
   setOverwrite,
+  setIncludeLocal,
+  setPreserveTree,
 }: StrmGenerateFormProps) {
   return (
     <form onSubmit={onGenerate} className="grid gap-3 md:grid-cols-4">
@@ -180,16 +188,13 @@ export function StrmGenerateForm({
       >
         使用当前访问地址
       </button>
-      <label className="flex items-center gap-2 rounded-2xl border border-gray-200 bg-white/70 px-3 py-2 text-sm text-ink-50">
-        <input
-          type="checkbox"
-          checked={overwrite}
-          onChange={(e) => setOverwrite(e.target.checked)}
-        />
-        覆盖已存在
-      </label>
+      <div className="grid gap-2 md:col-span-4 md:grid-cols-3">
+        <CompactOption checked={overwrite} label="覆盖已存在" onChange={setOverwrite} />
+        <CompactOption checked={includeLocal} label="包含本地媒体" onChange={setIncludeLocal} />
+        <CompactOption checked={preserveTree} label="保留目录树" onChange={setPreserveTree} />
+      </div>
       <input
-        className="input-base md:col-span-3"
+        className="input-base md:col-span-4"
         placeholder="输出目录可留空，默认写入 data/strm/分类/子分类"
         value={outputDir}
         onChange={(e) => setOutputDir(e.target.value)}
@@ -199,6 +204,25 @@ export function StrmGenerateForm({
         {generating ? '生成中…' : '批量生成 STRM'}
       </button>
     </form>
+  )
+}
+
+type CompactOptionProps = {
+  checked: boolean
+  label: string
+  onChange: (value: boolean) => void
+}
+
+function CompactOption({ checked, label, onChange }: CompactOptionProps) {
+  return (
+    <label className="flex min-h-10 items-center gap-2 rounded-2xl border border-gray-200 bg-white/70 px-3 py-2 text-sm text-ink-50">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      {label}
+    </label>
   )
 }
 

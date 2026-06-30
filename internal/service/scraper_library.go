@@ -154,7 +154,7 @@ func (s *ScraperService) scrapeCandidateRows(ctx context.Context, libraryID stri
 		statusFilter += " OR scrape_status = ?"
 		statusArgs = append(statusArgs, "no_match")
 	}
-	if options.IncludeMatched {
+	if options.IncludeMatched || options.RefreshWeakMatched {
 		statusFilter += " OR scrape_status = ?"
 		statusArgs = append(statusArgs, "matched")
 	}
@@ -168,7 +168,27 @@ func (s *ScraperService) scrapeCandidateRows(ctx context.Context, libraryID stri
 		Find(&rows).Error; err != nil {
 		return nil, err
 	}
+	if options.RefreshWeakMatched && !options.IncludeMatched {
+		rows = filterWeakMatchedScrapeRows(rows)
+	}
 	return rows, nil
+}
+
+func filterWeakMatchedScrapeRows(rows []model.Media) []model.Media {
+	out := rows[:0]
+	for _, row := range rows {
+		if shouldScrapeCandidateRow(row) {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func shouldScrapeCandidateRow(media model.Media) bool {
+	if strings.TrimSpace(media.ScrapeStatus) != "matched" {
+		return true
+	}
+	return organizeMediaTitleLooksLikeRelease(media.Title)
 }
 
 func (s *ScraperService) notifyScrapeFailed(m model.Media, err error) {

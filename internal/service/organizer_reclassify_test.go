@@ -25,7 +25,7 @@ func TestOrganizeDirectoryReclassifiesExistingWrongCategoryMedia(t *testing.T) {
 			"results": []map[string]any{{
 				"id":                292696,
 				"name":              "莫离",
-				"original_name":     "莫离",
+				"original_name":     "The First Jasmine",
 				"original_language": "zh",
 				"origin_country":    []string{"CN"},
 				"genre_ids":         []int{18},

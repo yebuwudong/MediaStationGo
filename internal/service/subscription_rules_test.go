@@ -75,6 +75,21 @@ func TestMatchesSubscriptionRulesDefaultExcludesJunkReleases(t *testing.T) {
 	}
 }
 
+func TestMatchesSubscriptionRulesDefaultExcludesRiskyTorrentLabels(t *testing.T) {
+	sub := &model.Subscription{}
+	for _, title := range []string{
+		"Some Show S01E01 1080p WEB-DL HR",
+		"Some Show S01E01 1080p WEB-DL H&R",
+		"Some Show S01E01 1080p WEB-DL Hit and Run",
+		"Some Show S01E01 1080p WEB-DL 禁转",
+		"Some Show S01E01 1080p WEB-DL 禁止下载",
+	} {
+		if matchesSubscriptionRules(sub, title) {
+			t.Errorf("expected default rules to exclude risky torrent label %q", title)
+		}
+	}
+}
+
 func TestMatchesSubscriptionRulesDefaultExcludesCompatibilityReleases(t *testing.T) {
 	cases := []struct {
 		name string
@@ -82,6 +97,7 @@ func TestMatchesSubscriptionRulesDefaultExcludesCompatibilityReleases(t *testing
 	}{
 		{name: "empty exclude words", sub: &model.Subscription{}},
 		{name: "legacy frontend defaults", sub: &model.Subscription{ExcludeWords: "cam,ts,tc,枪版"}},
+		{name: "custom exclude words", sub: &model.Subscription{ExcludeWords: "官中,无字幕"}},
 	}
 
 	for _, c := range cases {
@@ -89,6 +105,7 @@ func TestMatchesSubscriptionRulesDefaultExcludesCompatibilityReleases(t *testing
 			for _, title := range []string{
 				"Some Movie 2024 2160p DoVi H.265 10bit",
 				"Some Movie 2024 2160p H-265",
+				"Some Movie 2024 2160p H 265 10 bit",
 				"Some Movie 2024 1080p HEVC",
 				"Some Movie 2024 1080p x265",
 				"Some Movie 2024 2160p Dolby Vision Atmos",
@@ -103,14 +120,35 @@ func TestMatchesSubscriptionRulesDefaultExcludesCompatibilityReleases(t *testing
 	}
 }
 
-func TestMatchesSubscriptionRulesCustomExcludeWordsCanOptOutOfCompatibilityDefaults(t *testing.T) {
+func TestMatchesSubscriptionRulesCustomExcludeWordsKeepCompatibilityDefaults(t *testing.T) {
 	sub := &model.Subscription{ExcludeWords: "sample"}
 	title := "Some Movie 2024 2160p DoVi HEVC 10bit"
-	if !matchesSubscriptionRules(sub, title) {
-		t.Fatalf("custom exclude words should not force default compatibility excludes for %q", title)
+	if matchesSubscriptionRules(sub, title) {
+		t.Fatalf("custom exclude words should keep default compatibility excludes for %q", title)
 	}
 	if matchesSubscriptionRules(sub, "Some Movie 2024 1080p SAMPLE") {
 		t.Fatal("custom exclude words should still apply")
+	}
+}
+
+func TestMatchesSubscriptionRulesExplicitEffectsCanRequestCompatibilityFormats(t *testing.T) {
+	sub := &model.Subscription{Effects: "dolby vision"}
+	title := "Some Movie 2024 2160p DoVi WEB-DL"
+	if !matchesSubscriptionRules(sub, title) {
+		t.Fatalf("explicit requested effects should allow compatibility format for %q", title)
+	}
+}
+
+func TestMatchesSubscriptionRulesExplicitAtmosDoesNotAllowOtherCompatibilityFormats(t *testing.T) {
+	sub := &model.Subscription{Effects: "atmos"}
+	if !matchesSubscriptionRules(sub, "Some Movie 2024 1080p WEB-DL Atmos") {
+		t.Fatal("explicit atmos should allow an Atmos-only release")
+	}
+	if !matchesSubscriptionRules(sub, "Some Movie 2024 1080p WEB-DL Dolby Atmos") {
+		t.Fatal("explicit atmos should allow Dolby Atmos wording")
+	}
+	if matchesSubscriptionRules(sub, "Some Movie 2024 2160p WEB-DL HEVC 10bit DoVi Atmos") {
+		t.Fatal("explicit atmos should not also allow DoVi/HEVC/10bit")
 	}
 }
 
@@ -142,8 +180,8 @@ func TestSelectSiteSearchCandidatesSkipsExistingMovieWhenNotWashing(t *testing.T
 	}
 }
 
-func TestSelectSiteSearchCandidatesAllowsMovieWashUpgrade(t *testing.T) {
-	sub := &model.Subscription{Name: "Inception 自动订阅", Filter: "Inception 2010", MediaType: "movie", WashEnabled: true, WashPriority: "resolution"}
+func TestSelectSiteSearchCandidatesAllowsMovieWashUpgradeWithExplicitCriteria(t *testing.T) {
+	sub := &model.Subscription{Name: "Inception 自动订阅", Filter: "Inception 2010", MediaType: "movie", Resolution: "2160p", WashEnabled: true, WashPriority: "resolution"}
 	results := []SearchResult{
 		{Title: "Inception 2010 2160p REMUX", DownloadURL: "https://pt/download/2160", Seeders: 80},
 		{Title: "Inception 2010 1080p WEB-DL", DownloadURL: "https://pt/download/1080", Seeders: 200},

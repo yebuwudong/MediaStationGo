@@ -18,7 +18,7 @@ func inferLibraryKind(name, path, requested string) string {
 		return "variety"
 	case containsAnyText(text, "国漫", "日漫", "日番", "动漫", "动画", "anime", "bangumi") && !containsAnyText(text, "动画电影"):
 		return "anime"
-	case containsAnyText(text, "电视剧", "国产剧", "欧美剧", "日韩剧", "日剧", "韩剧", "剧集", "tv", "series"):
+	case containsAnyText(text, "电视剧", "剧集", "连续剧", "短剧", "国产剧", "国剧", "大陆剧", "华语剧", "国产电视剧", "大陆电视剧", "华语电视剧", "欧美剧", "欧美电视剧", "美剧", "英剧", "日韩剧", "日韩电视剧", "日剧", "韩剧", "港剧", "台剧", "港台剧", "泰剧", "tv", "series"):
 		return "tv"
 	case containsAnyText(text, "电影", "movie", "film"):
 		return "movie"

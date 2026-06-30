@@ -10,8 +10,23 @@ export const defaultSections = [
 ]
 
 export const discoverStorageKey = 'mediastation.discover.sections'
+export const discoverRowsStorageKey = 'mediastation.discover.rows'
 const discoverStorageVersion = 3
+const discoverRowsStorageVersion = 1
+const discoverRowsCacheMaxAgeMs = 6 * 60 * 60 * 1000
 const legacyDefaultAdditions = ['tmdb_latest_movie', 'tmdb_latest_tv']
+
+interface CachedDiscoverRow {
+  page: number
+  has_next: boolean
+  items: DiscoverItem[]
+}
+
+interface CachedDiscoverRowsPayload {
+  version: number
+  saved_at: number
+  rows: Record<string, CachedDiscoverRow>
+}
 
 export const defaultSectionDefs: DiscoverSection[] = [
   { key: 'tmdb_trending_day', label: 'TMDb 今日趋势', provider: 'tmdb' },
@@ -49,6 +64,85 @@ export function readSavedSections(sections: DiscoverSection[]): string[] {
 
 export function serializeSavedSections(selected: string[]): string {
   return JSON.stringify({ version: discoverStorageVersion, selected })
+}
+
+export function readCachedDiscoverRows(selected: string[]): {
+  rows: Record<string, DiscoverItem[]>
+  rowCanNext: Record<string, boolean>
+} {
+  try {
+    const raw = window.localStorage.getItem(discoverRowsStorageKey)
+    if (!raw) return { rows: {}, rowCanNext: {} }
+    const parsed = JSON.parse(raw) as Partial<CachedDiscoverRowsPayload>
+    if (
+      parsed.version !== discoverRowsStorageVersion ||
+      typeof parsed.saved_at !== 'number' ||
+      Date.now() - parsed.saved_at > discoverRowsCacheMaxAgeMs ||
+      !parsed.rows
+    ) {
+      return { rows: {}, rowCanNext: {} }
+    }
+    const allowed = new Set(selected)
+    const rows: Record<string, DiscoverItem[]> = {}
+    const rowCanNext: Record<string, boolean> = {}
+    for (const [key, row] of Object.entries(parsed.rows)) {
+      if (!allowed.has(key) || row.page !== 1 || !Array.isArray(row.items) || row.items.length === 0) {
+        continue
+      }
+      rows[key] = row.items
+      rowCanNext[key] = Boolean(row.has_next)
+    }
+    return { rows, rowCanNext }
+  } catch {
+    return { rows: {}, rowCanNext: {} }
+  }
+}
+
+export function writeCachedDiscoverRow(
+  key: string,
+  page: number,
+  items: DiscoverItem[],
+  hasNext: boolean,
+) {
+  if (page !== 1 || items.length === 0) return
+  try {
+    const current = readRawDiscoverRowsCache()
+    current.rows[key] = {
+      page,
+      has_next: hasNext,
+      items,
+    }
+    current.saved_at = Date.now()
+    window.localStorage.setItem(discoverRowsStorageKey, JSON.stringify(current))
+  } catch {
+    // Best-effort UI cache only; failing to persist should never break Discover.
+  }
+}
+
+function readRawDiscoverRowsCache(): CachedDiscoverRowsPayload {
+  try {
+    const raw = window.localStorage.getItem(discoverRowsStorageKey)
+    if (!raw) return emptyDiscoverRowsCache()
+    const parsed = JSON.parse(raw) as Partial<CachedDiscoverRowsPayload>
+    if (parsed.version !== discoverRowsStorageVersion || !parsed.rows) {
+      return emptyDiscoverRowsCache()
+    }
+    return {
+      version: discoverRowsStorageVersion,
+      saved_at: typeof parsed.saved_at === 'number' ? parsed.saved_at : Date.now(),
+      rows: parsed.rows,
+    }
+  } catch {
+    return emptyDiscoverRowsCache()
+  }
+}
+
+function emptyDiscoverRowsCache(): CachedDiscoverRowsPayload {
+  return {
+    version: discoverRowsStorageVersion,
+    saved_at: Date.now(),
+    rows: {},
+  }
 }
 
 function sanitizeSectionKeys(keys: unknown[], allowed: Set<string>): string[] {

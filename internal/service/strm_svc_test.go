@@ -218,6 +218,11 @@ func TestSTRMLibraryOutputSubdirUsesLibraryCategoryPath(t *testing.T) {
 			want: filepath.Join("电视剧", "欧美剧"),
 		},
 		{
+			name: "uncategorized tv category stays uncategorized",
+			lib:  model.Library{Name: "OpenList · 未分类", Path: BuildCloudLibraryPath("openlist", "/电视剧/未分类", "/电视剧/未分类"), Type: "tv"},
+			want: filepath.Join("电视剧", "未分类"),
+		},
+		{
 			name: "fallback to type root",
 			lib:  model.Library{Name: "Archive", Path: `F:\archive`, Type: "movie"},
 			want: "电影",
@@ -312,6 +317,85 @@ func TestGenerateSTRMForLibraryUsesPathEpisodeFallback(t *testing.T) {
 	libraryOutDir := filepath.Join(outDir, "电视剧", "国产剧")
 	assertFileContains(t, filepath.Join(libraryOutDir, "南部档案", "Season 01", "南部档案 - S01E01.strm"), "http://nas.example:18080/api/stream/ep-1?token=strm-token")
 	assertFileContains(t, filepath.Join(libraryOutDir, "南部档案", "Season 01", "南部档案 - S01E02.strm"), "http://nas.example:18080/api/stream/ep-2?token=strm-token")
+}
+
+func TestGenerateSTRMForLibraryPreservesSourceTree(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.STRMRecord{}, &model.Setting{})
+	repos := repository.New(db)
+	lib := model.Library{Name: "OpenList · 国产剧", Path: BuildCloudLibraryPath("openlist", "/电视剧/国产剧", "/电视剧/国产剧"), Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		Base:      model.Base{ID: "ep-1"},
+		LibraryID: lib.ID,
+		Title:     "南部档案",
+		Path:      "cloud://openlist/电视剧/国产剧/南部档案/Season 01/Archives.The.Nanyang.Mystery.S01E01.mkv",
+		STRMURL:   "/api/cloud/play/openlist?ref=ep1",
+	}
+	if err := repos.DB.Create(&media).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	outDir := filepath.Join(t.TempDir(), "strm")
+	svc := NewSTRMService(zap.NewNop(), repos, &config.Config{})
+	res, err := svc.GenerateForLibrary(t.Context(), GenerateSTRMOptions{
+		LibraryID:     lib.ID,
+		OutputDir:     outDir,
+		BaseURL:       "http://nas.example:18080",
+		IncludeLocal:  true,
+		PreserveTree:  true,
+		PlaybackToken: "strm-token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Generated != 1 || res.Skipped != 0 {
+		t.Fatalf("result = %#v, want generated=1 skipped=0", res)
+	}
+	wantPath := filepath.Join(outDir, "电视剧", "国产剧", "南部档案", "Season 01", "Archives.The.Nanyang.Mystery.S01E01.strm")
+	assertFileContains(t, wantPath, "http://nas.example:18080/api/stream/ep-1?token=strm-token")
+	if got, err := repos.Setting.Get(t.Context(), "strm.preserve_tree"); err != nil || got != "true" {
+		t.Fatalf("strm.preserve_tree = %q, %v; want true", got, err)
+	}
+}
+
+func TestGenerateSTRMForLibraryCanSkipLocalMedia(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.STRMRecord{}, &model.Setting{})
+	repos := repository.New(db)
+	lib := model.Library{Name: "电影", Path: "cloud://openlist/电影", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	rows := []model.Media{
+		{Base: model.Base{ID: "cloud-media"}, LibraryID: lib.ID, Title: "云盘电影", Year: 2026, Path: "cloud://openlist/电影/云盘电影.mkv", STRMURL: "/api/cloud/play/openlist?ref=movie"},
+		{Base: model.Base{ID: "local-media"}, LibraryID: lib.ID, Title: "本地电影", Year: 2025, Path: filepath.Join(t.TempDir(), "本地电影.mkv")},
+	}
+	for i := range rows {
+		if err := repos.DB.Create(&rows[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	outDir := filepath.Join(t.TempDir(), "strm")
+	svc := NewSTRMService(zap.NewNop(), repos, &config.Config{})
+	res, err := svc.GenerateForLibrary(t.Context(), GenerateSTRMOptions{
+		LibraryID:     lib.ID,
+		OutputDir:     outDir,
+		BaseURL:       "http://nas.example:18080",
+		IncludeLocal:  false,
+		PlaybackToken: "strm-token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Generated != 1 || res.Skipped != 1 {
+		t.Fatalf("result = %#v, want generated=1 skipped=1", res)
+	}
+	assertFileContains(t, filepath.Join(outDir, "电影", "云盘电影 (2026)", "云盘电影 (2026).strm"), "http://nas.example:18080/api/stream/cloud-media?token=strm-token")
+	if _, err := os.Stat(filepath.Join(outDir, "电影", "本地电影 (2025)", "本地电影 (2025).strm")); !os.IsNotExist(err) {
+		t.Fatalf("local media strm should not exist, stat err=%v", err)
+	}
 }
 
 func TestGenerateSTRMForAllLibrariesWritesPerLibraryFolders(t *testing.T) {

@@ -7,6 +7,7 @@ export type GenerateSTRMInput = {
   enabled?: boolean
   overwrite?: boolean
   include_local?: boolean
+  preserve_tree?: boolean
 }
 
 export type GenerateSTRMResult = {
@@ -27,6 +28,18 @@ export type GenerateSTRMResult = {
   }>
 }
 
+export type GenerateSTRMTreeInput = {
+  provider: string
+  tree_text?: string
+  paths?: string[]
+  source_root?: string
+  output_prefix?: string
+  output_dir: string
+  base_url?: string
+  overwrite?: boolean
+  cleanup?: boolean
+}
+
 export const strmAPI = {
   set: (mediaID: string, url: string) =>
     api.put(`/media/${mediaID}/strm`, { url }).then((r) => r.data),
@@ -36,5 +49,9 @@ export const strmAPI = {
   generate: (input: GenerateSTRMInput) =>
     api
       .post<GenerateSTRMResult>('/strm/generate', input, { timeout: BATCH_REQUEST_TIMEOUT })
+      .then((r) => r.data),
+  generateFromTree: (input: GenerateSTRMTreeInput) =>
+    api
+      .post<GenerateSTRMResult>('/strm/generate-from-tree', input, { timeout: BATCH_REQUEST_TIMEOUT })
       .then((r) => r.data),
 }

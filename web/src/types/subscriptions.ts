@@ -18,6 +18,11 @@ export interface Subscription {
   effects?: string
   release_groups?: string
   exclude_words?: string
+  min_seeders?: number
+  max_seeders?: number
+  min_size_gb?: number
+  max_size_gb?: number
+  free_only?: boolean
   wash_enabled?: boolean
   wash_priority?: string
   total_episodes?: number

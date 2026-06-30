@@ -104,7 +104,20 @@ type generateSTRMReq struct {
 	BaseURL      string `json:"base_url"`
 	Enabled      bool   `json:"enabled"`
 	Overwrite    bool   `json:"overwrite"`
-	IncludeLocal bool   `json:"include_local"`
+	IncludeLocal *bool  `json:"include_local"`
+	PreserveTree bool   `json:"preserve_tree"`
+}
+
+type generateSTRMTreeReq struct {
+	Provider     string   `json:"provider"`
+	TreeText     string   `json:"tree_text"`
+	Paths        []string `json:"paths"`
+	SourceRoot   string   `json:"source_root"`
+	OutputPrefix string   `json:"output_prefix"`
+	OutputDir    string   `json:"output_dir"`
+	BaseURL      string   `json:"base_url"`
+	Overwrite    bool     `json:"overwrite"`
+	Cleanup      bool     `json:"cleanup"`
 }
 
 func generateSTRMHandler(svc *service.Container) gin.HandlerFunc {
@@ -122,13 +135,18 @@ func generateSTRMHandler(svc *service.Container) gin.HandlerFunc {
 		if baseURL == "" {
 			baseURL = strings.TrimRight(absoluteRequestURL(c, "/"), "/")
 		}
+		includeLocal := true
+		if req.IncludeLocal != nil {
+			includeLocal = *req.IncludeLocal
+		}
 		options := service.GenerateSTRMOptions{
 			LibraryID:     req.LibraryID,
 			OutputDir:     req.OutputDir,
 			BaseURL:       baseURL,
 			Enabled:       req.Enabled,
 			Overwrite:     req.Overwrite,
-			IncludeLocal:  true,
+			IncludeLocal:  includeLocal,
+			PreserveTree:  req.PreserveTree,
 			PlaybackToken: strmPlaybackTokenForRequest(c, svc),
 		}
 		var res *service.GenerateSTRMResult
@@ -138,6 +156,40 @@ func generateSTRMHandler(svc *service.Container) gin.HandlerFunc {
 		} else {
 			res, err = strmSvc.GenerateForLibrary(c.Request.Context(), options)
 		}
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, res)
+	}
+}
+
+func generateSTRMFromTreeHandler(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req generateSTRMTreeReq
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		strmSvc := svc.STRM
+		if strmSvc == nil {
+			strmSvc = service.NewSTRMService(svc.Log, svc.Repo, svc.Cfg)
+		}
+		baseURL := strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
+		if baseURL == "" {
+			baseURL = strings.TrimRight(absoluteRequestURL(c, "/"), "/")
+		}
+		res, err := strmSvc.GenerateFromTree(c.Request.Context(), service.GenerateSTRMTreeOptions{
+			Provider:     req.Provider,
+			TreeText:     req.TreeText,
+			Paths:        req.Paths,
+			SourceRoot:   req.SourceRoot,
+			OutputPrefix: req.OutputPrefix,
+			OutputDir:    req.OutputDir,
+			BaseURL:      baseURL,
+			Overwrite:    req.Overwrite,
+			Cleanup:      req.Cleanup,
+		})
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return

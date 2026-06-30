@@ -74,6 +74,11 @@ export function SubscriptionsPage() {
         effects: formValues.effects,
         release_groups: formValues.releaseGroups,
         exclude_words: formValues.excludeWords,
+        min_seeders: numericRuleValue(formValues.minSeeders),
+        max_seeders: numericRuleValue(formValues.maxSeeders),
+        min_size_gb: numericRuleValue(formValues.minSizeGB),
+        max_size_gb: numericRuleValue(formValues.maxSizeGB),
+        free_only: formValues.freeOnly,
         wash_enabled: formValues.washEnabled,
         wash_priority: formValues.washPriority,
         priority: 50,
@@ -114,6 +119,11 @@ export function SubscriptionsPage() {
       effects: s.effects || '',
       releaseGroups: s.release_groups || '',
       excludeWords: s.exclude_words || '',
+      minSeeders: stringRuleValue(s.min_seeders),
+      maxSeeders: stringRuleValue(s.max_seeders),
+      minSizeGB: stringRuleValue(s.min_size_gb),
+      maxSizeGB: stringRuleValue(s.max_size_gb),
+      freeOnly: Boolean(s.free_only),
       washEnabled: Boolean(s.wash_enabled),
       washPriority: s.wash_priority || 'balanced',
     })
@@ -245,4 +255,13 @@ function apiErrorMessage(err: unknown, fallback: string): string {
   if (data?.status) return `${fallback} (${data.status})`
   if ((err as { code?: string })?.code === 'ECONNABORTED') return '请求超时，请检查服务或网络'
   return fallback
+}
+
+function numericRuleValue(value: string): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+}
+
+function stringRuleValue(value?: number): string {
+  return value && value > 0 ? String(value) : ''
 }

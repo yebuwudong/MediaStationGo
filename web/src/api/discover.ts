@@ -33,6 +33,11 @@ export interface DiscoverSection {
 export interface DiscoverFeedMeta {
   page: number
   has_next: boolean
+  duration_ms?: number
+  error?: string
+  warning?: string
+  stale?: boolean
+  disabled?: boolean
 }
 
 export interface DiscoverFeedResult {

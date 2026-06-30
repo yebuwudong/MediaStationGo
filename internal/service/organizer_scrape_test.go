@@ -100,6 +100,212 @@ func TestOrganizeDirectoryUsesScraperMatchBeforeRename(t *testing.T) {
 	if len(res.Items) != 1 || res.Items[0].Target != want || res.Items[0].Title != "间谍过家家" {
 		t.Fatalf("organize preview did not use scraper metadata: %#v", res.Items)
 	}
+	var media model.Media
+	if err := repos.DB.First(&media, "path = ?", want).Error; err != nil {
+		t.Fatalf("organized metadata should be persisted before scan: %v", err)
+	}
+	if media.Title != "间谍过家家" || media.TMDbID != 12345 || media.ScrapeStatus != "matched" {
+		t.Fatalf("persisted media = title=%q tmdb=%d status=%q, want localized matched metadata", media.Title, media.TMDbID, media.ScrapeStatus)
+	}
+}
+
+func TestOrganizeMediaRefreshesMetadataBeforeRename(t *testing.T) {
+	scraper, repos, closeServer := newTestScraper(t)
+	defer closeServer()
+
+	root := t.TempDir()
+	src := filepath.Join(root, "downloads")
+	dest := filepath.Join(root, "media", "电视剧")
+	sourceFile := filepath.Join(src, "Spy.x.Family.S01E01.2022.1080p.mkv")
+	writeOrgFile(t, sourceFile, "episode")
+
+	lib := model.Library{
+		Name:    "剧集",
+		Path:    dest,
+		Type:    "tv",
+		Enabled: true,
+	}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "Spy x Family S01E01 2022 1080p",
+		Path:         sourceFile,
+		Container:    "mkv",
+		SeasonNum:    1,
+		EpisodeNum:   1,
+		ScrapeStatus: "pending",
+	}
+	if err := repos.Media.Upsert(t.Context(), &media); err != nil {
+		t.Fatal(err)
+	}
+
+	organizer := NewOrganizerService(&config.Config{}, zap.NewNop(), repos)
+	organizer.SetScraper(scraper)
+	dst, err := organizer.OrganizeMediaWithOptions(t.Context(), media.ID, OrganizeOptions{
+		TransferMode: TransferCopy,
+	})
+	if err != nil {
+		t.Fatalf("organize media: %v", err)
+	}
+	want := filepath.Join(dest, "间谍过家家", "Season 01", "间谍过家家 - S01E01.mkv")
+	if dst != want {
+		t.Fatalf("dst = %q, want %q", dst, want)
+	}
+
+	var got model.Media
+	if err := repos.DB.First(&got, "id = ?", media.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "间谍过家家" || got.TMDbID != 12345 || got.ScrapeStatus != "matched" {
+		t.Fatalf("media = title=%q tmdb=%d status=%q, want localized matched metadata", got.Title, got.TMDbID, got.ScrapeStatus)
+	}
+	if got.Path != want {
+		t.Fatalf("media path = %q, want %q", got.Path, want)
+	}
+}
+
+func TestOrganizeMediaRefreshesMatchedReleaseTitleBeforeRename(t *testing.T) {
+	scraper, repos, closeServer := newTestScraper(t)
+	defer closeServer()
+
+	root := t.TempDir()
+	src := filepath.Join(root, "downloads")
+	dest := filepath.Join(root, "media", "电视剧")
+	sourceFile := filepath.Join(src, "Spy.x.Family.S01E01.2022.1080p.WEB-DL.mkv")
+	writeOrgFile(t, sourceFile, "episode")
+
+	lib := model.Library{Name: "剧集", Path: dest, Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "Spy.x.Family.S01E01.2022.1080p.WEB-DL",
+		Path:         sourceFile,
+		Container:    "mkv",
+		SeasonNum:    1,
+		EpisodeNum:   1,
+		TMDbID:       12345,
+		ScrapeStatus: "matched",
+	}
+	if err := repos.Media.Upsert(t.Context(), &media); err != nil {
+		t.Fatal(err)
+	}
+
+	organizer := NewOrganizerService(&config.Config{}, zap.NewNop(), repos)
+	organizer.SetScraper(scraper)
+	dst, err := organizer.OrganizeMediaWithOptions(t.Context(), media.ID, OrganizeOptions{
+		TransferMode: TransferCopy,
+	})
+	if err != nil {
+		t.Fatalf("organize media: %v", err)
+	}
+	want := filepath.Join(dest, "间谍过家家", "Season 01", "间谍过家家 - S01E01.mkv")
+	if dst != want {
+		t.Fatalf("dst = %q, want %q", dst, want)
+	}
+
+	var got model.Media
+	if err := repos.DB.First(&got, "id = ?", media.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "间谍过家家" || got.TMDbID != 12345 || got.OriginalName != "SPY×FAMILY" {
+		t.Fatalf("media = title=%q original=%q tmdb=%d, want refreshed localized metadata", got.Title, got.OriginalName, got.TMDbID)
+	}
+}
+
+func TestOrganizeMediaPersistsMetadataWhenAlreadyInPlace(t *testing.T) {
+	scraper, repos, closeServer := newTestScraper(t)
+	defer closeServer()
+
+	root := t.TempDir()
+	libRoot := filepath.Join(root, "media", "电视剧")
+	mediaPath := filepath.Join(libRoot, "间谍过家家", "Season 01", "间谍过家家 - S01E01.mkv")
+	writeOrgFile(t, mediaPath, "episode")
+
+	lib := model.Library{Name: "剧集", Path: libRoot, Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "Spy.x.Family.S01E01.2022.1080p.WEB-DL",
+		Path:         mediaPath,
+		Container:    "mkv",
+		SeasonNum:    1,
+		EpisodeNum:   1,
+		ScrapeStatus: "matched",
+	}
+	if err := repos.Media.Upsert(t.Context(), &media); err != nil {
+		t.Fatal(err)
+	}
+
+	organizer := NewOrganizerService(&config.Config{}, zap.NewNop(), repos)
+	organizer.SetScraper(scraper)
+	dst, err := organizer.OrganizeMediaWithOptions(t.Context(), media.ID, OrganizeOptions{
+		TransferMode: TransferCopy,
+	})
+	if err != nil {
+		t.Fatalf("organize media already in place: %v", err)
+	}
+	if dst != mediaPath {
+		t.Fatalf("dst = %q, want existing path %q", dst, mediaPath)
+	}
+
+	var got model.Media
+	if err := repos.DB.First(&got, "id = ?", media.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "间谍过家家" || got.TMDbID != 12345 || got.OriginalName != "SPY×FAMILY" || got.ScrapeStatus != "matched" {
+		t.Fatalf("metadata not persisted for already-in-place media: title=%q original=%q tmdb=%d status=%q", got.Title, got.OriginalName, got.TMDbID, got.ScrapeStatus)
+	}
+}
+
+func TestOrganizeLibraryPersistsMetadataForInPlaceWeakRows(t *testing.T) {
+	scraper, repos, closeServer := newTestScraper(t)
+	defer closeServer()
+
+	root := t.TempDir()
+	libRoot := filepath.Join(root, "media", "电视剧", "欧美剧")
+	mediaPath := filepath.Join(libRoot, "间谍过家家", "Season 01", "间谍过家家 - S01E01.mkv")
+	writeOrgFile(t, mediaPath, "episode")
+
+	lib := model.Library{Name: "欧美剧", Path: libRoot, Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "Spy.x.Family.S01E01.2022.1080p.WEB-DL",
+		Path:         mediaPath,
+		Container:    "mkv",
+		SeasonNum:    1,
+		EpisodeNum:   1,
+		ScrapeStatus: "matched",
+	}
+	if err := repos.Media.Upsert(t.Context(), &media); err != nil {
+		t.Fatal(err)
+	}
+
+	organizer := NewOrganizerService(&config.Config{}, zap.NewNop(), repos)
+	organizer.SetScraper(scraper)
+	res, err := organizer.OrganizeLibraryWithOptions(t.Context(), lib.ID, OrganizeOptions{})
+	if err != nil {
+		t.Fatalf("organize library: %v", err)
+	}
+	if res.Organized != 0 || res.Reclassified != 0 {
+		t.Fatalf("result = %+v, want metadata-only refresh without move", res)
+	}
+
+	var got model.Media
+	if err := repos.DB.First(&got, "id = ?", media.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "间谍过家家" || got.TMDbID != 12345 || got.OriginalName != "SPY×FAMILY" || got.ScrapeStatus != "matched" {
+		t.Fatalf("metadata not persisted for in-place library row: title=%q original=%q tmdb=%d status=%q", got.Title, got.OriginalName, got.TMDbID, got.ScrapeStatus)
+	}
 }
 
 func TestOrganizeScanAndScrapeRetriesNoMatchRows(t *testing.T) {
@@ -144,6 +350,51 @@ func TestOrganizeScanAndScrapeRetriesNoMatchRows(t *testing.T) {
 	}
 	if got.ScrapeStatus != "matched" || got.TMDbID != 12345 {
 		t.Fatalf("media scrape status=%q tmdb=%d, want matched/12345", got.ScrapeStatus, got.TMDbID)
+	}
+}
+
+func TestOrganizeScanAndScrapeRepairsWeakMatchedReleaseTitle(t *testing.T) {
+	scraper, repos, closeServer := newTestScraper(t)
+	defer closeServer()
+
+	root := t.TempDir()
+	libRoot := filepath.Join(root, "media", "电视剧")
+	mediaPath := filepath.Join(libRoot, "Spy.x.Family", "Season 01", "Spy.x.Family.S01E01.2022.1080p.WEB-DL.mkv")
+	writeOrgFile(t, mediaPath, "episode")
+
+	lib := model.Library{
+		Name:    "剧集",
+		Path:    libRoot,
+		Type:    "tv",
+		Enabled: true,
+	}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "Spy.x.Family.S01E01.2022.1080p.WEB-DL",
+		Path:         mediaPath,
+		SeasonNum:    1,
+		EpisodeNum:   1,
+		ScrapeStatus: "matched",
+	}
+	if err := repos.Media.Upsert(t.Context(), &media); err != nil {
+		t.Fatal(err)
+	}
+
+	scanner := NewScannerService(&config.Config{}, zap.NewNop(), repos, NewHub(zap.NewNop()), nil, scraper)
+	_, scrapes := scanner.ScanAndScrapeLibrariesForPath(t.Context(), libRoot, "", true)
+	if len(scrapes) != 1 || scrapes[0].Matched != 1 || scrapes[0].Processed != 1 || scrapes[0].Error != "" || scrapes[0].Skipped {
+		t.Fatalf("scrapes = %#v, want one repaired matched release row", scrapes)
+	}
+
+	var got model.Media
+	if err := repos.DB.First(&got, "path = ?", mediaPath).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "间谍过家家" || got.TMDbID != 12345 || got.ScrapeStatus != "matched" {
+		t.Fatalf("media = title=%q tmdb=%d status=%q, want localized matched metadata", got.Title, got.TMDbID, got.ScrapeStatus)
 	}
 }
 

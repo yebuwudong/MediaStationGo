@@ -186,6 +186,79 @@ func TestMediaUpsertMatchedIncomingRefreshesScrapedMetadata(t *testing.T) {
 	}
 }
 
+func TestMediaUpsertScanDoesNotClearMatchedMetadata(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := New(db)
+	lib := model.Library{Name: "剧集", Path: "/media/tv", Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	path := "/media/tv/间谍过家家/Season 01/间谍过家家 - S01E01.mkv"
+	existing := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "间谍过家家",
+		OriginalName: "SPY×FAMILY",
+		Path:         path,
+		PosterURL:    "/poster.jpg",
+		BackdropURL:  "/backdrop.jpg",
+		Overview:     "剧情简介",
+		Year:         2022,
+		SeasonNum:    1,
+		EpisodeNum:   1,
+		ScrapeStatus: "matched",
+		TMDbID:       12345,
+		BangumiID:    67890,
+		DoubanID:     "db-spy",
+		TheTVDBID:    "tvdb-spy",
+	}
+	if err := repos.Media.Upsert(t.Context(), &existing); err != nil {
+		t.Fatal(err)
+	}
+	scan := model.Media{
+		LibraryID:   lib.ID,
+		Title:       "Spy.x.Family.S01E01.2022.1080p.WEB-DL",
+		Path:        path,
+		SizeBytes:   2048,
+		DurationSec: 1500,
+		Width:       1920,
+		Height:      1080,
+		VideoCodec:  "h264",
+		AudioCodec:  "aac",
+		Container:   "mkv",
+		SeasonNum:   1,
+		EpisodeNum:  1,
+	}
+	if err := repos.Media.Upsert(t.Context(), &scan); err != nil {
+		t.Fatal(err)
+	}
+
+	var got model.Media
+	if err := repos.DB.Where("path = ?", path).First(&got).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "间谍过家家" || got.OriginalName != "SPY×FAMILY" || got.ScrapeStatus != "matched" {
+		t.Fatalf("matched names/status were overwritten by scan: %#v", got)
+	}
+	if got.TMDbID != 12345 || got.BangumiID != 67890 || got.DoubanID != "db-spy" || got.TheTVDBID != "tvdb-spy" {
+		t.Fatalf("matched provider ids were cleared by scan: %#v", got)
+	}
+	if got.PosterURL != "/poster.jpg" || got.BackdropURL != "/backdrop.jpg" || got.Overview != "剧情简介" {
+		t.Fatalf("matched artwork/overview were overwritten by scan: %#v", got)
+	}
+	if got.SizeBytes != 2048 || got.DurationSec != 1500 || got.Width != 1920 || got.Height != 1080 || got.Container != "mkv" {
+		t.Fatalf("file scan fields were not refreshed: %#v", got)
+	}
+	if scan.ID != got.ID || scan.Title != got.Title || scan.TMDbID != got.TMDbID || scan.ScrapeStatus != "matched" {
+		t.Fatalf("upsert caller did not receive fresh matched row: %#v want %#v", scan, got)
+	}
+}
+
 // TestMediaUpsertMigratesCloudLibraryIDOnRescan 复现"一键挂载子目录后媒体消失"的
 // 回归：同一 cloud:// 文件先被父目录库扫描入库，之后用户按二级分类重新挂载到更
 // 精确的分类库并扫描，library_id 必须迁移到新分类库，否则媒体被钉死在旧库、新库

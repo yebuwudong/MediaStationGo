@@ -114,6 +114,52 @@ func (s *STRMService) strmRelativePath(lib model.Library, media model.Media) str
 	return filepath.Join(safe, safe+".strm")
 }
 
+func (s *STRMService) strmTreeRelativePath(media model.Media) string {
+	parts := strmLibraryPathParts(media.Path)
+	if len(parts) == 0 {
+		return ""
+	}
+	parts = strmDropCategoryPrefix(parts)
+	if len(parts) == 0 {
+		return ""
+	}
+	last := parts[len(parts)-1]
+	ext := filepath.Ext(last)
+	if ext == "" {
+		return ""
+	}
+	parts[len(parts)-1] = strings.TrimSuffix(last, ext) + ".strm"
+	clean := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if safe := sanitizeFilename(part); safe != "" {
+			clean = append(clean, safe)
+		}
+	}
+	if len(clean) == 0 {
+		return ""
+	}
+	return filepath.Join(clean...)
+}
+
+func strmDropCategoryPrefix(parts []string) []string {
+	if len(parts) == 0 {
+		return nil
+	}
+	for i, part := range parts {
+		if strmCanonicalRoot(part) == "" && strmCategoryRoot(part) == "" {
+			continue
+		}
+		next := i + 1
+		if strmCanonicalRoot(part) != "" && next < len(parts) && strmCategoryRoot(parts[next]) != "" {
+			next++
+		}
+		if next < len(parts) {
+			return append([]string(nil), parts[next:]...)
+		}
+	}
+	return append([]string(nil), parts...)
+}
+
 func absolutizeSTRMURL(raw, baseURL string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || strings.HasPrefix(raw, "//") {

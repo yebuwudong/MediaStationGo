@@ -41,7 +41,9 @@ func (o *OrganizerService) resolveOrganizeMediaRequest(ctx context.Context, medi
 	if _, ok := ParseCloudLibraryMount(lib.Path); ok {
 		return organizeMediaRequest{}, errors.New("local organize cannot use cloud libraries directly; use external storage scan/mount for cloud media or enable cloud transfer to write to cloud")
 	}
-	baseRoot := normalizeOrganizeDestinationRoot(o.resolveBaseRoot(ctx, lib, opts.DestPath))
+	requestedBaseRoot := o.resolveBaseRoot(ctx, lib, opts.DestPath)
+	mediaType, mediaCategory := o.effectiveOrganizeOverrides(opts, requestedBaseRoot)
+	baseRoot := normalizeOrganizeDestinationRoot(requestedBaseRoot)
 	if _, ok := ParseCloudLibraryMount(baseRoot); ok {
 		return organizeMediaRequest{}, errors.New("organize destination must be a local writable media directory; enable cloud transfer in external storage when writing to cloud")
 	}
@@ -55,12 +57,13 @@ func (o *OrganizerService) resolveOrganizeMediaRequest(ctx context.Context, medi
 			return organizeMediaRequest{}, err
 		}
 	}
+	o.refreshOrganizeMediaMetadata(ctx, m, lib, opts.MediaType)
 	return organizeMediaRequest{
 		media:         m,
 		library:       lib,
 		baseRoot:      baseRoot,
-		mediaType:     strings.TrimSpace(opts.MediaType),
-		mediaCategory: strings.TrimSpace(opts.MediaCategory),
+		mediaType:     mediaType,
+		mediaCategory: mediaCategory,
 		dryRun:        opts.DryRun,
 		transferMode:  o.resolveTransferMode(ctx, opts.TransferMode),
 	}, nil
@@ -149,6 +152,7 @@ func (o *OrganizerService) applyOrganizeMedia(ctx context.Context, req organizeM
 	updates := map[string]any{
 		"path": dst.path,
 	}
+	addOrganizedMediaMetadataUpdates(updates, *m)
 	if normalizeOrganizeMediaType(dst.mediaType) == "movie" {
 		updates["season_num"] = 0
 		updates["episode_num"] = 0

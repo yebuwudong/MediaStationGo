@@ -60,7 +60,7 @@ func (s *SubscriptionService) runOne(ctx context.Context, sub *model.Subscriptio
 		seenSet:           seenSet,
 		availability:      mergeLocalAvailability(SubscriptionLocalAvailability(ctx, s.repo, sub), s.pendingDownloadAvailability(ctx, sub)),
 		availabilityQuery: availabilityQuery(subscriptionName(sub), subscriptionFilter(sub)),
-		washOff:           !sub.WashEnabled,
+		washOff:           !subscriptionAllowsWash(sub),
 	}
 	candidates := selectRSSSubscriptionCandidates(feed.Channel.Items, sub, filter, runState.seenSet, runState.availability)
 	queued = s.enqueueRSSSubscriptionCandidates(ctx, sub, candidates, runState)
@@ -94,7 +94,7 @@ func (s *SubscriptionService) enqueueRSSSubscriptionCandidate(ctx context.Contex
 		Overview:             sub.Overview,
 		MediaType:            mediaType,
 		MediaCategory:        mediaCategory,
-		AllowExistingLibrary: sub.WashEnabled,
+		AllowExistingLibrary: subscriptionAllowsWash(sub),
 	}); err != nil {
 		if IsDownloadDedupError(err) {
 			if s.subscriptionCandidateConfirmedAvailable(ctx, sub, candidate) {

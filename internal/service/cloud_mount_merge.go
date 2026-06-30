@@ -66,11 +66,11 @@ func cloudLibraryMergeNameKey(typeKey, name string) string {
 		}
 	case "tvshows":
 		switch name {
-		case "国产剧", "大陆剧", "华语剧", "国剧":
+		case "国产剧", "大陆剧", "华语剧", "国剧", "国产电视剧", "大陆电视剧", "华语电视剧", "港剧", "台剧", "港台剧":
 			return "国产剧"
-		case "欧美剧", "美剧", "英剧":
+		case "欧美剧", "欧美电视剧", "美剧", "英剧":
 			return "欧美剧"
-		case "日韩剧", "日剧", "韩剧":
+		case "日韩剧", "日韩电视剧", "日剧", "韩剧", "泰剧":
 			return "日韩剧"
 		case "国漫", "国产动漫", "国产动画":
 			return "国漫"

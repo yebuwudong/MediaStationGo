@@ -23,6 +23,8 @@ export type StrmGenerateSectionProps = {
   autoGenerate: boolean
   savingSettings: boolean
   overwrite: boolean
+  includeLocal: boolean
+  preserveTree: boolean
   generating: boolean
   generateResult: GenerateSTRMResult | null
   playbackStatus: string
@@ -36,6 +38,8 @@ export type StrmGenerateSectionProps = {
   setRedirectProxyEnabled: (value: boolean) => void
   setAutoGenerate: (value: boolean) => void
   setOverwrite: (value: boolean) => void
+  setIncludeLocal: (value: boolean) => void
+  setPreserveTree: (value: boolean) => void
 }
 
 export function StrmGenerateSection(props: StrmGenerateSectionProps) {

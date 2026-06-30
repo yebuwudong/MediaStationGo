@@ -185,6 +185,7 @@ func TestSubscriptionArchiveKeepsWashSubscriptionActive(t *testing.T) {
 		FeedURL:     "site-search://search?keyword=Dune",
 		Filter:      "Dune 2021",
 		MediaType:   "movie",
+		Resolution:  "2160p",
 		WashEnabled: true,
 		Enabled:     true,
 	}

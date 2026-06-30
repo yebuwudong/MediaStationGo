@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 
 	"github.com/ShukeBta/MediaStationGo/internal/model"
@@ -83,4 +84,39 @@ func (o *OrganizerService) autoAddLibraryEnabled(ctx context.Context) bool {
 		return true
 	}
 	return parseBoolSetting(v, true)
+}
+
+func (o *OrganizerService) effectiveOrganizeOverrides(opts OrganizeOptions, explicitDest string) (string, string) {
+	mediaType := normalizeOrganizeMediaType(opts.MediaType)
+	category := sanitizeFilename(strings.TrimSpace(opts.MediaCategory))
+	hasExplicitLayout := mediaType != "" || category != ""
+	if category != "" {
+		if impliedType, normalizedCategory := o.mediaTypeForDirectoryCategory(category); impliedType != "" {
+			category = normalizedCategory
+			if mediaType == "" {
+				mediaType = impliedType
+			}
+		}
+		return mediaType, category
+	}
+	if hasExplicitLayout {
+		if layout := o.organizeLayoutFromDestPath(explicitDest); layout.Category != "" {
+			category = sanitizeFilename(layout.Category)
+			if mediaType == "" {
+				mediaType = layout.MediaType
+			}
+		}
+	}
+	return mediaType, category
+}
+
+func (o *OrganizerService) organizeLayoutFromDestPath(dest string) organizeDirectoryLayout {
+	dest = filepath.Clean(strings.TrimSpace(dest))
+	if dest == "" || dest == "." {
+		return organizeDirectoryLayout{}
+	}
+	if mediaType, category := o.mediaTypeForDirectoryCategory(filepath.Base(dest)); mediaType != "" && category != "" {
+		return organizeDirectoryLayout{MediaType: mediaType, Category: category}
+	}
+	return organizeDirectoryLayout{}
 }

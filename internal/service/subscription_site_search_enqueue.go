@@ -68,7 +68,7 @@ func (s *SubscriptionService) enqueueSiteSearchCandidate(ctx context.Context, su
 		MediaType:            mediaType,
 		MediaCategory:        mediaCategory,
 		SourceCategory:       item.Category,
-		AllowExistingLibrary: sub.WashEnabled,
+		AllowExistingLibrary: subscriptionAllowsWash(sub),
 	}); err != nil {
 		if IsDownloadDedupError(err) {
 			if s.subscriptionCandidateConfirmedAvailable(ctx, sub, candidate) {

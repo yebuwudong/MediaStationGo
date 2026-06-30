@@ -2,6 +2,7 @@ import { StrmAttachSection } from './StrmAttachSection'
 import { StrmGenerateSection } from './StrmGenerateSection'
 import { StrmImportSection } from './StrmImportSection'
 import { StrmPageHeader } from './StrmPageHeader'
+import { StrmTreeGenerateSection } from './StrmTreeGenerateSection'
 import { useStrmPage } from './useStrmPage'
 
 // StrmPage exposes the URL-as-file admin tooling backed by the Go server:
@@ -28,6 +29,8 @@ export function StrmPage() {
         autoGenerate={strm.generate.autoGenerate}
         savingSettings={strm.generate.savingSettings}
         overwrite={strm.generate.overwrite}
+        includeLocal={strm.generate.includeLocal}
+        preserveTree={strm.generate.preserveTree}
         generating={strm.generate.generating}
         generateResult={strm.generate.generateResult}
         playbackStatus={strm.generate.playbackStatus}
@@ -41,7 +44,11 @@ export function StrmPage() {
         setRedirectProxyEnabled={strm.generate.setRedirectProxyEnabled}
         setAutoGenerate={strm.generate.setAutoGenerate}
         setOverwrite={strm.generate.setOverwrite}
+        setIncludeLocal={strm.generate.setIncludeLocal}
+        setPreserveTree={strm.generate.setPreserveTree}
       />
+
+      <StrmTreeGenerateSection {...strm.treeGenerate} />
 
       <StrmImportSection
         libraries={strm.libraries}

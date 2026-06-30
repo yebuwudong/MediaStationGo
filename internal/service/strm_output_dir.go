@@ -177,8 +177,6 @@ func strmCanonicalCategory(part string) string {
 		return "综艺"
 	case "少儿":
 		return "儿童"
-	case "未分类":
-		return "欧美剧"
 	case "国产动漫":
 		return "国漫"
 	case "番剧", "日漫", "日本动漫", "日本动画":

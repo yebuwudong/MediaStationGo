@@ -8,11 +8,14 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
@@ -37,6 +40,9 @@ var discoverSectionCatalog = []discoverSectionDef{
 	{Key: "douban_top_movie", Label: "豆瓣高分电影", Provider: "douban"},
 	{Key: "bangumi_calendar", Label: "Bangumi 每日放送", Provider: "bangumi"},
 }
+
+const discoverFeedSectionTimeout = 15 * time.Second
+const discoverFeedSlowSectionThreshold = 2 * time.Second
 
 // discoverSectionsHandler returns the catalog of sections the UI can
 // pick from. The names match the upstream Vue UI so existing settings
@@ -76,22 +82,153 @@ func discoverFeedHandler(svc *service.Container) gin.HandlerFunc {
 			}
 			if provider := discoverSectionProvider(k); provider != "" && !discoverProviderEnabled(c.Request.Context(), svc, provider) {
 				out[k] = []service.ExternalMediaResult{}
-				meta[k] = gin.H{"page": page, "has_next": false}
+				meta[k] = gin.H{"page": page, "has_next": false, "disabled": true}
 				continue
 			}
-			items, err := discoverSectionItems(c.Request.Context(), svc, k, page)
+			sectionCtx, cancel := context.WithTimeout(c.Request.Context(), discoverFeedSectionTimeout)
+			started := time.Now()
+			items, err := discoverSectionItems(sectionCtx, svc, k, page)
+			elapsed := time.Since(started)
+			cancel()
+			metaEntry := gin.H{"page": page, "has_next": false, "duration_ms": elapsed.Milliseconds()}
 			if err != nil {
-				svc.Log.Debug("discover fetch failed")
-				items = nil
+				logDiscoverFetchFailed(svc, k, page, elapsed, err)
+				if cached, ok := cachedDiscoverSection(svc, k, page); ok {
+					items = cached
+					metaEntry["stale"] = true
+					metaEntry["warning"] = discoverFeedStaleMessage(err)
+				} else if fallbackItems, fallbackKey, ok := fallbackDiscoverSectionItems(c.Request.Context(), svc, k, page); ok {
+					items = fallbackItems
+					metaEntry["fallback"] = fallbackKey
+					metaEntry["warning"] = discoverFeedFallbackMessage(fallbackKey, err)
+					rememberDiscoverSection(svc, k, page, items)
+				} else {
+					metaEntry["error"] = discoverFeedErrorMessage(err)
+					items = nil
+				}
+			} else {
+				logDiscoverFetchSlow(svc, k, page, elapsed, len(items))
+				rememberDiscoverSection(svc, k, page, items)
 			}
 			artworkItems = append(artworkItems, items...)
 			out[k] = items
-			meta[k] = gin.H{"page": page, "has_next": discoverSectionHasNext(k, len(items))}
+			metaEntry["has_next"] = discoverSectionHasNext(k, len(items))
+			meta[k] = metaEntry
 		}
 		out["_meta"] = meta
-		svc.Discover.WarmExternalArtwork(artworkItems)
+		if svc != nil && svc.Discover != nil {
+			svc.Discover.WarmExternalArtwork(artworkItems)
+		}
 		c.JSON(http.StatusOK, out)
 	}
+}
+
+func cachedDiscoverSection(svc *service.Container, key string, page int) ([]service.ExternalMediaResult, bool) {
+	if svc == nil || svc.Discover == nil {
+		return nil, false
+	}
+	return svc.Discover.CachedSection(key, page)
+}
+
+func rememberDiscoverSection(svc *service.Container, key string, page int, items []service.ExternalMediaResult) {
+	if svc == nil || svc.Discover == nil {
+		return
+	}
+	svc.Discover.RememberSection(key, page, items)
+}
+
+func fallbackDiscoverSectionItems(parent context.Context, svc *service.Container, key string, page int) ([]service.ExternalMediaResult, string, bool) {
+	fallbackKey := fallbackDiscoverSectionKey(key)
+	if fallbackKey == "" || svc == nil || svc.Discover == nil {
+		return nil, "", false
+	}
+	ctx, cancel := context.WithTimeout(parent, discoverFeedSectionTimeout)
+	defer cancel()
+	items, err := discoverSectionItems(ctx, svc, fallbackKey, page)
+	if err != nil || len(items) == 0 {
+		return nil, fallbackKey, false
+	}
+	if svc.Log != nil {
+		svc.Log.Info("discover section fallback used",
+			zap.String("section", key),
+			zap.String("fallback_section", fallbackKey),
+			zap.Int("page", page),
+			zap.Int("items", len(items)))
+	}
+	return items, fallbackKey, true
+}
+
+func fallbackDiscoverSectionKey(key string) string {
+	switch key {
+	case "douban_hot_movie":
+		return "tmdb_popular_movie"
+	case "douban_hot_tv":
+		return "tmdb_popular_tv"
+	case "douban_top_movie":
+		return "tmdb_top_rated_movie"
+	default:
+		return ""
+	}
+}
+
+func logDiscoverFetchFailed(svc *service.Container, key string, page int, elapsed time.Duration, err error) {
+	if svc == nil || svc.Log == nil || err == nil {
+		return
+	}
+	svc.Log.Warn("discover section fetch failed",
+		zap.String("section", key),
+		zap.String("provider", discoverSectionProvider(key)),
+		zap.Int("page", page),
+		zap.Duration("duration", elapsed),
+		zap.Int64("duration_ms", elapsed.Milliseconds()),
+		zap.Duration("timeout", discoverFeedSectionTimeout),
+		zap.Error(err))
+}
+
+func logDiscoverFetchSlow(svc *service.Container, key string, page int, elapsed time.Duration, itemCount int) {
+	if svc == nil || svc.Log == nil || elapsed < discoverFeedSlowSectionThreshold {
+		return
+	}
+	svc.Log.Info("discover section fetch slow",
+		zap.String("section", key),
+		zap.String("provider", discoverSectionProvider(key)),
+		zap.Int("page", page),
+		zap.Int("items", itemCount),
+		zap.Duration("duration", elapsed),
+		zap.Int64("duration_ms", elapsed.Milliseconds()),
+		zap.Duration("slow_threshold", discoverFeedSlowSectionThreshold))
+}
+
+func discoverFeedErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "推荐源响应超时，已跳过本次加载"
+	}
+	var timeout interface{ Timeout() bool }
+	if errors.As(err, &timeout) && timeout.Timeout() {
+		return "推荐源响应超时，已跳过本次加载"
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded") || strings.Contains(msg, "context deadline exceeded") {
+		return "推荐源响应超时，已跳过本次加载"
+	}
+	return "推荐源暂时不可用，已跳过本次加载"
+}
+
+func discoverFeedStaleMessage(err error) string {
+	if discoverFeedErrorMessage(err) == "推荐源响应超时，已跳过本次加载" {
+		return "推荐源响应超时，已显示上次成功结果"
+	}
+	return "推荐源暂时不可用，已显示上次成功结果"
+}
+
+func discoverFeedFallbackMessage(fallbackKey string, err error) string {
+	if strings.TrimSpace(fallbackKey) == "" {
+		return discoverFeedErrorMessage(err)
+	}
+	return "推荐源暂时不可用，已显示同类备用榜单"
 }
 
 func enabledDiscoverSections(ctx context.Context, svc *service.Container) []discoverSectionDef {

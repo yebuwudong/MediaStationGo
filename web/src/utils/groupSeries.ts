@@ -41,6 +41,8 @@ function getSeriesRawKey(media: Media): string {
   if (isEpisodeLike(media) || pathLooksEpisodic(media)) {
     // 路径剧名优先:对全剧一致, 不受单集 tmdb 污染影响。
     if (fromPath) return seriesFingerprint('library-path', targetLibraryID(media), fromPath)
+    const pathID = seriesExternalIDFromPath(media.path)
+    if (pathID) return seriesFingerprint('library-path-id', targetLibraryID(media), pathID)
     // 无路径剧名(扁平目录)时才退而用外部 id;此时各集若共享整剧 id 仍能合并。
     if (media.tmdb_id && media.tmdb_id > 0) return `tmdb:${media.tmdb_id}`
     if (media.bangumi_id && media.bangumi_id > 0) return `bgm:${media.bangumi_id}`
@@ -78,7 +80,7 @@ export function isEpisodeLike(media: Media): boolean {
 // 剧集类目录名(电视剧/动漫及其二级分类)。媒体路径落在这些目录下时, 即便
 // 季集号未识别出来, 也应按剧集对待, 跳转到 /library 分类视图而非 /media 单页。
 const EPISODIC_PATH_RE =
-  /[\\/](?:电视剧|剧集|国产剧|欧美剧|日韩剧|日剧|韩剧|综艺|纪录片|儿童|动漫|番剧|国漫|日番|韩漫|美漫|欧美动漫|欧美动画|其他动漫|tv|series|shows?|season[\s._-]*\d|s\d{1,2}(?:[\s._-]|[\\/])|special[\s._-]*episodes?|specials?|sp|ovas?|oads?|extras?|bonus(?:es)?|omake|特别篇|特別篇|番外篇?|特典|外传|外傳|总集篇|總集篇)[\\/]/i
+  /[\\/](?:电视剧|剧集|连续剧|短剧|国产剧|国剧|大陆剧|华语剧|国产电视剧|大陆电视剧|华语电视剧|欧美剧|欧美电视剧|美剧|英剧|日韩剧|日韩电视剧|日剧|韩剧|港剧|台剧|港台剧|泰剧|综艺|纪录片|儿童|动漫|番剧|国漫|日番|韩漫|美漫|欧美动漫|欧美动画|其他动漫|tv|series|shows?|season[\s._-]*\d|s\d{1,2}(?:[\s._-]|[\\/])|special[\s._-]*episodes?|specials?|sp|ovas?|oads?|extras?|bonus(?:es)?|omake|特别篇|特別篇|番外篇?|特典|外传|外傳|总集篇|總集篇)[\\/]/i
 
 const SEASON_FOLDER_RE =
   /^(?:s\d{1,2}|season[\s._-]*\d{1,2}|第\s*[0-9一二三四五六七八九十百零两]+\s*季|special[\s._-]*episodes?|specials?|sp|ovas?|oads?|extras?|bonus(?:es)?|omake|特别篇|特別篇|番外篇?|特典|外传|外傳|总集篇|總集篇)$/i
@@ -206,15 +208,43 @@ function unsafeEpisodeTitle(title: string): boolean {
 }
 
 export function seriesTitleFromPath(path?: string): string {
+  const part = seriesDirectoryNameFromPath(path)
+  return part ? normalizePathSeriesTitle(part) : ''
+}
+
+function seriesDirectoryNameFromPath(path?: string): string {
   if (!path) return ''
   const parts = path.split(/[\\/]+/).filter(Boolean)
   if (parts.length < 2) return ''
   let dirIndex = parts.length - 2
+  const lastPart = parts[parts.length - 1]
+  if (!seriesPathPartLooksLikeFile(lastPart) && !SEASON_FOLDER_RE.test(lastPart)) {
+    dirIndex = parts.length - 1
+  }
   while (dirIndex >= 0 && SEASON_FOLDER_RE.test(parts[dirIndex])) {
     dirIndex -= 1
   }
   if (dirIndex < 0) return ''
-  return normalizePathSeriesTitle(parts[dirIndex])
+  return parts[dirIndex]
+}
+
+function seriesExternalIDFromPath(path?: string): string {
+  const part = seriesDirectoryNameFromPath(path)
+  if (!part) return ''
+  for (const [source, pattern] of [
+    ['tmdb', /(?:^|[^a-z0-9])(?:tmdbid|tmdb)[\s_:=#-]*(\d{2,})/i],
+    ['bgm', /(?:^|[^a-z0-9])(?:bangumi|bgm)[\s_:=#-]*(\d{2,})/i],
+    ['douban', /(?:^|[^a-z0-9])(?:douban|db)[\s_:=#-]*(\d{2,})/i],
+    ['thetvdb', /(?:^|[^a-z0-9])(?:thetvdb|tvdb)[\s_:=#-]*(\d{2,})/i],
+  ] as const) {
+    const match = pattern.exec(part)
+    if (match?.[1]) return `${source}:${match[1]}`
+  }
+  return ''
+}
+
+function seriesPathPartLooksLikeFile(part: string): boolean {
+  return /\.(?:mkv|mp4|m4v|avi|mov|webm|flv|wmv|ts|m2ts|mts|vob|rmvb|rm|3gp|mpg|mpeg|iso|strm|nfo|srt|ass|ssa|vtt|sub|idx|jpe?g|png|webp)$/i.test(part)
 }
 
 export function groupSeries(items: Media[] = []): SeriesCard[] {

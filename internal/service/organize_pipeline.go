@@ -134,10 +134,7 @@ func (p *OrganizePipelineService) Run(ctx context.Context, req OrganizePipelineR
 		if scanRoot == "" && strings.TrimSpace(path) != "" {
 			scanRoot = filepath.Dir(path)
 		}
-		preferredLibraryID := strings.TrimSpace(req.PreferredLibraryID)
-		if preferredLibraryID == "" && req.Scope == OrganizeScopeLibrary {
-			preferredLibraryID = strings.TrimSpace(req.LibraryID)
-		}
+		preferredLibraryID := p.scanPreferredLibraryID(ctx, req)
 		res.Scans, res.Scrapes = p.scanner.ScanAndScrapeLibrariesForPath(ctx, scanRoot, preferredLibraryID, p.scrapeAfter(ctx, req))
 	} else if p.log != nil && res != nil && !req.DryRun {
 		p.log.Info("organize pipeline skipped scan; no destination changes",
@@ -210,4 +207,25 @@ func (p *OrganizePipelineService) scrapeAfter(ctx context.Context, req OrganizeP
 		return *req.ScrapeAfter
 	}
 	return OrganizeScrapeAfterEnabled(ctx, p.repo)
+}
+
+func (p *OrganizePipelineService) scanPreferredLibraryID(ctx context.Context, req OrganizePipelineRequest) string {
+	if preferred := strings.TrimSpace(req.PreferredLibraryID); preferred != "" {
+		return preferred
+	}
+	switch req.Scope {
+	case OrganizeScopeMedia:
+		if p == nil || p.repo == nil || p.repo.Media == nil {
+			return ""
+		}
+		media, err := p.repo.Media.FindByID(ctx, strings.TrimSpace(req.MediaID))
+		if err != nil || media == nil {
+			return ""
+		}
+		return strings.TrimSpace(media.LibraryID)
+	case OrganizeScopeLibrary:
+		return strings.TrimSpace(req.LibraryID)
+	default:
+		return ""
+	}
 }

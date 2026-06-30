@@ -39,6 +39,7 @@ func (o *OrganizerService) reclassifyExistingMedia(ctx context.Context, req orga
 		return false, nil
 	}
 	candidates := reclassifyExistingCandidates(req.Existing, target, req.DestRoot)
+	candidates = reclassifyMoveCandidates(candidates, target)
 	if len(candidates) == 0 {
 		return false, nil
 	}
@@ -108,6 +109,22 @@ func reclassifyExistingCandidates(existing []string, target, destRoot string) []
 		}
 		seen[key] = struct{}{}
 		out = append(out, path)
+	}
+	return out
+}
+
+func reclassifyMoveCandidates(existing []string, target string) []string {
+	targetDir := filepath.Clean(filepath.Dir(target))
+	out := make([]string, 0, len(existing))
+	for _, path := range existing {
+		cleaned := filepath.Clean(strings.TrimSpace(path))
+		if cleaned == "" || cleaned == "." {
+			continue
+		}
+		if strings.EqualFold(filepath.Clean(filepath.Dir(cleaned)), targetDir) {
+			continue
+		}
+		out = append(out, cleaned)
 	}
 	return out
 }

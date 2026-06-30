@@ -145,7 +145,6 @@ function canonicalCategory(part: string) {
   if (key === '日剧' || key === '韩剧') return '日韩剧'
   if (key === '真人秀') return '综艺'
   if (key === '少儿') return '儿童'
-  if (key === '未分类') return '欧美剧'
   if (key === '国产动漫') return '国漫'
   if (['番剧', '日漫', '日本动漫', '日本动画'].includes(key)) return '日番'
   if (key === '韩国动漫' || key === '韩国动画') return '韩漫'

@@ -7,9 +7,30 @@ export function subscriptionRuleBadges(subscription: Subscription): string[] {
     subscription.quality || '质量不限',
     subscription.effects || '',
     subscription.release_groups ? `发布组 ${subscription.release_groups}` : '',
-    subscription.wash_enabled ? `洗版 ${washPriorityLabel(subscription.wash_priority)}` : '未启用洗版',
+    subscription.free_only ? '仅免费' : '',
+    seedersLabel(subscription),
+    sizeLabel(subscription),
+    washStatusLabel(subscription),
   ]
   return labels.filter(Boolean)
+}
+
+function seedersLabel(subscription: Subscription): string {
+  const min = subscription.min_seeders || 0
+  const max = subscription.max_seeders || 0
+  if (min > 0 && max > 0) return `做种 ${min}-${max}`
+  if (min > 0) return `做种 >=${min}`
+  if (max > 0) return `做种 <=${max}`
+  return ''
+}
+
+function sizeLabel(subscription: Subscription): string {
+  const min = subscription.min_size_gb || 0
+  const max = subscription.max_size_gb || 0
+  if (min > 0 && max > 0) return `体积 ${min}-${max}GB`
+  if (min > 0) return `体积 >=${min}GB`
+  if (max > 0) return `体积 <=${max}GB`
+  return ''
 }
 
 export function subscriptionProgressLabel(subscription: Subscription): string {
@@ -40,4 +61,21 @@ function washPriorityLabel(priority?: string): string {
     default:
       return '均衡'
   }
+}
+
+function washStatusLabel(subscription: Subscription): string {
+  if (!subscription.wash_enabled) return '未启用洗版'
+  if (!hasExplicitWashCriteria(subscription)) return '洗版待配置'
+  return `洗版 ${washPriorityLabel(subscription.wash_priority)}`
+}
+
+function hasExplicitWashCriteria(subscription: Subscription): boolean {
+  const resolution = (subscription.resolution || '').trim().toLowerCase()
+  const quality = (subscription.quality || '').trim().toLowerCase()
+  return Boolean(
+    (resolution && resolution !== 'best') ||
+      (quality && quality !== 'best') ||
+      subscription.effects?.trim() ||
+      subscription.release_groups?.trim(),
+  )
 }

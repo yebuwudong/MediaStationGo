@@ -33,6 +33,11 @@ type subscriptionPatchReq struct {
 	Effects       *string  `json:"effects"`
 	ReleaseGroups *string  `json:"release_groups"`
 	ExcludeWords  *string  `json:"exclude_words"`
+	MinSeeders    *int     `json:"min_seeders"`
+	MaxSeeders    *int     `json:"max_seeders"`
+	MinSizeGB     *float64 `json:"min_size_gb"`
+	MaxSizeGB     *float64 `json:"max_size_gb"`
+	FreeOnly      *bool    `json:"free_only"`
 	WashEnabled   *bool    `json:"wash_enabled"`
 	WashPriority  *string  `json:"wash_priority"`
 	TotalEpisodes *int     `json:"total_episodes"`
@@ -136,6 +141,21 @@ func subscriptionPatchUpdates(patch subscriptionPatchReq) map[string]any {
 	}
 	if patch.ExcludeWords != nil {
 		updates["exclude_words"] = *patch.ExcludeWords
+	}
+	if patch.MinSeeders != nil {
+		updates["min_seeders"] = *patch.MinSeeders
+	}
+	if patch.MaxSeeders != nil {
+		updates["max_seeders"] = *patch.MaxSeeders
+	}
+	if patch.MinSizeGB != nil {
+		updates["min_size_gb"] = *patch.MinSizeGB
+	}
+	if patch.MaxSizeGB != nil {
+		updates["max_size_gb"] = *patch.MaxSizeGB
+	}
+	if patch.FreeOnly != nil {
+		updates["free_only"] = *patch.FreeOnly
 	}
 	if patch.WashEnabled != nil {
 		updates["wash_enabled"] = *patch.WashEnabled

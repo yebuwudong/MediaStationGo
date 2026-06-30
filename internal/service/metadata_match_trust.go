@@ -24,9 +24,6 @@ func automaticMetadataTitleTrusted(query string, match *Match) bool {
 			return true
 		}
 	}
-	if metadataTrustChineseReleaseAlias(queryKey, match) {
-		return true
-	}
 	if metadataTrustLocalizedSearchKeyword(queryKey, match) {
 		return true
 	}
@@ -89,23 +86,6 @@ func metadataTrustTokenOverlap(queryKey, titleKey string) bool {
 	return queryCoverage >= 0.80 && titleCoverage >= 0.50
 }
 
-func metadataTrustChineseReleaseAlias(queryKey string, match *Match) bool {
-	if match == nil || !metadataMatchHasChineseOrigin(match) {
-		return false
-	}
-	tokens := metadataTrustSignificantTokens(queryKey)
-	if len(tokens) < 2 {
-		return false
-	}
-	latinTokens := 0
-	for _, token := range tokens {
-		if containsLatin(token) {
-			latinTokens++
-		}
-	}
-	return latinTokens >= 2
-}
-
 func metadataTrustLocalizedSearchKeyword(queryKey string, match *Match) bool {
 	if match == nil || !metadataMatchHasExternalID(match) {
 		return false
@@ -155,16 +135,6 @@ func metadataMatchHasExternalID(match *Match) bool {
 			match.BangumiID > 0 ||
 			strings.TrimSpace(match.DoubanID) != "" ||
 			strings.TrimSpace(match.TheTVDBID) != "")
-}
-
-func metadataMatchHasChineseOrigin(match *Match) bool {
-	if match == nil {
-		return false
-	}
-	languages := normalizeTokens(match.Languages...)
-	countries := normalizeTokens(match.Countries...)
-	return hasAny(languages, "ZH", "ZH-CN", "ZH-TW", "CN") ||
-		hasAny(countries, "CN", "TW", "HK", "MO")
 }
 
 func metadataTrustSignificantTokens(key string) []string {

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,10 +36,12 @@ func TestManualRequestMatchFallsBackToCandidatePayload(t *testing.T) {
 
 func TestParsePositiveIDStringAcceptsProviderPrefixes(t *testing.T) {
 	cases := map[string]string{
-		"12345":         "12345",
-		"tmdb:12345":    "12345",
-		"douban:67890":  "67890",
-		"thetvdb:24680": "24680",
+		"12345":          "12345",
+		"tmdb:12345":     "12345",
+		"[tmdbid-12345]": "12345",
+		"douban:67890":   "67890",
+		"{douban=67890}": "67890",
+		"thetvdb:24680":  "24680",
 	}
 	for input, want := range cases {
 		got, ok := parsePositiveIDString(input)
@@ -47,6 +51,9 @@ func TestParsePositiveIDStringAcceptsProviderPrefixes(t *testing.T) {
 	}
 	if got, ok := parsePositiveIDString("tmdb:not-a-number"); ok || got != "" {
 		t.Fatalf("parsePositiveIDString invalid = %q,%v; want empty,false", got, ok)
+	}
+	if got, ok := parseProviderIDString("[tmdbid-12345]", "douban"); ok || got != "" {
+		t.Fatalf("parseProviderIDString provider mismatch = %q,%v; want empty,false", got, ok)
 	}
 }
 
@@ -279,7 +286,7 @@ func TestManualSearchAllProvidersTMDbNumericIDTriesMovieAndTVNamespaces(t *testi
 	if err := repos.DB.Create(&lib).Error; err != nil {
 		t.Fatal(err)
 	}
-	media := model.Media{LibraryID: lib.ID, Title: "待匹配", Path: `/media/movie/raw.mkv`}
+	media := model.Media{LibraryID: lib.ID, Title: "待匹配", Path: `/media/movie/raw-provider-id.mkv`}
 	if err := repos.DB.Create(&media).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -293,6 +300,156 @@ func TestManualSearchAllProvidersTMDbNumericIDTriesMovieAndTVNamespaces(t *testi
 	}
 	if len(paths) < 2 || paths[0] != "/movie/12345" || paths[1] != "/tv/12345" {
 		t.Fatalf("tmdb numeric paths=%v, want movie then tv", paths)
+	}
+}
+
+func TestManualSearchTMDbProviderIDUsesIDLookupOnly(t *testing.T) {
+	var paths []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/movie/1208850":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":             1208850,
+				"title":          "多拉特行动",
+				"original_title": "Malbatt: Misi Bakara",
+				"overview":       "ID matched movie.",
+				"poster_path":    "/malbatt.jpg",
+				"release_date":   "2024-01-11",
+				"vote_average":   6.9,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Library{}, &model.Series{}, &model.Media{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	cfg := &config.Config{}
+	cfg.Secrets.TMDbAPIKey = "test-key"
+	cfg.Secrets.TMDbAPIProxy = upstream.URL
+	log := zap.NewNop()
+	scraper := NewScraperService(cfg, log, repos, NewTMDbProvider(cfg, log, nil), nil, nil, nil, NewHub(log))
+
+	lib := model.Library{Name: "电影", Path: `/media/movie`, Type: "movie", Enabled: true}
+	if err := repos.DB.Create(&lib).Error; err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{LibraryID: lib.ID, Title: "待匹配", Path: `/media/movie/raw-provider-id-skip-adult.mkv`}
+	if err := repos.DB.Create(&media).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := scraper.ManualSearch(t.Context(), &media, "[tmdbid-1208850]", "all", "movie")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].TMDbID != 1208850 || results[0].Title != "多拉特行动" {
+		t.Fatalf("manual TMDb provider-id results=%#v, paths=%v", results, paths)
+	}
+	for _, path := range paths {
+		if strings.HasPrefix(path, "/search/") {
+			t.Fatalf("provider-id search should not use fuzzy search; paths=%v", paths)
+		}
+	}
+	if len(paths) == 0 || paths[0] != "/movie/1208850" {
+		t.Fatalf("tmdb provider-id paths=%v, want /movie/1208850 first", paths)
+	}
+}
+
+func TestManualSearchAllProvidersProviderIDSkipsAdultSource(t *testing.T) {
+	var tmdbPaths []string
+	tmdbUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tmdbPaths = append(tmdbPaths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/movie/1208850":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":             1208850,
+				"title":          "多拉特行动",
+				"original_title": "Malbatt: Misi Bakara",
+				"release_date":   "2024-01-11",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer tmdbUpstream.Close()
+
+	var adultCalls atomic.Int32
+	adultUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		adultCalls.Add(1)
+		http.NotFound(w, r)
+	}))
+	defer adultUpstream.Close()
+
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Library{}, &model.Series{}, &model.Media{}, &model.APIConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	cfg := &config.Config{}
+	cfg.Secrets.TMDbAPIKey = "test-key"
+	cfg.Secrets.TMDbAPIProxy = tmdbUpstream.URL
+	log := zap.NewNop()
+	apiConfig := NewAPIConfigService(log, repos, NewCryptoService("", log))
+	adultBaseURL := adultUpstream.URL
+	if _, err := apiConfig.Update(t.Context(), "adult", APIConfigPatch{BaseURL: &adultBaseURL}); err != nil {
+		t.Fatal(err)
+	}
+	scraper := NewScraperService(cfg, log, repos, NewTMDbProvider(cfg, log, nil), nil, nil, nil, NewHub(log), NewAdultProvider(log, apiConfig))
+
+	lib := model.Library{Name: "电影", Path: `/media/movie`, Type: "movie", Enabled: true}
+	if err := repos.DB.Create(&lib).Error; err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{LibraryID: lib.ID, Title: "待匹配", Path: `/media/movie/raw.mkv`}
+	if err := repos.DB.Create(&media).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := scraper.ManualSearch(t.Context(), &media, "[tmdbid-1208850]", "all", "movie")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].TMDbID != 1208850 || results[0].Source != "tmdb" {
+		t.Fatalf("manual provider-id results=%#v, tmdb paths=%v", results, tmdbPaths)
+	}
+	if calls := adultCalls.Load(); calls != 0 {
+		t.Fatalf("adult provider was called %d times for explicit tmdb id", calls)
+	}
+}
+
+func TestManualTMDbCandidatesSkipOtherProviderIDs(t *testing.T) {
+	var paths []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		http.NotFound(w, r)
+	}))
+	defer upstream.Close()
+
+	cfg := &config.Config{}
+	cfg.Secrets.TMDbAPIKey = "test-key"
+	cfg.Secrets.TMDbAPIProxy = upstream.URL
+	log := zap.NewNop()
+	scraper := NewScraperService(cfg, log, nil, NewTMDbProvider(cfg, log, nil), nil, nil, nil, NewHub(log))
+
+	if got := scraper.manualTMDbCandidates(t.Context(), "{douban=36941123}", 0, "movie"); len(got) != 0 {
+		t.Fatalf("tmdb candidates for douban id = %#v, want none", got)
+	}
+	if len(paths) != 0 {
+		t.Fatalf("tmdb should not be called for douban id hint, paths=%v", paths)
 	}
 }
 

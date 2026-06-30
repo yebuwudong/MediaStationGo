@@ -45,6 +45,7 @@ type TorrentItem struct {
 	ID          string     `json:"id"`
 	Title       string     `json:"title"`
 	Subtitle    string     `json:"subtitle"`
+	Labels      string     `json:"labels,omitempty"`
 	Category    string     `json:"category"`
 	Size        int64      `json:"size"`
 	Seeders     int        `json:"seeders"`

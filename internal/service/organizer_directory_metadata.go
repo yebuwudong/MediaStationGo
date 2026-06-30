@@ -31,6 +31,9 @@ func (o *OrganizerService) lookupOrganizeMetadata(ctx context.Context, src, sour
 	if o == nil || o.scraper == nil || !o.scraper.AnyEnabled() {
 		return nil
 	}
+	if match := o.lookupOrganizeMetadataByPathHints(ctx, src, sourceRoot, normalizedType, title, year, lookupSeason, lookupEpisode, seriesLike); match != nil {
+		return match
+	}
 	libType := normalizeOrganizeMediaType(mediaType)
 	if libType == "" {
 		libType = organizeLibraryModelType(mediaType)
@@ -97,6 +100,55 @@ func (o *OrganizerService) lookupOrganizeMetadata(ctx context.Context, src, sour
 		}
 	}
 	return nil
+}
+
+func (o *OrganizerService) lookupOrganizeMetadataByPathHints(ctx context.Context, src, sourceRoot, mediaType, title string, year, season, episode int, seriesLike bool) *Match {
+	if o == nil || o.scraper == nil {
+		return nil
+	}
+	meta, hints := pathHintMetadata(src, seriesLike)
+	if !hints.useful() {
+		return nil
+	}
+	if meta != nil {
+		if strings.TrimSpace(title) == "" {
+			title = strings.TrimSpace(meta.Title)
+		}
+		if year <= 0 {
+			year = meta.Year
+		}
+	}
+	libType := normalizeOrganizeMediaType(mediaType)
+	if libType == "" {
+		libType = organizeLibraryModelType(mediaType)
+	}
+	lib := &model.Library{Path: sourceRoot, Type: libType, Enabled: true}
+	media := &model.Media{
+		Title:      title,
+		Year:       year,
+		Path:       src,
+		SeasonNum:  season,
+		EpisodeNum: episode,
+		TMDbID:     hints.TMDbID,
+		BangumiID:  hints.BangumiID,
+		DoubanID:   strings.TrimSpace(hints.DoubanID),
+		TheTVDBID:  strings.TrimSpace(hints.TheTVDBID),
+	}
+	match := o.scraper.matchFromMediaExternalIDs(ctx, media, lib)
+	if match == nil || strings.TrimSpace(match.Title) == "" {
+		return nil
+	}
+	if o.log != nil {
+		o.log.Info("organize metadata matched by path id before rename",
+			zap.String("source", src),
+			zap.String("title", match.Title),
+			zap.String("media_type", match.MediaType),
+			zap.Int("tmdb_id", match.TMDbID),
+			zap.Int("bangumi_id", match.BangumiID),
+			zap.String("douban_id", match.DoubanID),
+			zap.String("thetvdb_id", match.TheTVDBID))
+	}
+	return match
 }
 
 func (o *OrganizerService) lookupOrganizeAdultMetadata(ctx context.Context, src, mediaType, title string) *Match {

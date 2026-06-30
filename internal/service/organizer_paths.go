@@ -70,7 +70,9 @@ func (o *OrganizerService) categoryPhysicalRootDirForType(mediaType, category st
 			categoryName(categories, "variety", "综艺"),
 			categoryName(categories, "documentary", "纪录片"),
 			categoryName(categories, "children", "儿童"),
-			"国产剧", "欧美剧", "日韩剧", "日剧", "韩剧", "综艺", "真人秀", "纪录片", "纪录", "儿童", "少儿", "未分类",
+			"国产剧", "国剧", "大陆剧", "华语剧", "国产电视剧", "大陆电视剧", "华语电视剧", "港剧", "台剧", "港台剧",
+			"欧美剧", "欧美电视剧", "美剧", "英剧", "日韩剧", "日韩电视剧", "日剧", "韩剧", "泰剧",
+			"综艺", "真人秀", "纪录片", "纪录", "儿童", "少儿", "未分类",
 		) {
 			return "电视剧"
 		}
@@ -124,7 +126,9 @@ func (o *OrganizerService) categoryPhysicalRootDir(category string) string {
 		categoryName(categories, "variety", "综艺"),
 		categoryName(categories, "documentary", "纪录片"),
 		categoryName(categories, "children", "儿童"),
-		"国产剧", "欧美剧", "日韩剧", "日剧", "韩剧", "综艺", "真人秀", "纪录片", "纪录", "儿童", "少儿", "未分类",
+		"国产剧", "国剧", "大陆剧", "华语剧", "国产电视剧", "大陆电视剧", "华语电视剧", "港剧", "台剧", "港台剧",
+		"欧美剧", "欧美电视剧", "美剧", "英剧", "日韩剧", "日韩电视剧", "日剧", "韩剧", "泰剧",
+		"综艺", "真人秀", "纪录片", "纪录", "儿童", "少儿", "未分类",
 	):
 		return "电视剧"
 	case match(

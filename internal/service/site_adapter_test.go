@@ -266,6 +266,31 @@ func TestParseNexusPHPHTMLModernRows(t *testing.T) {
 	}
 }
 
+func TestParseNexusPHPHTMLCapturesRiskAndPromotionLabels(t *testing.T) {
+	page := `
+<table class="torrents">
+  <tr class="torrent">
+    <td><a href="/details.php?id=456" title="Some Show S01E01 1080p WEB-DL">Some Show</a></td>
+    <td><img class="pro_free" alt="免费" /><span title="HR">H&R</span></td>
+    <td><a href="/download.php?id=456">下载</a></td>
+  </tr>
+</table>`
+	result, err := parseNexusPHPHTML(page, "Nexus", "https://pt.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("items = %#v", result.Items)
+	}
+	item := result.Items[0]
+	if !item.Free {
+		t.Fatalf("item.Free = false, want free promotion detected: %#v", item)
+	}
+	if !strings.Contains(item.Labels, "HR") || !strings.Contains(item.Labels, "free") {
+		t.Fatalf("labels = %q, want HR and free", item.Labels)
+	}
+}
+
 func TestParseNexusPHPHTMLIgnoresUserDetailsLinks(t *testing.T) {
 	page := `
 <table>

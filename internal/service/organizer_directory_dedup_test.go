@@ -245,6 +245,73 @@ func TestOrganizeDirectoryKeepsHigherResolutionExisting(t *testing.T) {
 	}
 }
 
+func TestOrganizeDirectoryDoesNotReclassifySameEpisodeVersionInTargetDir(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "downloads")
+	dest := filepath.Join(root, "media")
+
+	source := filepath.Join(src, "南部档案.S01E16.1080p.IQ.WEB-DL.H264.AAC-UBWEB.mkv")
+	writeOrgFile(t, source, "download-1080p")
+
+	repos := newOrganizerTestRepo(t)
+	if err := repos.Setting.Set(t.Context(), "organize.tv_format", "{title}/Season {season:02}/{title} - {episode_tag}{% if video_format %}-{{video_format}}{% endif %}{fileExt}"); err != nil {
+		t.Fatal(err)
+	}
+
+	lib := model.Library{Name: "国产剧", Path: filepath.Join(dest, "电视剧", "国产剧"), Type: "tv", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+
+	existing := filepath.Join(lib.Path, "南部档案", "Season 01", "南部档案 - S01E16-2160p.IQ.WEB-DL.H265.DDP5.1-UBWEB.mkv")
+	writeOrgFile(t, existing, "library-2160p")
+	row := model.Media{
+		LibraryID:    lib.ID,
+		Title:        "南部档案",
+		Path:         existing,
+		Container:    "mkv",
+		SeasonNum:    1,
+		EpisodeNum:   16,
+		Width:        3840,
+		Height:       2160,
+		TMDbID:       123456,
+		ScrapeStatus: "matched",
+	}
+	if err := repos.Media.Upsert(t.Context(), &row); err != nil {
+		t.Fatal(err)
+	}
+
+	org := NewOrganizerService(&config.Config{}, zap.NewNop(), repos)
+	res, err := org.OrganizeDirectory(t.Context(), OrganizeOptions{
+		SourcePath:           src,
+		DestPath:             dest,
+		MediaType:            "tv",
+		MediaCategory:        "国产剧",
+		TransferMode:         TransferCopy,
+		AllowReplaceExisting: false,
+	})
+	if err != nil {
+		t.Fatalf("organize directory: %v", err)
+	}
+	if res.Reclassified != 0 || res.Replaced != 0 || res.Organized != 0 || res.Skipped != 1 {
+		t.Fatalf("result = %+v, want skipped duplicate without reclassify", res)
+	}
+	if _, err := os.Stat(existing); err != nil {
+		t.Fatalf("existing higher version should stay at original path: %v", err)
+	}
+	wrongRename := filepath.Join(lib.Path, "南部档案", "Season 01", "南部档案 - S01E16-1080p.IQ.WEB-DL.H264.AAC-UBWEB.mkv")
+	if _, err := os.Stat(wrongRename); !os.IsNotExist(err) {
+		t.Fatalf("existing version must not be renamed to incoming release path, stat err=%v", err)
+	}
+	var got model.Media
+	if err := repos.DB.First(&got, "path = ?", existing).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "南部档案" || got.TMDbID != 123456 || got.ScrapeStatus != "matched" {
+		t.Fatalf("metadata changed after duplicate organize: title=%q tmdb=%d status=%q", got.Title, got.TMDbID, got.ScrapeStatus)
+	}
+}
+
 // TestOrganizeDirectoryTVEpisodeDedup verifies per-episode dedup for TV media.
 func TestOrganizeDirectoryTVEpisodeDedup(t *testing.T) {
 	root := t.TempDir()

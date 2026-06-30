@@ -204,3 +204,58 @@ func TestMediaSeriesKeyCleansReleaseNoiseFolders(t *testing.T) {
 		t.Fatalf("release-noise folder key=%q, want clean key=%q", got, want)
 	}
 }
+
+func TestMediaSeriesKeyTreatsDomesticTelevisionFolderAsSeries(t *testing.T) {
+	main := model.Media{
+		LibraryID:  "lib-domestic-tv",
+		Path:       `/media/国产电视剧/人世间 (2022) [TMDBID-156568]/人世间.S01E01.mkv`,
+		SeasonNum:  1,
+		EpisodeNum: 1,
+		TMDbID:     156568,
+	}
+	weakEpisode := model.Media{
+		LibraryID: "lib-domestic-tv",
+		Path:      `/media/国产电视剧/人世间 (2022) [TMDBID-156568]/人世间.S01E02.mkv`,
+		// Some local/cloud scans may miss S/E at first while local NFO or
+		// scraper metadata already carries an episode-level TMDb id.
+		TMDbID: 4375419,
+	}
+	folderRecord := model.Media{
+		LibraryID: "lib-domestic-tv",
+		Path:      `/media/国产电视剧/人世间 (2022) [TMDBID-156568]`,
+		Title:     "人世间",
+		TMDbID:    156568,
+	}
+
+	if got, want := mediaSeriesKey(weakEpisode), mediaSeriesKey(main); got != want {
+		t.Fatalf("domestic television folder key=%q, want main key=%q", got, want)
+	}
+	if got, want := mediaSeriesKey(folderRecord), mediaSeriesKey(main); got != want {
+		t.Fatalf("domestic television folder record key=%q, want main key=%q", got, want)
+	}
+
+	cards := groupMediaSeriesCards([]model.Media{main, weakEpisode, folderRecord})
+	if len(cards) != 1 || cards[0].Count != 3 {
+		t.Fatalf("cards=%#v, want one merged series card with three items", cards)
+	}
+}
+
+func TestMediaSeriesKeyUsesSeriesDirectoryExternalID(t *testing.T) {
+	episodeIDOnly := model.Media{
+		LibraryID:  "lib-domestic-tv",
+		Path:       `/media/电视剧/国产剧/人世间 (2022)/Season 01/人世间.S01E03.{tmdb-7129826}.mkv`,
+		SeasonNum:  1,
+		EpisodeNum: 3,
+		TMDbID:     7129826,
+	}
+	cleanFolder := model.Media{
+		LibraryID:  "lib-domestic-tv",
+		Path:       `/media/电视剧/国产剧/人世间 (2022)/Season 01/人世间.S01E04.mkv`,
+		SeasonNum:  1,
+		EpisodeNum: 4,
+		TMDbID:     156568,
+	}
+	if got, want := mediaSeriesKey(episodeIDOnly), mediaSeriesKey(cleanFolder); got != want {
+		t.Fatalf("episode filename tmdb id should not split clean folder key=%q, want %q", got, want)
+	}
+}

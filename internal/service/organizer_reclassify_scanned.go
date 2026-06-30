@@ -69,7 +69,7 @@ func (o *OrganizerService) ReclassifyMisclassifiedMedia(ctx context.Context, opt
 			if !ok {
 				continue
 			}
-			changed, err := o.reclassifyScannedMedia(ctx, rows[i], lib, typeHints[rows[i].ID], opts.DryRun, res)
+			changed, err := o.reclassifyScannedMedia(ctx, rows[i], lib, typeHints[rows[i].ID], OrganizeOptions{}, opts.DryRun, res)
 			if err != nil {
 				res.Errors = append(res.Errors, fmt.Sprintf("%s: %s", rows[i].Title, err.Error()))
 				if o.log != nil {
@@ -103,7 +103,7 @@ func normalizeReclassifyMediaTypeHints(values map[string]string) map[string]stri
 	return out
 }
 
-func (o *OrganizerService) reclassifyScannedMedia(ctx context.Context, media model.Media, lib model.Library, mediaTypeHint string, dryRun bool, res *OrganizeResult) (bool, error) {
+func (o *OrganizerService) reclassifyScannedMedia(ctx context.Context, media model.Media, lib model.Library, mediaTypeHint string, opts OrganizeOptions, dryRun bool, res *OrganizeResult) (bool, error) {
 	if res == nil || !lib.Enabled || strings.TrimSpace(media.Path) == "" {
 		return false, nil
 	}
@@ -114,11 +114,20 @@ func (o *OrganizerService) reclassifyScannedMedia(ctx context.Context, media mod
 		return false, nil
 	}
 
+	requestedBaseRoot := o.resolveBaseRoot(ctx, &lib, opts.DestPath)
+	overrideType, overrideCategory := o.effectiveOrganizeOverrides(opts, requestedBaseRoot)
+	explicitType := overrideType != ""
+	explicitCategory := overrideCategory != ""
+
 	mediaType := normalizeOrganizeMediaType(lib.Type)
 	if mediaTypeHint != "" {
 		mediaType = mediaTypeHint
 	}
+	if explicitType {
+		mediaType = overrideType
+	}
 	metadataMatch := organizeMatchFromMedia(&media)
+	metadataRefreshed := false
 	if metadataMatch != nil && mediaTypeHint != "" {
 		metadataMatch.MediaType = mediaTypeHint
 	}
@@ -128,17 +137,28 @@ func (o *OrganizerService) reclassifyScannedMedia(ctx context.Context, media mod
 			return false, nil
 		}
 		media = mediaWithReclassifyMatch(media, metadataMatch)
+		metadataRefreshed = true
 	}
-	if matchType := normalizeOrganizeMediaType(metadataMatchMediaType(metadataMatch)); matchType != "" {
-		mediaType = matchType
+	if !explicitType {
+		if matchType := normalizeOrganizeMediaType(metadataMatchMediaType(metadataMatch)); matchType != "" {
+			mediaType = matchType
+		}
 	}
-	category := o.classifyMedia(ctx, &media, mediaType)
+	category := overrideCategory
+	if category == "" {
+		category = o.classifyMedia(ctx, &media, mediaType)
+	}
 	if category == "" {
 		return false, nil
 	}
 	if impliedType, normalizedCategory := o.mediaTypeForDirectoryCategory(category); impliedType != "" {
-		mediaType = impliedType
 		category = normalizedCategory
+		if !explicitType {
+			mediaType = impliedType
+		}
+	}
+	if explicitCategory && overrideCategory != "" {
+		category = overrideCategory
 	}
 	if mediaType == "" {
 		mediaType = normalizeOrganizeMediaType(lib.Type)
@@ -147,7 +167,7 @@ func (o *OrganizerService) reclassifyScannedMedia(ctx context.Context, media mod
 		return false, nil
 	}
 
-	baseRoot := normalizeOrganizeDestinationRoot(o.resolveBaseRoot(ctx, &lib, ""))
+	baseRoot := normalizeOrganizeDestinationRoot(requestedBaseRoot)
 	targetLibrary, matched := o.organizeLibraryForLayout(ctx, baseRoot, mediaType, category)
 	if !matched || strings.TrimSpace(targetLibrary.ID) == "" || strings.TrimSpace(targetLibrary.Path) == "" {
 		targetRoot := categoryRoot(o.organizeRoot(baseRoot, mediaType, category), category)
@@ -160,6 +180,22 @@ func (o *OrganizerService) reclassifyScannedMedia(ctx context.Context, media mod
 		}
 	}
 	if strings.EqualFold(targetLibrary.ID, lib.ID) && pathWithin(media.Path, targetLibrary.Path) {
+		if metadataRefreshed && !dryRun {
+			if err := o.persistOrganizedMediaMetadata(ctx, &media); err != nil {
+				return false, err
+			}
+			if o.log != nil {
+				o.log.Info("media metadata refreshed without reclassify",
+					zap.String("media", media.ID),
+					zap.String("path", media.Path),
+					zap.String("title", media.Title),
+					zap.Int("tmdb_id", media.TMDbID),
+					zap.Int("bangumi_id", media.BangumiID),
+					zap.String("douban_id", media.DoubanID),
+					zap.String("thetvdb_id", media.TheTVDBID))
+			}
+			return true, nil
+		}
 		return false, nil
 	}
 	if pathWithin(media.Path, targetLibrary.Path) {

@@ -81,7 +81,7 @@ func (s *SubscriptionService) archiveCompletedSubscription(ctx context.Context, 
 }
 
 func subscriptionShouldArchive(sub *model.Subscription, availability LocalAvailability) bool {
-	if sub == nil || sub.WashEnabled || sub.ArchivedAt != nil {
+	if sub == nil || subscriptionAllowsWash(sub) || sub.ArchivedAt != nil {
 		return false
 	}
 	mediaType := normalizeMediaType(sub.MediaType, sub.Name+" "+sub.Filter, "")
@@ -128,7 +128,7 @@ func maxAvailabilityEpisode(keys map[string]struct{}) int {
 }
 
 func subscriptionArchiveReason(sub *model.Subscription, availability LocalAvailability) string {
-	if sub != nil && sub.WashEnabled {
+	if subscriptionAllowsWash(sub) {
 		return ""
 	}
 	if availability.HasSeriesPack {

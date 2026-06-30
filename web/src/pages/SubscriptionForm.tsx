@@ -114,6 +114,42 @@ export function SubscriptionForm({ values, editing, onSubmit, onCancelEdit, onCh
         value={values.excludeWords}
         onChange={(e) => onChange('excludeWords', e.target.value)}
       />
+      <input
+        className="input-base"
+        inputMode="numeric"
+        placeholder="最少做种数"
+        value={values.minSeeders}
+        onChange={(e) => onChange('minSeeders', e.target.value)}
+      />
+      <input
+        className="input-base"
+        inputMode="numeric"
+        placeholder="最多做种数"
+        value={values.maxSeeders}
+        onChange={(e) => onChange('maxSeeders', e.target.value)}
+      />
+      <input
+        className="input-base"
+        inputMode="decimal"
+        placeholder="最小体积 GB"
+        value={values.minSizeGB}
+        onChange={(e) => onChange('minSizeGB', e.target.value)}
+      />
+      <input
+        className="input-base"
+        inputMode="decimal"
+        placeholder="最大体积 GB"
+        value={values.maxSizeGB}
+        onChange={(e) => onChange('maxSizeGB', e.target.value)}
+      />
+      <label className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-ink-100">
+        <input
+          type="checkbox"
+          checked={values.freeOnly}
+          onChange={(e) => onChange('freeOnly', e.target.checked)}
+        />
+        只下载免费资源
+      </label>
       <button type="submit" className="neon-button md:col-span-1">
         {editing ? <Save size={16} /> : <Plus size={16} />}
         {editing ? '保存' : '添加'}

@@ -182,7 +182,7 @@ func normalizeMediaType(mediaType, title, category string) string {
 		return "variety"
 	case (containsAnyText(raw, "国漫", "日漫", "日番", "韩漫", "美漫", "欧美动漫", "其他动漫", "动漫", "动画") || classifierAnimeRE.MatchString(raw)) && !containsAnyText(raw, "动画电影"):
 		return "anime"
-	case containsAnyText(raw, "电视剧", "国产剧", "欧美剧", "日韩剧", "日剧", "韩剧", "剧集") || classifierTVRE.MatchString(raw):
+	case containsAnyText(raw, "电视剧", "剧集", "连续剧", "短剧", "国产剧", "国剧", "大陆剧", "华语剧", "国产电视剧", "大陆电视剧", "华语电视剧", "欧美剧", "欧美电视剧", "美剧", "英剧", "日韩剧", "日韩电视剧", "日剧", "韩剧", "港剧", "台剧", "港台剧", "泰剧") || classifierTVRE.MatchString(raw):
 		return "tv"
 	case containsAnyText(raw, "电影", "演唱会") || classifierMovieRE.MatchString(raw):
 		return "movie"
@@ -199,7 +199,7 @@ func normalizeMediaType(mediaType, title, category string) string {
 		return "anime"
 	case strings.Contains(text, "variety") || strings.Contains(text, "综艺") || strings.Contains(text, "真人秀"):
 		return "variety"
-	case classifierEpisodeRE.MatchString(text) || classifierSeasonRE.MatchString(text) || classifierTVRE.MatchString(text) || strings.Contains(text, "剧集") || strings.Contains(text, "电视剧"):
+	case classifierEpisodeRE.MatchString(text) || classifierSeasonRE.MatchString(text) || classifierTVRE.MatchString(text) || containsAnyText(text, "剧集", "电视剧", "连续剧", "短剧", "国产电视剧", "大陆电视剧", "华语电视剧", "欧美电视剧", "日韩电视剧", "美剧", "英剧", "港剧", "台剧", "港台剧", "泰剧"):
 		return "tv"
 	default:
 		return "movie"

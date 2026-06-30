@@ -21,18 +21,20 @@ import (
 
 // DiscoverService talks to TMDb's /trending and /movie/popular endpoints.
 type DiscoverService struct {
-	log    *zap.Logger
-	tmdb   *TMDbProvider
-	client *http.Client
-	images *ImageProxy
+	log          *zap.Logger
+	tmdb         *TMDbProvider
+	client       *http.Client
+	images       *ImageProxy
+	sectionCache *DiscoverSectionCache
 }
 
 // NewDiscoverService is the constructor.
 func NewDiscoverService(log *zap.Logger, tmdb *TMDbProvider) *DiscoverService {
 	return &DiscoverService{
-		log:    log,
-		tmdb:   tmdb,
-		client: NewExternalHTTPClient(15 * time.Second),
+		log:          log,
+		tmdb:         tmdb,
+		client:       NewExternalHTTPClient(15 * time.Second),
+		sectionCache: NewDiscoverSectionCache(6 * time.Hour),
 	}
 }
 

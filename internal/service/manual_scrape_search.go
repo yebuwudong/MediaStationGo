@@ -61,6 +61,9 @@ func (s *ScraperService) ManualSearch(ctx context.Context, media *model.Media, q
 
 	if providers.want("adult") {
 		for _, candidateQuery := range queries {
+			if externalIDHintsFromText(candidateQuery).useful() {
+				continue
+			}
 			for _, match := range s.manualAdultMatches(ctx, media, candidateQuery) {
 				add("adult", "adult", match)
 			}
@@ -140,7 +143,11 @@ func (s *ScraperService) manualSearchQueries(ctx context.Context, media *model.M
 		out = append(out, value)
 	}
 
-	add(ApplyRecognitionWords(ctx, s.repo, query))
+	recognizedQuery := ApplyRecognitionWords(ctx, s.repo, query)
+	add(recognizedQuery)
+	if externalIDHintsFromText(recognizedQuery).useful() {
+		return out
+	}
 	if strings.TrimSpace(query) == "" && media != nil {
 		add(firstText(media.Title, media.OriginalName))
 	}

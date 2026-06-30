@@ -16,7 +16,7 @@ func (s *ScraperService) manualTMDbCandidates(ctx context.Context, query string,
 	if s.tmdb == nil || !s.tmdb.Enabled() {
 		return nil
 	}
-	if id, ok := parsePositiveInt(query); ok {
+	if id, ok := parseProviderIDInt(query, "tmdb"); ok {
 		out := make([]manualTMDbCandidate, 0, 2)
 		for _, typ := range manualTMDbIDSearchTypes(mediaType) {
 			if match := s.manualTMDbMatchByIDForType(ctx, id, typ); match != nil {
@@ -24,6 +24,9 @@ func (s *ScraperService) manualTMDbCandidates(ctx context.Context, query string,
 			}
 		}
 		return out
+	}
+	if providerIDHintMismatched(query, "tmdb") {
+		return nil
 	}
 	out := make([]manualTMDbCandidate, 0, 4)
 	for _, typ := range manualTMDbSearchTypes(mediaType) {
@@ -152,10 +155,13 @@ func (s *ScraperService) manualDoubanMatch(ctx context.Context, query string) *M
 	if s.douban == nil || !s.douban.Enabled() {
 		return nil
 	}
-	if id, ok := parsePositiveIDString(query); ok {
+	if id, ok := parseProviderIDString(query, "douban"); ok {
 		if match, err := s.douban.GetMatchByID(ctx, id); err == nil && match != nil {
 			return match
 		}
+	}
+	if providerIDHintMismatched(query, "douban") {
+		return nil
 	}
 	match, err := s.douban.SearchMatch(ctx, query)
 	if err != nil {
@@ -168,10 +174,13 @@ func (s *ScraperService) manualBangumiMatch(ctx context.Context, query string) *
 	if s.bangumi == nil || !s.bangumi.Enabled() {
 		return nil
 	}
-	if id, ok := parsePositiveInt(query); ok {
+	if id, ok := parseProviderIDInt(query, "bangumi"); ok {
 		if match, err := s.bangumi.GetSubject(ctx, id); err == nil && match != nil {
 			return match
 		}
+	}
+	if providerIDHintMismatched(query, "bangumi") {
+		return nil
 	}
 	match, err := s.bangumi.Search(ctx, query)
 	if err != nil {
@@ -184,7 +193,15 @@ func (s *ScraperService) manualTheTVDBMatch(ctx context.Context, query string) *
 	if s.thetvdb == nil || !s.thetvdb.Enabled() {
 		return nil
 	}
-	if id, ok := parsePositiveIDString(normalizeTheTVDBSeriesID(query)); ok {
+	if id, ok := parseProviderIDString(query, "thetvdb"); ok {
+		if match, err := s.thetvdb.GetSeriesMatchByID(ctx, id); err == nil && match != nil {
+			return match
+		}
+	}
+	if providerIDHintMismatched(query, "thetvdb") {
+		return nil
+	}
+	if id, ok := parseBarePositiveIDString(normalizeTheTVDBSeriesID(query)); ok {
 		if match, err := s.thetvdb.GetSeriesMatchByID(ctx, id); err == nil && match != nil {
 			return match
 		}

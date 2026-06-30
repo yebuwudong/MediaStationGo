@@ -57,6 +57,11 @@ type Subscription struct {
 	Effects          string     `gorm:"size:128" json:"effects,omitempty"`        // hdr,dolby-vision,atmos
 	ReleaseGroups    string     `gorm:"size:255" json:"release_groups,omitempty"` // comma separated
 	ExcludeWords     string     `gorm:"size:255" json:"exclude_words,omitempty"`  // comma separated
+	MinSeeders       int        `gorm:"default:0" json:"min_seeders,omitempty"`
+	MaxSeeders       int        `gorm:"default:0" json:"max_seeders,omitempty"`
+	MinSizeGB        float64    `gorm:"default:0" json:"min_size_gb,omitempty"`
+	MaxSizeGB        float64    `gorm:"default:0" json:"max_size_gb,omitempty"`
+	FreeOnly         bool       `gorm:"default:false" json:"free_only,omitempty"`
 	WashEnabled      bool       `gorm:"default:false" json:"wash_enabled"`
 	WashPriority     string     `gorm:"size:32" json:"wash_priority,omitempty"` // balanced / resolution / quality / effects / seeders
 	TotalEpisodes    int        `gorm:"default:0" json:"total_episodes,omitempty"`

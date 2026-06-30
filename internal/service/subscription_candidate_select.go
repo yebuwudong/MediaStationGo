@@ -29,7 +29,7 @@ func selectPreparedSubscriptionCandidatesWithStats(candidates []siteSearchCandid
 	mediaType := normalizeMediaType(sub.MediaType, sub.Name+" "+sub.Filter, "")
 	if !isSubscriptionSeriesType(mediaType) {
 		// 非洗版订阅成功下载一次即满足，媒体库/下载中已存在则不再重复下载。
-		if (sub == nil || !sub.WashEnabled) && local.LocalMediaCount > 0 {
+		if !subscriptionAllowsWash(sub) && local.LocalMediaCount > 0 {
 			if stats != nil {
 				stats.LocalAlreadySatisfied = true
 			}

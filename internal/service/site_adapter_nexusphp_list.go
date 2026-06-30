@@ -9,6 +9,11 @@ import (
 	"time"
 )
 
+var (
+	nexusPHPFreeLabelRE = regexp.MustCompile(`(?i)(class="[^"]*(?:free|free2|twoupfree|free_download)[^"]*"|促销|免费)`)
+	nexusPHPRiskLabelRE = regexp.MustCompile(`(?i)(?:class|title|alt)=["'][^"']*\bhr\b[^"']*["']`)
+)
+
 // parseNexusPHPHTML 解析 NexusPHP 种子列表 HTML。
 func parseNexusPHPHTML(html, siteName, baseURL string) (*SiteSearchResult, error) {
 	result := &SiteSearchResult{
@@ -56,6 +61,7 @@ func parseNexusPHPRow(row, baseURL string) TorrentItem {
 		item.ID = link.query.Get("id")
 		item.Title = nexusPHPTitleFromLink(*link)
 		item.Subtitle = nexusPHPSubtitle(row)
+		item.Labels = nexusPHPRowLabels(row)
 		item.DetailURL = resolveSiteURL(baseURL, link.href)
 	}
 	if link := firstNexusPHPLink(row, "download.php"); link != nil {
@@ -164,6 +170,28 @@ func nexusPHPSubtitle(row string) string {
 		}
 	}
 	return ""
+}
+
+func nexusPHPRowLabels(row string) string {
+	labels := make([]string, 0, 4)
+	lower := strings.ToLower(row)
+	add := func(label string) {
+		for _, existing := range labels {
+			if existing == label {
+				return
+			}
+		}
+		labels = append(labels, label)
+	}
+	if nexusPHPFreeLabelRE.MatchString(row) {
+		add("free")
+	}
+	if strings.Contains(lower, "hit and run") || strings.Contains(lower, "hit&run") || strings.Contains(lower, "h&r") ||
+		nexusPHPRiskLabelRE.MatchString(row) ||
+		strings.Contains(row, "禁转") || strings.Contains(row, "禁止转载") || strings.Contains(row, "禁下") || strings.Contains(row, "禁止下载") {
+		add("HR")
+	}
+	return strings.Join(labels, " ")
 }
 
 func nexusPHPIntByClass(row, className string) (int, bool) {

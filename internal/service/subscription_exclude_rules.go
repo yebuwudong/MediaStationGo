@@ -7,13 +7,11 @@ import (
 
 // defaultExcludeWords 是默认过滤的「垃圾版本」排除清单，对所有订阅生效。
 // 拉丁词在 containsAnyExcludeToken 里按词边界匹配以避免子串误伤。
-const defaultExcludeWords = "cam,ts,tc,telesync,telecine,hdcam,hdts,枪版,抢先,抢鲜,预告,trailer,sample"
+const defaultExcludeWords = "cam,ts,tc,telesync,telecine,hdcam,hdts,枪版,抢先,抢鲜,预告,trailer,sample,hr,h&r,hit and run,hit&run,hit-and-run,禁转,禁止转载,禁下,禁止下载"
 
 // defaultCompatibilityExcludeWords 是面向自动订阅的兼容性默认排除清单。
 // 仅在用户未真正自定义排除词时启用，避免默认命中 DoVi/H.265/10bit/杜比音轨等版本。
 const defaultCompatibilityExcludeWords = "dovi,dv,dolby vision,dolby,杜比视界,杜比,h265,h.265,h-265,h_265,h 265,hevc,x265,10bit,10-bit,10 bit,hi10p,atmos,truehd,ddp,dd+,eac3"
-
-const legacyFrontendExcludeWords = "cam,ts,tc,枪版"
 
 func containsAnyToken(titleFold, csv string) bool {
 	for _, token := range strings.FieldsFunc(strings.ToLower(csv), func(r rune) bool {

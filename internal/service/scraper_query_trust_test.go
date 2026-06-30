@@ -26,7 +26,7 @@ func TestOrganizeMetadataTrustsCleanedBroadcastReleaseQuery(t *testing.T) {
 	}
 }
 
-func TestOrganizeMetadataTrustsChineseReleaseAliasWithoutOriginalName(t *testing.T) {
+func TestOrganizeMetadataRejectsChineseReleaseAliasWithoutOriginalName(t *testing.T) {
 	match := &Match{
 		Title:     "莫离",
 		Languages: []string{"zh"},
@@ -34,8 +34,22 @@ func TestOrganizeMetadataTrustsChineseReleaseAliasWithoutOriginalName(t *testing
 		Year:      2026,
 		TMDbID:    292696,
 	}
-	if !organizeMetadataMatchTrusted("the first jasmine", 2026, match) {
-		t.Fatal("multi-word English release alias should be trusted for Chinese-origin metadata")
+	if organizeMetadataMatchTrusted("the first jasmine", 2026, match) {
+		t.Fatal("multi-word English release alias must not be trusted without title or original-name evidence")
+	}
+}
+
+func TestOrganizeMetadataRejectsLooseChineseOriginEnglishAlias(t *testing.T) {
+	match := &Match{
+		Title:        "镖人",
+		OriginalName: "Biao Ren",
+		Languages:    []string{"zh"},
+		Countries:    []string{"CN"},
+		Year:         2023,
+		TMDbID:       107463,
+	}
+	if organizeMetadataMatchTrusted("blades of the guardians", 2023, match) {
+		t.Fatal("unrelated English query must not trust Chinese-origin metadata just because it has multiple Latin tokens")
 	}
 }
 

@@ -31,6 +31,8 @@ export function useStrmGenerateForm(libraries: Library[]) {
   const [autoGenerate, setAutoGenerate] = useState(false)
   const [savingSettings, setSavingSettings] = useState(false)
   const [overwrite, setOverwrite] = useState(false)
+  const [includeLocal, setIncludeLocal] = useState(true)
+  const [preserveTree, setPreserveTree] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [generateResult, setGenerateResult] = useState<GenerateSTRMResult | null>(null)
 
@@ -62,6 +64,7 @@ export function useStrmGenerateForm(libraries: Library[]) {
         )
         setRedirectProxyEnabled(settings['cloud.playback_redirect_proxy_enabled'] !== 'false')
         setAutoGenerate(settings['strm.auto_generate_enabled'] === 'true')
+        setPreserveTree(settings['strm.preserve_tree'] === 'true')
         setSettingsLoaded(true)
       })
       .catch(() => setSettingsLoaded(true))
@@ -112,7 +115,8 @@ export function useStrmGenerateForm(libraries: Library[]) {
         output_dir: submittedOutputDir,
         overwrite,
         enabled: autoGenerate,
-        include_local: true,
+        include_local: includeLocal,
+        preserve_tree: preserveTree,
       })
       const nextOutputDir = result.output_dir || outputDir
       setGenerateResult(result)
@@ -167,7 +171,9 @@ export function useStrmGenerateForm(libraries: Library[]) {
     generating,
     onGenerate,
     outputDir,
+    includeLocal,
     overwrite,
+    preserveTree,
     playbackStatus: playbackStatusText(strmPlaybackEnabled, redirectProxyEnabled, cloudPlaybackMode),
     redirectProxyEnabled,
     saveSTRMSettings,
@@ -176,8 +182,10 @@ export function useStrmGenerateForm(libraries: Library[]) {
     setBaseURL,
     setCloudPlaybackMode,
     setGenerateLibraryID,
+    setIncludeLocal,
     setOutputDir: onOutputDirChange,
     setOverwrite,
+    setPreserveTree,
     setRedirectProxyEnabled,
     setStrmPlaybackEnabled,
     strmPlaybackEnabled,

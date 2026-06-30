@@ -76,6 +76,7 @@ func (s *ScannerService) maybeGenerateSTRMAfterScan(libraryID string) {
 			Enabled:          true,
 			IncludeLocal:     true,
 			Overwrite:        true,
+			PreserveTree:     s.autoSTRMPreserveTree(ctx),
 			SkipSettingsSave: true,
 		}
 		if outDir, scope := s.autoSTRMOutputDir(ctx); outDir != "" {
@@ -102,4 +103,12 @@ func (s *ScannerService) autoSTRMOutputDir(ctx context.Context) (string, string)
 	}
 	scope, _ := s.repo.Setting.Get(ctx, "strm.output_scope")
 	return resolveMappedDestinationPath(strings.TrimSpace(outDir)), strings.ToLower(strings.TrimSpace(scope))
+}
+
+func (s *ScannerService) autoSTRMPreserveTree(ctx context.Context) bool {
+	if s == nil || s.repo == nil || s.repo.Setting == nil {
+		return false
+	}
+	value, err := s.repo.Setting.Get(ctx, "strm.preserve_tree")
+	return err == nil && parseBoolSetting(value, false)
 }

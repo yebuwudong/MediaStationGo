@@ -7,8 +7,10 @@ import { DiscoverEmptySelection, DiscoverHeader, DiscoverResults } from './Disco
 import {
   defaultSections,
   discoverStorageKey,
+  readCachedDiscoverRows,
   readSavedSections,
   serializeSavedSections,
+  writeCachedDiscoverRow,
 } from './discoverPageModel'
 
 export function DiscoverPage() {
@@ -38,8 +40,11 @@ export function DiscoverPage() {
         const available = new Set(items.map((item) => item.key))
         const fallback = defaultSections.filter((key) => available.has(key))
         const nextSelected = saved.length > 0 ? saved : fallback
+        const cached = readCachedDiscoverRows(nextSelected)
         setSelected(nextSelected)
         setRowPages(Object.fromEntries(nextSelected.map((key) => [key, 1])))
+        setRows(cached.rows)
+        setRowCanNext(cached.rowCanNext)
         setSectionsReady(true)
       })
       .catch(() => {
@@ -93,14 +98,31 @@ export function DiscoverPage() {
         .feed([key], page)
         .then((feed) => {
           if (cancelled) return
-          setRows((current) => ({ ...current, [key]: feed.items[key] ?? [] }))
-          setRowCanNext((current) => ({ ...current, [key]: Boolean(feed.meta[key]?.has_next) }))
+          const error = feed.meta[key]?.error
+          const nextItems = feed.items[key] ?? []
+          const nextCanNext = Boolean(feed.meta[key]?.has_next)
+          setRows((current) => {
+            if (error && nextItems.length === 0 && (current[key]?.length ?? 0) > 0) {
+              return current
+            }
+            return { ...current, [key]: nextItems }
+          })
+          setRowCanNext((current) => {
+            if (error && nextItems.length === 0 && key in current) {
+              return current
+            }
+            return { ...current, [key]: nextCanNext }
+          })
+          if (!error) {
+            writeCachedDiscoverRow(key, page, nextItems, nextCanNext)
+          }
+          setRowErrors((current) => updateDiscoverRowError(current, key, error))
         })
         .catch((err) => {
           if (cancelled) return
-          const message = err instanceof Error ? err.message : String(err)
-          setRows((current) => ({ ...current, [key]: [] }))
-          setRowCanNext((current) => ({ ...current, [key]: false }))
+          const message = discoverRequestErrorMessage(err)
+          setRows((current) => ((current[key]?.length ?? 0) > 0 ? current : { ...current, [key]: [] }))
+          setRowCanNext((current) => (key in current ? current : { ...current, [key]: false }))
           setRowErrors((current) => ({ ...current, [key]: message }))
         })
         .finally(() => {
@@ -190,4 +212,28 @@ export function DiscoverPage() {
       )}
     </div>
   )
+}
+
+function updateDiscoverRowError(
+  current: Record<string, string>,
+  key: string,
+  error?: string,
+): Record<string, string> {
+  if (error) return { ...current, [key]: error }
+  if (!(key in current)) return current
+  const next = { ...current }
+  delete next[key]
+  return next
+}
+
+function discoverRequestErrorMessage(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err)
+  const lower = raw.toLowerCase()
+  if (lower.includes('timeout') || lower.includes('deadline')) {
+    return '推荐源请求超时，已跳过本次加载'
+  }
+  if (lower.includes('network')) {
+    return '推荐源网络不可用，已跳过本次加载'
+  }
+  return '推荐源暂时不可用，已跳过本次加载'
 }

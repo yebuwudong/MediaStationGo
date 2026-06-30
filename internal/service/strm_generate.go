@@ -19,6 +19,7 @@ type GenerateSTRMOptions struct {
 	Enabled          bool   `json:"enabled"`
 	Overwrite        bool   `json:"overwrite"`
 	IncludeLocal     bool   `json:"include_local"`
+	PreserveTree     bool   `json:"preserve_tree"`
 	PlaybackToken    string `json:"-"`
 	SkipSettingsSave bool   `json:"-"`
 }
@@ -127,6 +128,7 @@ func (s *STRMService) GenerateForAllLibraries(ctx context.Context, opts Generate
 	if baseOutputDir != "" && baseOutputDir != "." && s.repo.Setting != nil {
 		_ = s.repo.Setting.Set(ctx, "strm.output_dir", baseOutputDir)
 		_ = s.repo.Setting.Set(ctx, "strm.output_scope", "all")
+		_ = s.repo.Setting.Set(ctx, "strm.preserve_tree", strconv.FormatBool(opts.PreserveTree))
 		result.OutputDir = baseOutputDir
 	}
 	return result, nil
@@ -160,6 +162,7 @@ func (s *STRMService) saveSTRMGenerationSettings(ctx context.Context, outputDir 
 	_ = s.repo.Setting.Set(ctx, "strm.auto_generate_enabled", strconv.FormatBool(opts.Enabled))
 	_ = s.repo.Setting.Set(ctx, "strm.output_dir", outputDir)
 	_ = s.repo.Setting.Set(ctx, "strm.output_scope", "library")
+	_ = s.repo.Setting.Set(ctx, "strm.preserve_tree", strconv.FormatBool(opts.PreserveTree))
 }
 
 func (s *STRMService) librarySTRMMedia(ctx context.Context, libraryID string) ([]model.Media, error) {
@@ -193,6 +196,11 @@ func (s *STRMService) generateOne(ctx context.Context, lib model.Library, media 
 		return item
 	}
 	rel := s.strmRelativePath(lib, media)
+	if opts.PreserveTree {
+		if treeRel := s.strmTreeRelativePath(media); treeRel != "" {
+			rel = treeRel
+		}
+	}
 	if rel == "" {
 		item.Action = "skipped"
 		item.Reason = "cannot build file name"
