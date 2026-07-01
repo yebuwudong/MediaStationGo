@@ -65,11 +65,6 @@ func AutoInstallFFmpeg(log *zap.Logger, cfg *config.Config) (ffprobePath, ffmpeg
 
 // getDefaultInstallDir 返回默认安装目录
 func getDefaultInstallDir() string {
-	if wd, err := os.Getwd(); err == nil {
-		if _, err := os.Stat(filepath.Join(wd, "scripts", "install-ffmpeg.ps1")); err == nil {
-			return filepath.Join(wd, "tools", "ffmpeg")
-		}
-	}
 	exePath, err := os.Executable()
 	if err != nil {
 		return "./tools/ffmpeg"

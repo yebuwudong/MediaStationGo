@@ -223,6 +223,8 @@ docker-compose.standard.yml   第二档：MediaStationGo + PostgreSQL + Redis
 docker-compose.search.yml     第三档：MediaStationGo + PostgreSQL + Redis + OpenSearch
 ```
 
+仓库只保留面向用户部署和项目维护的必要文件。旧的本地部署脚本、发包脚本、开发机辅助脚本、`.env` 示例和旧高级 Compose 模板已经移除；Linux / Docker 用户按上面四个 Compose 文件部署即可。开发者本地生成的 `bin/`、`data/`、`cache/`、`logs/`、`.tmp/`、`tools/` 等目录已列入 `.gitignore`，不应提交到仓库。
+
 如果直接下载为 `docker-compose.yml`，启动命令统一是：
 
 ```bash

@@ -79,12 +79,15 @@ It helps you:
 
 ## Quick Start
 
-Docker Compose is the recommended path. Beginners do not need `.env`, bare-metal binaries, or source builds.
+Docker Compose is the recommended path. Beginners do not need `.env`, bare-metal binaries, or source builds. Use the single-image SQLite template if you want the smallest possible setup.
 
 ```bash
 mkdir -p MediaStationGo
 cd MediaStationGo
-curl -fsSL https://raw.githubusercontent.com/ShukeBta/MediaStationGo/main/docker-compose.yml -o docker-compose.yml
+# Simplest option: one MediaStationGo container + SQLite
+curl -fsSL https://raw.githubusercontent.com/ShukeBta/MediaStationGo/main/docker-compose.simple.yml -o docker-compose.yml
+# Or tier 1: MediaStationGo + PostgreSQL
+# curl -fsSL https://raw.githubusercontent.com/ShukeBta/MediaStationGo/main/docker-compose.yml -o docker-compose.yml
 ```
 
 Edit `docker-compose.yml`:
@@ -126,8 +129,10 @@ If you already have an older `./data/mediastation.db`, the first start with the 
 | --- | --- | --- |
 | Single image: SQLite | `docker compose -f docker-compose.simple.yml up -d` | Beginners and single-user setups that want one image only, no PostgreSQL/Redis |
 | Lightweight: PG only | `docker compose up -d` | Most NAS devices, lowest resource use |
-| Standard: PG + Redis | `docker compose -f docker-compose.yml -f docker-compose.standard.yml up -d` | Multi-user use and frequent Emby client refreshes |
-| Search enhanced: PG + Redis + OpenSearch | `docker compose -f docker-compose.yml -f docker-compose.standard.yml -f docker-compose.search.yml up -d` | Huge libraries and future standalone search indexing |
+| Standard: PG + Redis | `docker compose -f docker-compose.standard.yml up -d` | Multi-user use and frequent Emby client refreshes |
+| Search enhanced: PG + Redis + OpenSearch | `docker compose -f docker-compose.search.yml up -d` | Huge libraries and future standalone search indexing |
+
+Each compose file is standalone. Do not stack multiple `-f` files together.
 
 The single-image `docker-compose.simple.yml` runs only MediaStationGo with a built-in SQLite database — the simplest starting point. Do not set `MEDIASTATION_DATABASE_DSN` there, or it switches back to PostgreSQL. Move up to the PostgreSQL modes for multi-user or high-concurrency use (keep `./data` when you switch). Redis and OpenSearch are enhancement layers, not source databases. Do not enable OpenSearch by default on low-memory NAS devices.
 
