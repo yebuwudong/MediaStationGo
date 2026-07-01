@@ -94,11 +94,18 @@ func (s *ScannerService) scanLibrary(ctx context.Context, libraryID string, auto
 	for i := range roots {
 		root := roots[i]
 		if err := s.resolveLocalLibraryRootPath(ctx, lib, &root); err != nil {
-			addScanError(res, root.Path, err)
-			s.log.Warn("library root scan skipped",
+			// 优雅降级：路径不可达时只跳过该 root，并保留该库已入库的旧媒体（下方 prune 不会执行），
+			// 同时输出可操作诊断（候选路径 + 宿主机/容器映射状态），方便定位旧库在容器内扫不出媒体的原因。
+			diag := describeUnresolvedLibraryPath(root.Path)
+			addScanError(res, "", errors.New(diag))
+			s.log.Warn("library root scan skipped; existing media preserved",
 				zap.String("library_id", lib.ID),
 				zap.String("root_id", root.ID),
 				zap.String("path", root.Path),
+				zap.Strings("candidates", mappedPathCandidates(root.Path)),
+				zap.String("media_dir_env", os.Getenv("MEDIASTATION_MEDIA_DIR")),
+				zap.String("media_container_env", envOrDefault("MEDIASTATION_MEDIA_CONTAINER_DIR", "/media")),
+				zap.String("diagnostic", diag),
 				zap.Error(err))
 			if scanErr == nil {
 				scanErr = err

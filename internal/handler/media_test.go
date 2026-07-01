@@ -423,3 +423,58 @@ func requestLibrarySeriesEpisodes(t *testing.T, svc *service.Container, path, li
 	}
 	return payload
 }
+
+// 空库的 media / series 列表必须返回 "items":[]（而不是 Go nil slice 序列化出的 null）。
+// 前端 [].concat(null) 会得到 [null]，随后在渲染期解引用 null 崩溃，导致「空库点进去
+// 报错且无法返回」。这条测试钉死该 JSON 契约，防止再退化。
+func TestEmptyLibraryListsReturnEmptyArraysNotNull(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Library{}, &model.Media{}); err != nil {
+		t.Fatal(err)
+	}
+	repos := repository.New(db)
+	movie := model.Library{Name: "空电影库", Path: "/media/empty-movie", Type: "movie", Enabled: true}
+	tv := model.Library{Name: "空剧集库", Path: "/media/empty-tv", Type: "tv", Enabled: true}
+	for _, lib := range []*model.Library{&movie, &tv} {
+		if err := repos.Library.Create(t.Context(), lib); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := &service.Container{
+		Repo:  repos,
+		Media: service.NewMediaService(&config.Config{}, zap.NewNop(), repos),
+	}
+
+	cases := []struct {
+		name    string
+		path    string
+		lib     string
+		handler gin.HandlerFunc
+	}{
+		{"media", "/api/libraries/" + movie.ID + "/media", movie.ID, listMediaHandler(svc)},
+		{"series", "/api/libraries/" + tv.ID + "/series", tv.ID, listLibrarySeriesHandler(svc)},
+	}
+	for _, tc := range cases {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Set(middleware.CtxUserID, "user-1")
+		c.Set(middleware.CtxUserRole, "user")
+		c.Params = gin.Params{{Key: "id", Value: tc.lib}}
+		c.Request = httptest.NewRequest(http.MethodGet, tc.path, nil)
+		tc.handler(c)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d body=%s", tc.name, w.Code, w.Body.String())
+		}
+		body := w.Body.String()
+		if strings.Contains(body, `"items":null`) {
+			t.Fatalf("%s: empty library returned items:null (crashes frontend): %s", tc.name, body)
+		}
+		if !strings.Contains(body, `"items":[]`) {
+			t.Fatalf("%s: expected items:[] for empty library, got %s", tc.name, body)
+		}
+	}
+}

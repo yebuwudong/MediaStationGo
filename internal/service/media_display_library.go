@@ -75,27 +75,47 @@ func newMediaDisplayLibraryResolver(ctx context.Context, repo *repository.Contai
 }
 
 func (r mediaDisplayLibraryResolver) DisplayLibraryForMedia(media model.Media) (model.Library, bool) {
+	// Issue #61: an auto-category assignment is authoritative. The media was explicitly
+	// categorized into this library even though its physical (cloud) path may still live
+	// under the source scan directory (e.g. cloud://cloud115/云下载/...). Resolving by path
+	// here would wrongly redirect the media back to the source cloud library, so resolve it
+	// from the owning library instead.
+	if own, ok := r.byID[media.LibraryID]; ok && CloudLibraryAutoCategory(own) {
+		return r.autoCategoryDisplayLibrary(own), true
+	}
 	if lib, ok := r.bestPathDisplayLibrary(media); ok {
 		return lib, true
 	}
 	if lib, ok := r.displayByID[media.LibraryID]; ok {
 		return lib, true
 	}
-	own, hasOwn := r.byID[media.LibraryID]
-	if hasOwn {
+	if own, hasOwn := r.byID[media.LibraryID]; hasOwn {
 		if key, ok := CloudLibraryMergeKey(own); ok {
 			if lib, exists := r.displayByMergeKey[key]; exists {
-				return lib, true
-			}
-		}
-		if CloudLibraryAutoCategory(own) {
-			if lib, ok := r.rootCloudDisplayLibraryForAutoCategory(own); ok {
 				return lib, true
 			}
 		}
 		return own, true
 	}
 	return model.Library{}, false
+}
+
+// autoCategoryDisplayLibrary resolves the visible library that should represent an
+// auto-category library: the library itself when it is displayed standalone, otherwise
+// the sibling it was merged into, otherwise the root cloud library it was split from.
+func (r mediaDisplayLibraryResolver) autoCategoryDisplayLibrary(own model.Library) model.Library {
+	if lib, ok := r.displayByID[own.ID]; ok {
+		return lib
+	}
+	if key, ok := CloudLibraryMergeKey(own); ok {
+		if lib, exists := r.displayByMergeKey[key]; exists {
+			return lib
+		}
+	}
+	if lib, ok := r.rootCloudDisplayLibraryForAutoCategory(own); ok {
+		return lib
+	}
+	return own
 }
 
 func (r mediaDisplayLibraryResolver) rootCloudDisplayLibraryForAutoCategory(auto model.Library) (model.Library, bool) {

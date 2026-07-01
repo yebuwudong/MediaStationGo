@@ -29,7 +29,9 @@ func normalizeGroupedMediaPage(page, pageSize int) (int, int) {
 func paginateMediaItems(items []MediaItem, page, pageSize int) []MediaItem {
 	page, pageSize = normalizeGroupedMediaPage(page, pageSize)
 	if len(items) == 0 {
-		return nil
+		// 返回非 nil 空切片：nil 会被 JSON 序列化成 "items": null，
+		// 前端 concat(null) 会得到 [null] 并在渲染期崩溃（空库进入白屏）。
+		return []MediaItem{}
 	}
 	start := (page - 1) * pageSize
 	if start >= len(items) {

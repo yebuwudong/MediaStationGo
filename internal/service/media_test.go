@@ -106,6 +106,56 @@ func TestResolveAccessibleLibraryPathMapsRelativeDockerMediaMarker(t *testing.T)
 	}
 }
 
+// 旧库把宿主机绝对路径整段写进来时（moviepilot 布局：/vol1/.../media/电视剧/国产剧），
+// /media 出现在路径中段而非开头；解析必须能把最后一个 /media 段之后的尾巴映射到容器媒体
+// 目录，否则新版容器只挂了 /media 就永远扫不出这类旧库。钉死该行为，防止再退化。
+func TestResolveAccessibleLibraryPathMapsEmbeddedHostMediaMarker(t *testing.T) {
+	root := t.TempDir()
+	containerRoot := filepath.Join(root, "container", "media")
+	containerLibrary := filepath.Join(containerRoot, "电视剧", "国产剧")
+	if err := os.MkdirAll(containerLibrary, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MEDIASTATION_MEDIA_CONTAINER_DIR", containerRoot)
+
+	got, err := resolveAccessibleLibraryPath("/vol1/1000/Docker/moviepilot-v2/media/电视剧/国产剧")
+	if err != nil {
+		t.Fatalf("resolveAccessibleLibraryPath() error = %v", err)
+	}
+	if got != filepath.Clean(containerLibrary) {
+		t.Fatalf("resolveAccessibleLibraryPath() = %q, want %q", got, filepath.Clean(containerLibrary))
+	}
+}
+
+func TestResolveAccessibleMappedPathMapsEmbeddedHostDownloadMarker(t *testing.T) {
+	root := t.TempDir()
+	containerDownloads := filepath.Join(root, "container", "downloads")
+	containerItem := filepath.Join(containerDownloads, "国产剧")
+	if err := os.MkdirAll(containerItem, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MEDIASTATION_DOWNLOAD_CONTAINER_DIR", containerDownloads)
+
+	got, _, err := resolveAccessibleMappedPath("/vol1/1000/Docker/qbittorrent/downloads/国产剧")
+	if err != nil {
+		t.Fatalf("resolveAccessibleMappedPath() error = %v", err)
+	}
+	if got != filepath.Clean(containerItem) {
+		t.Fatalf("resolveAccessibleMappedPath() = %q, want %q", got, filepath.Clean(containerItem))
+	}
+}
+
+// 中段 marker 启发式绝不能污染目的地解析：resolveMappedDestinationPath 不校验存在性、
+// 会返回首个候选，一旦启发式并进来，就会把形如 <tmp>/media/... 的合法整理目的地错误
+// 重写到容器根 /media（曾导致 organizer 跨盘 hardlink 失败）。钉死该边界。
+func TestResolveMappedDestinationPathIgnoresEmbeddedMediaMarker(t *testing.T) {
+	root := t.TempDir()
+	dst := filepath.Join(root, "001", "media", "电视剧", "国产剧", "Some Show")
+	if got := resolveMappedDestinationPath(dst); got != filepath.Clean(dst) {
+		t.Fatalf("resolveMappedDestinationPath() = %q, want %q (embedded /media must not remap destinations)", got, filepath.Clean(dst))
+	}
+}
+
 func TestInferLibraryKindFromCategoryPathOverridesMovieDefault(t *testing.T) {
 	for _, tc := range []struct {
 		name string

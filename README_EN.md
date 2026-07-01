@@ -120,15 +120,16 @@ The repository `docker-compose.yml` is the lightweight recommended template: no 
 
 If you already have an older `./data/mediastation.db`, the first start with the new compose file automatically imports it into PostgreSQL. Keep `./data`; it still stores the JWT secret, runtime data, and the old SQLite migration source.
 
-### Three deployment modes
+### Deployment modes
 
 | Mode | Command | Best for |
 | --- | --- | --- |
+| Single image: SQLite | `docker compose -f docker-compose.simple.yml up -d` | Beginners and single-user setups that want one image only, no PostgreSQL/Redis |
 | Lightweight: PG only | `docker compose up -d` | Most NAS devices, lowest resource use |
 | Standard: PG + Redis | `docker compose -f docker-compose.yml -f docker-compose.standard.yml up -d` | Multi-user use and frequent Emby client refreshes |
 | Search enhanced: PG + Redis + OpenSearch | `docker compose -f docker-compose.yml -f docker-compose.standard.yml -f docker-compose.search.yml up -d` | Huge libraries and future standalone search indexing |
 
-Start with the lightweight mode. Redis and OpenSearch are enhancement layers, not source databases. Do not enable OpenSearch by default on low-memory NAS devices.
+The single-image `docker-compose.simple.yml` runs only MediaStationGo with a built-in SQLite database — the simplest starting point. Do not set `MEDIASTATION_DATABASE_DSN` there, or it switches back to PostgreSQL. Move up to the PostgreSQL modes for multi-user or high-concurrency use (keep `./data` when you switch). Redis and OpenSearch are enhancement layers, not source databases. Do not enable OpenSearch by default on low-memory NAS devices.
 
 ### Database Choice And Disabling SQLite
 

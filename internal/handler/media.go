@@ -142,6 +142,9 @@ func listMediaHandler(svc *service.Container) gin.HandlerFunc {
 				writeInternalOrCanceled(c, err)
 				return
 			}
+			if items == nil {
+				items = []model.Media{}
+			}
 			c.JSON(http.StatusOK, gin.H{
 				"items":     items,
 				"total":     total,
@@ -154,6 +157,9 @@ func listMediaHandler(svc *service.Container) gin.HandlerFunc {
 		if err != nil {
 			writeInternalOrCanceled(c, err)
 			return
+		}
+		if items == nil {
+			items = []service.MediaItem{}
 		}
 		c.JSON(http.StatusOK, gin.H{
 			"items":     items,

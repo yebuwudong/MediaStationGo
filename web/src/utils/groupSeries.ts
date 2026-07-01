@@ -74,6 +74,7 @@ function compactSeriesKey(raw: string): string {
 }
 
 export function isEpisodeLike(media: Media): boolean {
+  if (!media) return false
   return (media.season_num ?? 0) > 0 || (media.episode_num ?? 0) > 0
 }
 

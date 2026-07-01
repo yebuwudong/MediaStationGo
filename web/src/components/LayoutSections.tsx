@@ -4,6 +4,7 @@ import clsx from 'clsx'
 
 import { AppFooter } from './AppFooter'
 import { LayoutSidebarContent, type LayoutSidebarContentProps } from './LayoutSidebarContent'
+import { RouteErrorBoundary } from './RouteErrorBoundary'
 import type { useLayoutSidebar } from './useLayoutSidebar'
 
 type LayoutSidebarState = ReturnType<typeof useLayoutSidebar>
@@ -120,7 +121,9 @@ export function LayoutWorkspace({ routeKey }: LayoutWorkspaceProps) {
             exit={{ opacity: 0, y: -6 }}
             transition={{ duration: 0.25, ease: 'easeOut' }}
           >
-            <Outlet />
+            <RouteErrorBoundary>
+              <Outlet />
+            </RouteErrorBoundary>
           </motion.div>
         </AnimatePresence>
       </div>

@@ -154,9 +154,11 @@ async function loadAllSeriesCards(
   let collected: SeriesCard[] = []
   for (;;) {
     const data = await libraryAPI.listSeries(libraryID, page, pageSize)
-    collected = collected.concat(data.items)
-    onPage({ items: collected, total: data.total, firstPage: page === 1 })
-    if (collected.length >= data.total || data.items.length < pageSize) break
+    // 后端对空库可能返回 items: null（Go nil slice）；不兜底会 concat 出 [null] 并崩溃。
+    const pageItems = data.items ?? []
+    collected = collected.concat(pageItems)
+    onPage({ items: collected, total: data.total ?? collected.length, firstPage: page === 1 })
+    if (collected.length >= (data.total ?? 0) || pageItems.length < pageSize) break
     page += 1
   }
   return { items: collected }
@@ -171,9 +173,11 @@ async function loadAllMedia(
   let collected: Media[] = []
   for (;;) {
     const data = await libraryAPI.listMedia(libraryID, page, pageSize)
-    collected = collected.concat(data.items)
-    onPage({ items: collected, total: data.total, firstPage: page === 1 })
-    if (collected.length >= data.total || data.items.length < pageSize) break
+    // 后端对空库可能返回 items: null（Go nil slice）；不兜底会 concat 出 [null] 并崩溃。
+    const pageItems = data.items ?? []
+    collected = collected.concat(pageItems)
+    onPage({ items: collected, total: data.total ?? collected.length, firstPage: page === 1 })
+    if (collected.length >= (data.total ?? 0) || pageItems.length < pageSize) break
     page += 1
   }
   return { items: collected }

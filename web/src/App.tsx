@@ -28,13 +28,21 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, { hasError: bo
             <p className="mt-2 text-sm text-gray-500">
               当前页面遇到异常，刷新后会重新加载资源和登录状态。
             </p>
-            <button
-              type="button"
-              onClick={() => window.location.reload()}
-              className="mt-5 rounded-xl bg-gray-950 px-4 py-2 text-sm font-bold text-white hover:bg-gray-800"
-            >
-              刷新页面
-            </button>
+            <div className="mt-5 flex flex-wrap items-center gap-3">
+              <a
+                href="/"
+                className="rounded-xl bg-gray-950 px-4 py-2 text-sm font-bold text-white hover:bg-gray-800"
+              >
+                返回首页
+              </a>
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="rounded-xl border border-gray-300 px-4 py-2 text-sm font-bold text-gray-700 hover:bg-gray-100"
+              >
+                刷新页面
+              </button>
+            </div>
           </div>
         </div>
       )

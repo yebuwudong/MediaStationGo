@@ -92,8 +92,13 @@ func listLibrarySeriesHandler(svc *service.Container) gin.HandlerFunc {
 		if end > len(items) {
 			end = len(items)
 		}
+		pageItems := items[start:end]
+		if pageItems == nil {
+			// 非 nil 空切片，避免空库返回 "items": null 触发前端崩溃。
+			pageItems = []service.SeriesCard{}
+		}
 		c.JSON(http.StatusOK, gin.H{
-			"items":     items[start:end],
+			"items":     pageItems,
 			"total":     total,
 			"page":      page,
 			"page_size": size,
