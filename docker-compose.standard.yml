@@ -47,16 +47,16 @@ services:
       # 媒体库目录。自动整理/重命名/入库需要读写权限。
       # NAS 示例：- /vol1/1000/Media:/media
       # Windows Docker Desktop 示例：- D:/Media:/media
-      - ./media:/media
+      - /media
 
       # 下载目录。需要和 qBittorrent 保存路径保持一致。
-      # NAS 示例：- /vol1/1000/Downloads:/downloads
-      # Windows Docker Desktop 示例：- D:/Downloads:/downloads
-      - ./downloads:/downloads
+      # NAS 示例：- /vol1/1000/Downloads
+      # Windows Docker Desktop 示例：- D:/Downloads
+      - /downloads
 
       # 管理面板「系统更新」需要访问 Docker 引擎。
       # 需要一键更新 Docker 镜像时取消下一行注释。
-      # - /var/run/docker.sock:/var/run/docker.sock
+      # - /var/run/docker.sock
 
     environment:
       TZ: Asia/Shanghai
@@ -83,9 +83,9 @@ services:
       MEDIASTATION_UPDATE_IMAGE: ghcr.io/shukebta/mediastation-go:latest
 
       # 路径换算配置。左边宿主机真实路径要和 volumes 左边保持一致。
-      MEDIASTATION_MEDIA_DIR: ./media
+      MEDIASTATION_MEDIA_DIR: /media
       MEDIASTATION_MEDIA_CONTAINER_DIR: /media
-      MEDIASTATION_DOWNLOAD_DIR: ./downloads
+      MEDIASTATION_DOWNLOAD_DIR: /downloads
       MEDIASTATION_DOWNLOAD_CONTAINER_DIR: /downloads
 
       MEDIASTATION_TRANSCODER_ENABLED: "true"
