@@ -108,6 +108,17 @@ func newHTTPClient(cfg SiteConfig, timeout time.Duration) *http.Client {
 	return helper.NewSiteHTTPClient(secs, cfg.UseProxy)
 }
 
+func siteRequestHTTPClient(client *http.Client, cfg SiteConfig) *http.Client {
+	timeout := cfg.Timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	if client == nil || cfg.UseProxy || client.Timeout != timeout {
+		return newHTTPClient(cfg, timeout)
+	}
+	return client
+}
+
 // buildRequest 构建带认证的 HTTP 请求。
 func buildRequest(ctx context.Context, method, rawURL string, cfg SiteConfig, body io.Reader) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, method, rawURL, body)
@@ -178,10 +189,7 @@ func doRequest(ctx context.Context, client *http.Client, method, rawURL string, 
 
 	// 当站点开启了「使用代理」开关时，使用本次请求专用的、读取 HTTP(S)_PROXY
 	// 的 client；否则沿用适配器持有的全局 client。这与前端勾选行为对齐。
-	httpClient := client
-	if cfg.UseProxy {
-		httpClient = newHTTPClient(cfg, cfg.Timeout)
-	}
+	httpClient := siteRequestHTTPClient(client, cfg)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -210,10 +218,7 @@ func doRequestJSON(ctx context.Context, client *http.Client, method, rawURL stri
 		req.ContentLength = int64(len(body))
 	}
 
-	httpClient := client
-	if cfg.UseProxy {
-		httpClient = newHTTPClient(cfg, cfg.Timeout)
-	}
+	httpClient := siteRequestHTTPClient(client, cfg)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, 0, err

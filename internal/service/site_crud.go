@@ -104,10 +104,7 @@ func (s *SiteService) Delete(ctx context.Context, id string) error {
 // siteModelToConfig 将 model.Site 转换为适配器使用的 SiteConfig。
 // 当全局 FlareSolverr 已启用且此站点开启了 BrowserEmulation 时，填充 FlareSolverrURL。
 func (svc *SiteService) siteModelToConfig(s *model.Site) SiteConfig {
-	timeout := time.Duration(s.Timeout) * time.Second
-	if timeout <= 0 {
-		timeout = 15 * time.Second
-	}
+	timeout := siteRequestTimeout(s.Type, s.Timeout)
 	userAgent := s.UserAgent
 	if userAgent == "" {
 		userAgent = model.DefaultUserAgent
@@ -140,5 +137,25 @@ func (svc *SiteService) siteModelToConfig(s *model.Site) SiteConfig {
 		UseProxy:        s.UseProxy,
 		RateLimit:       s.RateLimit,
 		rateLimiter:     svc.apiRateLimiter,
+	}
+}
+
+func siteRequestTimeout(siteType string, timeoutSeconds int) time.Duration {
+	timeout := time.Duration(timeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	if isAPISiteType(siteType) && timeout <= 15*time.Second {
+		return 45 * time.Second
+	}
+	return timeout
+}
+
+func isAPISiteType(siteType string) bool {
+	switch strings.ToLower(strings.TrimSpace(siteType)) {
+	case "mteam", "yemapt":
+		return true
+	default:
+		return false
 	}
 }

@@ -282,6 +282,48 @@ func TestGenerateSTRMForLibraryUsesCategoryDefaultOutputDir(t *testing.T) {
 	assertFileContains(t, filepath.Join(wantDir, "Show", "Season 01", "Show - S01E01.strm"), "http://nas.example:18080/api/stream/show-1?token=strm-token")
 }
 
+func TestGenerateSTRMRemapsLegacyAppDataOutputDir(t *testing.T) {
+	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.STRMRecord{}, &model.Setting{})
+	repos := repository.New(db)
+	dataDir := t.TempDir()
+	lib := model.Library{Name: "电影", Path: "cloud://openlist/电影", Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatal(err)
+	}
+	media := model.Media{
+		Base:      model.Base{ID: "cloud-media"},
+		LibraryID: lib.ID,
+		Title:     "云盘电影",
+		Year:      2026,
+		Path:      "cloud://openlist/电影/云盘电影.mkv",
+		STRMURL:   "/api/cloud/play/openlist?ref=movie",
+	}
+	if err := repos.DB.Create(&media).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Setting.Set(t.Context(), "strm.output_dir", "/app/data/strm"); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewSTRMService(zap.NewNop(), repos, &config.Config{App: config.AppConfig{DataDir: dataDir}})
+
+	res, err := svc.GenerateForLibrary(t.Context(), GenerateSTRMOptions{
+		LibraryID:     lib.ID,
+		BaseURL:       "http://nas.example:18080",
+		PlaybackToken: "strm-token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDir := filepath.Join(dataDir, "strm", "电影")
+	if res.OutputDir != wantDir {
+		t.Fatalf("output dir = %q, want %q", res.OutputDir, wantDir)
+	}
+	if got, err := repos.Setting.Get(t.Context(), "strm.output_dir"); err != nil || got != wantDir {
+		t.Fatalf("saved strm.output_dir = %q, %v; want %q", got, err, wantDir)
+	}
+	assertFileContains(t, filepath.Join(wantDir, "云盘电影 (2026)", "云盘电影 (2026).strm"), "http://nas.example:18080/api/stream/cloud-media?token=strm-token")
+}
+
 func TestGenerateSTRMForLibraryUsesPathEpisodeFallback(t *testing.T) {
 	db := newServiceTestDB(t, &model.Library{}, &model.Media{}, &model.STRMRecord{}, &model.Setting{})
 	repos := repository.New(db)

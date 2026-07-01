@@ -6,6 +6,9 @@ import type { Site } from "../types";
 import { confirmAction } from "../components/confirmAction";
 
 import {
+  API_SITE_TIMEOUT_SECONDS,
+  API_SITE_TYPES,
+  DEFAULT_SITE_TIMEOUT_SECONDS,
   defaultSiteForm,
   siteFormToPayload,
   siteToForm,
@@ -145,10 +148,15 @@ export function SitesPage() {
   };
 
   const handleTypeChange = (type: string) => {
+    const isAPISite = API_SITE_TYPES.has(type);
     setForm((current) => ({
       ...current,
       type,
-      auth_type: type === "mteam" || type === "yemapt" ? "api_key" : current.auth_type,
+      auth_type: isAPISite ? "api_key" : current.auth_type,
+      timeout:
+        isAPISite && current.timeout === DEFAULT_SITE_TIMEOUT_SECONDS
+          ? API_SITE_TIMEOUT_SECONDS
+          : current.timeout,
     }));
   };
 

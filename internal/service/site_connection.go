@@ -28,18 +28,13 @@ func (s *SiteService) TestConnection(ctx context.Context, id string) (bool, stri
 		return false, "site not found", err
 	}
 
-	// Get timeout from site config (default 15 seconds)
-	timeout := site.Timeout
-	if timeout <= 0 {
-		timeout = 15
-	}
 	flareSolverrURL := s.flareSolverrURL
 
 	// ── Path 1: site-aware adapter Authenticate ────────────────────────
 	// custom_rss 没有真适配器，跳过；其它类型先尝试针对性认证端点。
 	if adapter := NewSiteAdapter(site); adapter != nil && site.Type != "" && site.Type != "custom_rss" {
 		cfg := s.siteModelToConfig(site)
-		actx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+		actx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 		defer cancel()
 		if authErr := adapter.Authenticate(actx, cfg); authErr == nil {
 			now := time.Now()
@@ -74,6 +69,7 @@ func (s *SiteService) TestConnection(ctx context.Context, id string) (bool, stri
 	}
 
 	// ── Path 2: generic GET with browser headers / FlareSolverr ───────
+	timeout := int(siteRequestTimeout(site.Type, site.Timeout).Seconds())
 	ok, msg, err := helper.TestSiteConnectivity(site, flareSolverrURL, timeout, s.log)
 	if err != nil {
 		now := time.Now()

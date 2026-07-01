@@ -329,6 +329,20 @@ environment:
 
 不要删除 `./postgres`。PostgreSQL 已经是主数据库，删除它会丢失账号、媒体库、订阅、配置和历史数据。
 
+## 日志与 STRM 路径
+
+Compose 模板默认把完整应用日志写入 `./data/logs/app.log`，同时拆分 `./data/logs/warn.log` 和 `./data/logs/error.log`。Docker 自身日志也会保留 10 个 50MB 文件：
+
+```bash
+docker compose logs -f mediastation-go
+tail -f ./data/logs/app.log
+tail -f ./data/logs/error.log
+```
+
+如果要排查订阅、站点搜索、自动整理或 STRM 生成问题，保持 `MEDIASTATION_LOGGING_LEVEL: info`；需要更细日志时临时改成 `debug`，确认后再改回 `info`。
+
+STRM 输出目录请使用容器内可写路径，例如 `/data/strm`，或你已经挂载进容器的媒体目录。旧版本保存过 `/app/data/strm` 的部署会在生成时自动迁移到当前 `MEDIASTATION_APP_DATA_DIR`，默认就是 `/data`。
+
 ## 更新与备份
 
 更新镜像：

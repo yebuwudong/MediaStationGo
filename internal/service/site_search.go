@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"go.uber.org/zap"
 
@@ -74,12 +73,7 @@ func (s *SiteService) Search(ctx context.Context, keyword string) ([]SearchResul
 			}
 
 			cfg := s.siteModelToConfig(&site)
-
-			// Use site timeout or default 30s
-			timeout := time.Duration(site.Timeout) * time.Second
-			if timeout <= 0 {
-				timeout = 30 * time.Second
-			}
+			timeout := cfg.Timeout
 			ctxWithTimeout, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 
@@ -159,10 +153,7 @@ func (s *SiteService) SearchSite(ctx context.Context, siteID, keyword string, pa
 		return nil, fmt.Errorf("%s: unsupported site type %s", site.Name, site.Type)
 	}
 	cfg := s.siteModelToConfig(site)
-	timeout := time.Duration(site.Timeout) * time.Second
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
+	timeout := cfg.Timeout
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 

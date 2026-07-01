@@ -4,6 +4,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -40,7 +41,7 @@ func (a *MTeamAdapter) Authenticate(ctx context.Context, cfg SiteConfig) error {
 	payload := `{"pageNumber":1,"pageSize":1,"mode":"all"}`
 	data, status, err := doRequestJSON(ctx, a.client, "POST", u, cfg, []byte(payload))
 	if err != nil {
-		return fmt.Errorf("authenticate: %w", err)
+		return mteamRequestError("authenticate", cfg, err)
 	}
 	preview := string(data)
 	if len(preview) > 400 {
@@ -87,7 +88,7 @@ func (a *MTeamAdapter) Search(ctx context.Context, cfg SiteConfig, keyword strin
 	u := cfg.URL + "/api/torrent/search"
 	data, status, err := doRequestJSON(ctx, a.client, "POST", u, cfg, body)
 	if err != nil {
-		return nil, fmt.Errorf("search: %w", err)
+		return nil, mteamRequestError("search", cfg, err)
 	}
 	if status != http.StatusOK {
 		return nil, fmt.Errorf("search failed: status %d", status)
@@ -116,7 +117,7 @@ func (a *MTeamAdapter) Browse(ctx context.Context, cfg SiteConfig, category stri
 	u := cfg.URL + "/api/torrent/search"
 	data, status, err := doRequestJSON(ctx, a.client, "POST", u, cfg, body)
 	if err != nil {
-		return nil, fmt.Errorf("browse: %w", err)
+		return nil, mteamRequestError("browse", cfg, err)
 	}
 	if status != http.StatusOK {
 		return nil, fmt.Errorf("browse failed: status %d", status)
@@ -132,7 +133,7 @@ func (a *MTeamAdapter) GetDetail(ctx context.Context, cfg SiteConfig, id string)
 	u := cfg.URL + "/api/torrent/detail?id=" + url.QueryEscape(id)
 	data, status, err := doRequestJSON(ctx, a.client, "POST", u, cfg, nil)
 	if err != nil {
-		return nil, fmt.Errorf("detail: %w", err)
+		return nil, mteamRequestError("detail", cfg, err)
 	}
 	if status != http.StatusOK {
 		return nil, fmt.Errorf("detail failed: status %d", status)
@@ -203,7 +204,7 @@ func (a *MTeamAdapter) GetDownloadURL(ctx context.Context, cfg SiteConfig, id st
 	// genDlToken 是 POST 但参数走 query string；body 留空。
 	data, status, err := doRequestJSON(ctx, a.client, "POST", u, cfg, []byte("{}"))
 	if err != nil {
-		return "", fmt.Errorf("genDlToken: %w", err)
+		return "", mteamRequestError("genDlToken", cfg, err)
 	}
 	if status >= 300 {
 		return "", fmt.Errorf("genDlToken: HTTP %d", status)
@@ -231,4 +232,27 @@ func (a *MTeamAdapter) GetDownloadURL(ctx context.Context, cfg SiteConfig, id st
 		return "", fmt.Errorf("genDlToken: empty data field")
 	}
 	return dl, nil
+}
+
+func mteamRequestError(action string, cfg SiteConfig, err error) error {
+	if err == nil {
+		return nil
+	}
+	if isSiteRequestTimeout(err) {
+		timeout := cfg.Timeout
+		if timeout <= 0 {
+			timeout = 30 * time.Second
+		}
+		return fmt.Errorf("%s: M-Team API request timed out after %s; check Docker/IPv6/proxy access to api.m-team.cc or increase the site timeout to 45-60s: %w",
+			action, timeout.Round(time.Second), err)
+	}
+	return fmt.Errorf("%s: %w", action, err)
+}
+
+func isSiteRequestTimeout(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var timeout interface{ Timeout() bool }
+	return errors.As(err, &timeout) && timeout.Timeout()
 }

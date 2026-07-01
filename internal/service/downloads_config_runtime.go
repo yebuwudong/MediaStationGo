@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 
+	"go.uber.org/zap"
+
 	"github.com/ShukeBta/MediaStationGo/internal/model"
 )
 
@@ -33,10 +35,16 @@ func (d *DownloadService) ReloadConfig(ctx context.Context) error {
 			cfg.BaseURL = strings.TrimRight(c.Host, "/")
 			cfg.Username = c.Username
 			cfg.Password = c.Password
-		} else if c, err := d.soleEnabledQBitClient(ctx); err == nil && c != nil {
+		} else if c, err := d.preferredEnabledQBitClient(ctx); err == nil && c != nil {
 			cfg.BaseURL = strings.TrimRight(c.Host, "/")
 			cfg.Username = c.Username
 			cfg.Password = c.Password
+			_ = d.repo.DownloadClient.SetDefault(ctx, c.ID)
+			if d.log != nil {
+				d.log.Warn("default downloader missing; selected first enabled qbittorrent client",
+					zap.String("client_id", c.ID),
+					zap.String("client", c.Name))
+			}
 		}
 	}
 	if d.repo.Setting != nil {
@@ -62,7 +70,7 @@ func (d *DownloadService) ReloadConfig(ctx context.Context) error {
 	return nil
 }
 
-func (d *DownloadService) soleEnabledQBitClient(ctx context.Context) (*model.DownloadClient, error) {
+func (d *DownloadService) preferredEnabledQBitClient(ctx context.Context) (*model.DownloadClient, error) {
 	if d == nil || d.repo == nil || d.repo.DownloadClient == nil {
 		return nil, nil
 	}
@@ -75,11 +83,9 @@ func (d *DownloadService) soleEnabledQBitClient(ctx context.Context) (*model.Dow
 		if rows[i].Type != "qbittorrent" {
 			continue
 		}
-		if selected != nil {
-			return nil, nil
-		}
 		row := rows[i]
 		selected = &row
+		break
 	}
 	return selected, nil
 }

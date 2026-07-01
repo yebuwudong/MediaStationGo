@@ -306,10 +306,20 @@ services:
       - ./data:/data
       - ./cache:/cache
 
-      # Beginners can keep ./media and ./downloads.
-      # NAS users should replace the left side with real absolute paths.
-      - ./media:/media
-      - ./downloads:/downloads
+      # Beginners can create ./media and ./downloads.
+      # NAS users should replace source with real absolute paths.
+      # create_host_path=false prevents Docker from silently creating an empty
+      # folder when the host path is wrong.
+      - type: bind
+        source: ./media
+        target: /media
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./downloads
+        target: /downloads
+        bind:
+          create_host_path: false
 
     environment:
       TZ: Asia/Shanghai
@@ -329,11 +339,12 @@ services:
       MEDIASTATION_DATABASE_DB_PATH: /data/mediastation.db
       MEDIASTATION_CACHE_CACHE_DIR: /cache
 
-      # If you changed ./media or ./downloads above,
-      # set these to the same real host paths.
-      MEDIASTATION_MEDIA_DIR: ./media
+      # Use /media and /downloads in the web UI and downloader by default.
+      # Only set MEDIASTATION_*_DIR to real host paths when migrating old
+      # libraries/tasks that already stored host paths.
+      MEDIASTATION_MEDIA_DIR: /media
       MEDIASTATION_MEDIA_CONTAINER_DIR: /media
-      MEDIASTATION_DOWNLOAD_DIR: ./downloads
+      MEDIASTATION_DOWNLOAD_DIR: /downloads
       MEDIASTATION_DOWNLOAD_CONTAINER_DIR: /downloads
 
   postgres:
@@ -398,7 +409,13 @@ docker compose up -d --no-deps mediastation-go
 
 ```bash
 docker compose logs -f mediastation-go
+tail -f ./data/logs/app.log
+tail -f ./data/logs/error.log
 ```
+
+The compose templates keep full application logs in `./data/logs/app.log` and split warnings/errors into `warn.log` and `error.log`. Keep `MEDIASTATION_LOGGING_LEVEL=info` while diagnosing subscription, site search, organizer, or STRM generation issues; temporarily switch to `debug` only when deeper tracing is needed.
+
+Use a writable container path for STRM output, such as `/data/strm` or a mounted media path. Deployments that previously saved `/app/data/strm` are migrated automatically to the configured `MEDIASTATION_APP_DATA_DIR`, which defaults to `/data`.
 
 ### Backup
 

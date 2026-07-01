@@ -188,6 +188,76 @@ func TestAddDownloadWithMetaFailsClosedWhenNoDownloaderConfigured(t *testing.T) 
 	}
 }
 
+func TestAddDownloadSelectsFirstEnabledQBitWhenDefaultMissing(t *testing.T) {
+	var firstAddCalls int32
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			_, _ = w.Write([]byte("Ok."))
+		case "/api/v2/torrents/info":
+			if atomic.LoadInt32(&firstAddCalls) > 0 {
+				_, _ = w.Write([]byte(`[{"hash":"abc123","name":"Movie 2026 1080p","state":"downloading","progress":0.1}]`))
+				return
+			}
+			_, _ = w.Write([]byte(`[]`))
+		case "/api/v2/torrents/add":
+			atomic.AddInt32(&firstAddCalls, 1)
+			_, _ = w.Write([]byte("Ok."))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer first.Close()
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			_, _ = w.Write([]byte("Ok."))
+		case "/api/v2/torrents/info":
+			_, _ = w.Write([]byte(`[]`))
+		case "/api/v2/torrents/add":
+			t.Fatal("second qB should not be selected before first enabled qB")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer second.Close()
+
+	db := newServiceTestDB(t, &model.DownloadClient{}, &model.DownloadTask{}, &model.Setting{})
+	repos := repository.New(db)
+	if err := repos.Setting.Set(t.Context(), settingDownloadClientsManaged, "true"); err != nil {
+		t.Fatal(err)
+	}
+	firstClient := &model.DownloadClient{Name: "qB first", Type: "qbittorrent", Host: first.URL, Username: "admin", Password: "admin", IsDefault: false, Enabled: true}
+	secondClient := &model.DownloadClient{Name: "qB second", Type: "qbittorrent", Host: second.URL, Username: "admin", Password: "admin", IsDefault: false, Enabled: true}
+	if err := repos.DownloadClient.Create(t.Context(), firstClient); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.DownloadClient.Create(t.Context(), secondClient); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewDownloadService(zap.NewNop(), repos, NewHub(zap.NewNop()), nil)
+	task, err := svc.AddDownloadWithMeta(t.Context(), "u1", "magnet:?xt=urn:btih:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee&dn=Movie+2026+1080p", "/downloads", DownloadTaskMeta{
+		Title: "Movie 2026 1080p",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task == nil {
+		t.Fatal("expected task")
+	}
+	if got := atomic.LoadInt32(&firstAddCalls); got != 1 {
+		t.Fatalf("first qb add calls = %d, want 1", got)
+	}
+	refreshed, err := repos.DownloadClient.FindByID(t.Context(), firstClient.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed == nil || !refreshed.IsDefault {
+		t.Fatalf("first enabled qB should be persisted as default, got %#v", refreshed)
+	}
+}
+
 func TestReloadConfigManagedModeDoesNotFallbackToLegacyWithoutRows(t *testing.T) {
 	var addCalls int32
 	qb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

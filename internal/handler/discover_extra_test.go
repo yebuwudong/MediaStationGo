@@ -49,6 +49,7 @@ func TestDiscoverFetchFailureLogIncludesDiagnostics(t *testing.T) {
 		"tmdb_latest_movie",
 		2,
 		1500*time.Millisecond,
+		discoverSectionTimeout("tmdb_latest_movie"),
 		context.DeadlineExceeded,
 	)
 
@@ -68,6 +69,15 @@ func TestDiscoverFetchFailureLogIncludesDiagnostics(t *testing.T) {
 	}
 	if _, ok := fields["timeout"]; !ok {
 		t.Fatalf("timeout field missing: %#v", fields)
+	}
+}
+
+func TestDiscoverSectionTimeoutRaisesBangumiBudget(t *testing.T) {
+	if got := discoverSectionTimeout("bangumi_calendar"); got != discoverFeedBangumiTimeout {
+		t.Fatalf("bangumi timeout = %s, want %s", got, discoverFeedBangumiTimeout)
+	}
+	if got := discoverSectionTimeout("tmdb_latest_movie"); got != discoverFeedSectionTimeout {
+		t.Fatalf("tmdb timeout = %s, want %s", got, discoverFeedSectionTimeout)
 	}
 }
 

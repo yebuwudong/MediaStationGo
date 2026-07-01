@@ -41,7 +41,8 @@ var discoverSectionCatalog = []discoverSectionDef{
 	{Key: "bangumi_calendar", Label: "Bangumi 每日放送", Provider: "bangumi"},
 }
 
-const discoverFeedSectionTimeout = 15 * time.Second
+const discoverFeedSectionTimeout = 20 * time.Second
+const discoverFeedBangumiTimeout = 30 * time.Second
 const discoverFeedSlowSectionThreshold = 2 * time.Second
 
 // discoverSectionsHandler returns the catalog of sections the UI can
@@ -85,14 +86,15 @@ func discoverFeedHandler(svc *service.Container) gin.HandlerFunc {
 				meta[k] = gin.H{"page": page, "has_next": false, "disabled": true}
 				continue
 			}
-			sectionCtx, cancel := context.WithTimeout(c.Request.Context(), discoverFeedSectionTimeout)
+			sectionTimeout := discoverSectionTimeout(k)
+			sectionCtx, cancel := context.WithTimeout(c.Request.Context(), sectionTimeout)
 			started := time.Now()
 			items, err := discoverSectionItems(sectionCtx, svc, k, page)
 			elapsed := time.Since(started)
 			cancel()
 			metaEntry := gin.H{"page": page, "has_next": false, "duration_ms": elapsed.Milliseconds()}
 			if err != nil {
-				logDiscoverFetchFailed(svc, k, page, elapsed, err)
+				logDiscoverFetchFailed(svc, k, page, elapsed, sectionTimeout, err)
 				if cached, ok := cachedDiscoverSection(svc, k, page); ok {
 					items = cached
 					metaEntry["stale"] = true
@@ -142,7 +144,7 @@ func fallbackDiscoverSectionItems(parent context.Context, svc *service.Container
 	if fallbackKey == "" || svc == nil || svc.Discover == nil {
 		return nil, "", false
 	}
-	ctx, cancel := context.WithTimeout(parent, discoverFeedSectionTimeout)
+	ctx, cancel := context.WithTimeout(parent, discoverSectionTimeout(fallbackKey))
 	defer cancel()
 	items, err := discoverSectionItems(ctx, svc, fallbackKey, page)
 	if err != nil || len(items) == 0 {
@@ -171,7 +173,7 @@ func fallbackDiscoverSectionKey(key string) string {
 	}
 }
 
-func logDiscoverFetchFailed(svc *service.Container, key string, page int, elapsed time.Duration, err error) {
+func logDiscoverFetchFailed(svc *service.Container, key string, page int, elapsed, timeout time.Duration, err error) {
 	if svc == nil || svc.Log == nil || err == nil {
 		return
 	}
@@ -181,7 +183,7 @@ func logDiscoverFetchFailed(svc *service.Container, key string, page int, elapse
 		zap.Int("page", page),
 		zap.Duration("duration", elapsed),
 		zap.Int64("duration_ms", elapsed.Milliseconds()),
-		zap.Duration("timeout", discoverFeedSectionTimeout),
+		zap.Duration("timeout", timeout),
 		zap.Error(err))
 }
 
@@ -229,6 +231,13 @@ func discoverFeedFallbackMessage(fallbackKey string, err error) string {
 		return discoverFeedErrorMessage(err)
 	}
 	return "推荐源暂时不可用，已显示同类备用榜单"
+}
+
+func discoverSectionTimeout(key string) time.Duration {
+	if key == "bangumi_calendar" {
+		return discoverFeedBangumiTimeout
+	}
+	return discoverFeedSectionTimeout
 }
 
 func enabledDiscoverSections(ctx context.Context, svc *service.Container) []discoverSectionDef {

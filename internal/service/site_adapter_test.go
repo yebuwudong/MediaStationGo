@@ -82,6 +82,48 @@ func TestMTeamAuthenticateReportsAPIMessage(t *testing.T) {
 	}
 }
 
+func TestMTeamAuthenticateHonorsConfiguredTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":"0","message":"SUCCESS","data":{"total":"0","data":[]}}`))
+	}))
+	defer server.Close()
+
+	adapter := NewMTeamAdapter()
+	started := time.Now()
+	err := adapter.Authenticate(context.Background(), SiteConfig{
+		URL:      server.URL,
+		AuthType: "api_key",
+		APIKey:   "token-123",
+		Timeout:  time.Second,
+	})
+	if err == nil {
+		t.Fatal("Authenticate error = nil, want timeout")
+	}
+	if elapsed := time.Since(started); elapsed >= 1500*time.Millisecond {
+		t.Fatalf("Authenticate elapsed = %s, want configured timeout to stop before upstream response", elapsed)
+	}
+	if !strings.Contains(err.Error(), "M-Team API request timed out") {
+		t.Fatalf("Authenticate error = %v, want M-Team timeout hint", err)
+	}
+}
+
+func TestAPISiteDefaultTimeoutIsRaised(t *testing.T) {
+	if got := siteRequestTimeout("mteam", 15); got != 45*time.Second {
+		t.Fatalf("mteam timeout = %s, want 45s", got)
+	}
+	if got := siteRequestTimeout("yemapt", 0); got != 45*time.Second {
+		t.Fatalf("yemapt timeout = %s, want 45s", got)
+	}
+	if got := siteRequestTimeout("nexusphp", 15); got != 15*time.Second {
+		t.Fatalf("nexusphp timeout = %s, want 15s", got)
+	}
+	if got := siteRequestTimeout("mteam", 60); got != 60*time.Second {
+		t.Fatalf("custom mteam timeout = %s, want 60s", got)
+	}
+}
+
 func TestYemaPTAuthenticateUsesAuthorizationHeader(t *testing.T) {
 	var gotPath string
 	var gotAuth string
