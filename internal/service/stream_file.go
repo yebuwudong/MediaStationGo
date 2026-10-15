@@ -95,6 +95,19 @@ func (s *StreamService) serveFileWithCloudMode(w http.ResponseWriter, r *http.Re
 	}
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Content-Disposition", "inline")
+	// 显式设置 Content-Type：容器内通常没有 /etc/mime.types，若不设置，
+	// Go 只能按扩展名返回空值，配合 nosniff 会让客户端收到
+	// application/octet-stream，部分播放器因此拒播。用 MediaMimeType
+	// 以内置表兜底，保证 .mkv/.mov/.ts/.iso 等拿到正确类型。
+	//
+	// 注意 stat.Name() 在部分云盘/STRM 场景下可能没有扩展名，此时回退到
+	// 媒体记录的 Path。
+	if contentType := MediaMimeType(stat.Name()); contentType != fallbackMimeType {
+		w.Header().Set("Content-Type", contentType)
+	} else {
+		// stat.Name() 在部分云盘/STRM 场景下可能没有扩展名，回退到媒体记录的 Path。
+		w.Header().Set("Content-Type", MediaMimeType(m.Path))
+	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeContent(w, r, stat.Name(), stat.ModTime(), f)
 	return nil

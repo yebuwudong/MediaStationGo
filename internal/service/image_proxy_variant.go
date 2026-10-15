@@ -43,14 +43,25 @@ type imageVariantOptions struct {
 	err        error
 }
 
-// Existing Emby clients retain JPEG output unless a format is requested.
-// All parameter names are case insensitive; ambiguous duplicates are rejected.
+// imageVariantFromRequest 解析图片变体参数。
+//
+// 设计原则：参数用于「客户端希望得到多大/什么格式的图」，属于渲染偏好，
+// 不是访问准入条件。因此采用「归一 + 夹取」策略而非报错：
+//
+//   - 参数名大小写不敏感；同名参数重复（含大小写变体）时取首个有效值，
+//     不再整体拒绝。真实客户端会同时携带 maxWidth 与 MaxWidth。
+//   - 非数字、0、负值、超上限一律夹取到合法范围或忽略该参数，不再 400。
+//     客户端常带 width=0 / quality=0 表示「不指定」。
+//   - 仅当 fillWidth/fillHeight 只给一个时才视为无效并回退为不裁切。
+//
+// 历史行为（重复参数或越界即 400）会让部分客户端的图片请求整体失败。
 func imageVariantFromRequest(r *http.Request) imageVariantOptions {
 	o := imageVariantOptions{}
 	if r == nil || r.URL == nil {
 		return o
 	}
-	seen := make(map[string]bool)
+	// 先按规范化后的参数名归组，避免 map 遍历顺序影响「取首值」的结果。
+	grouped := make(map[string][]string)
 	for name, values := range r.URL.Query() {
 		name = strings.ToLower(name)
 		switch name {
@@ -58,31 +69,41 @@ func imageVariantFromRequest(r *http.Request) imageVariantOptions {
 		default:
 			continue
 		}
-		if seen[name] || len(values) != 1 {
-			o.err = fmt.Errorf("duplicate image parameter: %s", name)
-			return o
+		grouped[name] = append(grouped[name], values...)
+	}
+	// 固定顺序处理，保证结果确定：数值参数先规范化，format 最后覆盖。
+	for _, name := range []string{"width", "maxwidth", "height", "maxheight", "fillwidth", "fillheight", "quality", "format"} {
+		values, ok := grouped[name]
+		if !ok || len(values) == 0 {
+			continue
 		}
-		seen[name] = true
 		raw := strings.TrimSpace(values[0])
 		if name == "format" {
 			o.format = strings.ToLower(raw)
 			if o.format == "jpg" {
 				o.format = "jpeg"
 			}
+			// 不支持的格式按「未指定」处理，沿用默认输出格式。
 			if o.format != "jpeg" && o.format != "webp" && o.format != "png" {
-				o.err = errors.New("unsupported image format")
-				return o
+				o.format = ""
 			}
 			continue
 		}
 		value, err := strconv.Atoi(raw)
+		if err != nil {
+			// 无法解析的值视为未指定。
+			continue
+		}
 		limit := 4096
 		if name == "quality" {
 			limit = 100
 		}
-		if err != nil || value < 1 || value > limit {
-			o.err = fmt.Errorf("invalid image parameter: %s", name)
-			return o
+		// 夹取到合法范围；0 与负值不再视为错误，而是「未指定」。
+		if value > limit {
+			value = limit
+		}
+		if value < 1 {
+			continue
 		}
 		switch name {
 		case "width", "maxwidth":
@@ -101,8 +122,9 @@ func imageVariantFromRequest(r *http.Request) imageVariantOptions {
 			o.quality, o.hasQuality = value, true
 		}
 	}
+	// 只给一个 fill 参数时无法确定裁切比例，回退为不裁切而非报错。
 	if (o.fillWidth == 0) != (o.fillHeight == 0) {
-		o.err = errors.New("fillWidth and fillHeight are required together")
+		o.fillWidth, o.fillHeight = 0, 0
 	}
 	return o
 }

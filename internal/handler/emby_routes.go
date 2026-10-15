@@ -58,6 +58,18 @@ func registerEmbyPublicRoutes(grp *gin.RouterGroup, jwtSecret string, svc *servi
 	registerEmbyPublicClientRoutes(grp, jwtSecret, svc)
 }
 
+// 关于 /Users/Public 的说明（有意保持未注册）：
+//
+// 该接口是 Emby 官方登录页用来列出可见用户的公开接口，但只需要
+// Id + Name 即可枚举全部账号。本服务把它归入「不对外暴露用户列表」的
+// 安全基线，由 routes_authenticated_test.go 的 forbidden 列表和
+// emby_discovery_routes_test.go 的 401 断言共同守护。
+//
+// 实测真实客户端（CapyPlayer、Hills）在收到 403/401 后仍能正常完成
+// AuthenticateByName 并进入 PlaybackInfo，因此这不是播放链路的一环。
+// 若未来确有客户端因缺该接口无法添加服务器，再按「需鉴权 + 返回脱敏
+// 列表」的方式单独放开，而不是改成公开接口。
+
 func registerEmbyPublicSystemRoutes(grp *gin.RouterGroup, svc *service.Container) {
 	// Clients probe this minimal identity before submitting credentials.
 	registerEmbyGetHeadRoutes(grp, svc, []string{

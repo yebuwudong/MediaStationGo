@@ -24,9 +24,9 @@ func embyPlaybackInfoHandler(svc *service.Container) gin.HandlerFunc {
 		uid := embyUserID(c)
 		req, err := parseEmbyPlaybackInfoRequest(c)
 		if err != nil {
+			// 解析已是尽力而为，这里只可能收到结构性故障。记录后仍继续，
+			// 因为请求体不是播放的准入门槛。
 			embyLogPlaybackInfoParseFailed(c, svc, req, err)
-			embyError(c, http.StatusBadRequest, "Invalid PlaybackInfo request")
-			return
 		}
 		embyLogPlaybackInfoParseOK(c, svc, req)
 		out, err := svc.Emby.PlaybackInfoForMediaSource(
@@ -34,7 +34,7 @@ func embyPlaybackInfoHandler(svc *service.Container) gin.HandlerFunc {
 			c.Param("id"),
 			uid,
 			req.MediaSourceId,
-			req.IsPlayback,
+			req.IsPlayback.Bool(),
 		)
 		if err != nil {
 			if errors.Is(err, service.ErrEmbyMediaSourceUnavailable) {
@@ -54,29 +54,53 @@ func embyPlaybackInfoHandler(svc *service.Container) gin.HandlerFunc {
 	}
 }
 
+// parseEmbyPlaybackInfoRequest 解析播放信息请求。
+//
+// 设计原则（与 Emby 协议事实标准一致）：请求体只用于「能力协商」和
+// 「选源提示」，不是播放的准入门槛。真正决定能否播放的是令牌有效性、
+// 媒体可见性与媒体本身的可播放性。因此这里的解析是尽力而为的：
+//
+//   - 字段类型不匹配（如 MinSegments 写成字符串）：由 model 层的
+//     FlexInt/FlexBool 吸收，取零值，不产生错误
+//   - body 不是 JSON 或不是对象：结构错误，返回给调用方仅用于诊断日志
+//   - 读取 body 失败：降级为空请求，继续用 query 参数
+//
+// 返回的 error 是「诊断信息」，不是「拒绝依据」：调用方记录后必须继续处理
+// 请求，绝不能据此返回 400。参考 Jellyfin
+// src/Jellyfin.Extensions/Json/JsonDefaults.cs 中全局开启的
+// NumberHandling = AllowReadingFromString。历史行为（严格解码并对类型
+// 不匹配返回 400）会让 CapyPlayer、Hills 等客户端把 MinSegments 写成字符串
+// 时完全无法播放。
 func parseEmbyPlaybackInfoRequest(c *gin.Context) (model.EmbyPlaybackInfoRequest, error) {
 	req := model.EmbyPlaybackInfoRequest{}
+	var diagErr error
 	if strings.Contains(strings.ToLower(c.GetHeader("Content-Type")), "json") {
 		body, readErr := io.ReadAll(c.Request.Body)
 		if readErr != nil {
-			return req, readErr
+			// 读 body 失败不代表请求非法，继续用 query 参数构建请求。
+			body = nil
 		}
 		c.Set(embyPlaybackInfoDiagnosticsContextKey, embyPlaybackInfoRequestShape(body))
-		if err := json.NewDecoder(bytes.NewReader(body)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
-			return req, err
+		if len(bytes.TrimSpace(body)) > 0 {
+			// FlexInt/FlexBool 已吸收字段级类型不匹配，因此这里只可能遇到
+			// 结构性错误（body 不是 JSON 对象）。保留下来供诊断日志使用。
+			if err := json.NewDecoder(bytes.NewReader(body)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+				diagErr = err
+			}
 		}
 	}
 	if sourceID := firstQueryValue(c, "MediaSourceId", "MediaSourceID", "mediaSourceId", "media_source_id"); sourceID != "" {
 		req.MediaSourceId = sourceID
 	}
 	if raw := firstQueryValue(c, "IsPlayback", "isPlayback", "is_playback"); raw != "" {
-		isPlayback, err := strconv.ParseBool(raw)
-		if err != nil {
-			return req, err
+		if isPlayback, err := strconv.ParseBool(raw); err == nil {
+			req.IsPlayback = model.FlexBool(isPlayback)
+		} else {
+			// query 参数非法同样降级，避免因为一个可选参数拒绝播放。
+			req.IsPlayback = model.FlexBool(true)
 		}
-		req.IsPlayback = isPlayback
 	}
-	return req, nil
+	return req, diagErr
 }
 
 const embyPlaybackInfoDiagnosticsContextKey = "emby_playback_info_request_shape"
@@ -230,7 +254,7 @@ func embyLogPlaybackInfoParseFailed(c *gin.Context, svc *service.Container, req 
 		zap.String("error_type", fmt.Sprintf("%T", parseErr)),
 		zap.String("item_id", c.Param("id")),
 		zap.String("media_source_id", req.MediaSourceId),
-		zap.Bool("is_playback", req.IsPlayback),
+		zap.Bool("is_playback", req.IsPlayback.Bool()),
 		zap.String("content_type", c.GetHeader("Content-Type")),
 		zap.Int("body_bytes", diag.bodyBytes),
 		zap.Strings("top_level_keys", diag.topLevelKeys),
@@ -261,7 +285,7 @@ func embyLogPlaybackInfoParseOK(c *gin.Context, svc *service.Container, req mode
 		zap.String("event", "emby_playback_info_parse_ok"),
 		zap.String("item_id", c.Param("id")),
 		zap.String("media_source_id", req.MediaSourceId),
-		zap.Bool("is_playback", req.IsPlayback),
+		zap.Bool("is_playback", req.IsPlayback.Bool()),
 		zap.Int("body_bytes", diag.bodyBytes),
 		zap.Strings("top_level_keys", diag.topLevelKeys),
 		zap.String("device_profile_shape", embyPlaybackInfoDeviceProfileShape(diag.deviceProfileRaw)),

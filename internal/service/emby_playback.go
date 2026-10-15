@@ -43,6 +43,9 @@ func (e *EmbyService) PlaybackInfoForMediaSource(
 	return map[string]any{
 		"MediaSources":  sources,
 		"PlaySessionId": fmt.Sprintf("%s-%d", m.ID, time.Now().Unix()),
+		// 官方 PlaybackInfoResponse 固定包含 ErrorCode。成功时为 null，
+		// 客户端按「非 null 即失败」判断，因此必须显式给出该字段。
+		"ErrorCode": nil,
 	}, nil
 }
 
@@ -136,10 +139,17 @@ func (e *EmbyService) mediaSource(ctx context.Context, m *model.Media, asEmbedde
 	}
 	if playURL != "" {
 		src["DirectStreamUrl"] = playURL
+		// 直链是否需要客户端附带凭据。DirectStreamUrl 会由 handler 追加
+		// api_key，客户端据此决定是否复用已有令牌。
+		src["AddApiKeyToDirectStreamUrl"] = true
 		// 直连解码模式下不下发 TranscodingUrl，迫使客户端本地解码直连，
 		// 宿主机不参与转码。
 		if !asEmbedded && !directOnly {
 			src["TranscodingUrl"] = "/Videos/" + m.ID + "/master.m3u8"
+			// HLS 客户端靠这两个字段判断转码子协议与分片容器；缺失时部分
+			// 播放器不会走 m3u8 路径。官方 Emby 在此固定下发 hls/ts。
+			src["TranscodingSubProtocol"] = "hls"
+			src["TranscodingContainer"] = "ts"
 		}
 	}
 	if isCloud && playURL != "" {
@@ -164,6 +174,11 @@ func (e *EmbyService) baseMediaSource(m *model.Media, container string, isCloud 
 			}
 		}
 	}
+	// MimeType / TranscodingMimeType：部分播放器不读 Container，只看 MIME
+	// 判断能否直连播放。缺失会导致客户端把可播媒体判定为不可播。
+	mimeType := MediaMimeType(m.Path)
+	// AddApiKeyToDirectStreamUrl 告知客户端「这个直链需要附带 api_key」。
+	// 官方 Emby 在 DirectStreamUrl 已含 api_key 时通常给 true。
 	return map[string]any{
 		"Id":                    m.ID,
 		"Name":                  m.Title,
@@ -174,6 +189,8 @@ func (e *EmbyService) baseMediaSource(m *model.Media, container string, isCloud 
 		"Protocol":              "Http",
 		"Type":                  "Default",
 		"IsRemote":              isCloud,
+		"MimeType":              mimeType,
+		"TranscodingMimeType":   hlsPlaylistMimeType,
 		"RequiresOpening":       false,
 		"RequiresClosing":       false,
 		"ReadAtNativeFramerate": false,
@@ -181,9 +198,46 @@ func (e *EmbyService) baseMediaSource(m *model.Media, container string, isCloud 
 		"SupportsDirectStream":  !isCloud || playURL != "",
 		"SupportsDirectPlay":    !isCloud || playURL != "",
 		"SupportsProbing":       true,
+		"HasMixedProtocols":     false,
 		"RunTimeTicks":          int64(m.DurationSec) * 10_000_000,
 		"MediaStreams":          e.mediaStreams(m),
+		// 官方契约要求给出这两个数组；缺失时部分客户端在解析阶段报错。
+		// 内嵌字幕/字体附件当前来自探测文档，无数据时给空数组。
+		"MediaAttachments": e.mediaAttachments(m),
+		"Chapters":         []any{},
 	}
+}
+
+// mediaAttachments 返回内嵌字幕/字体等附件流。
+//
+// Emby 的 MediaAttachments 通常承载内嵌 ASS 字体、内嵌字幕等，客户端用它
+// 在播放前建立字幕轨列表。当前实现从探测文档提取；没有探测数据时返回空
+// 数组（而非省略字段），避免客户端把「字段缺失」与「无附件」混淆。
+func (e *EmbyService) mediaAttachments(m *model.Media) []map[string]any {
+	attachments := []map[string]any{}
+	if e == nil || m == nil {
+		return attachments
+	}
+	doc := loadMediaProbeDocument(context.Background(), e.repo, m)
+	if doc == nil {
+		return attachments
+	}
+	for _, stream := range embyProbeStreams(doc) {
+		if !strings.EqualFold(mediaStreamString(stream, "Type"), "Attachment") {
+			continue
+		}
+		attachments = append(attachments, stream)
+	}
+	return attachments
+}
+
+// mediaStreamString 从 MediaStream map 中取字符串字段。
+func mediaStreamString(stream map[string]any, key string) string {
+	if stream == nil {
+		return ""
+	}
+	value, _ := stream[key].(string)
+	return value
 }
 
 // embyMediaSourcePath keeps Emby's Path field as a source identity rather

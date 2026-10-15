@@ -2,7 +2,6 @@ package handler
 
 import (
 	"errors"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,15 +9,21 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/ShukeBta/MediaStationGo/internal/model"
 	"github.com/ShukeBta/MediaStationGo/internal/service"
 )
 
+// embyPlayingReq 播放进度上报请求。
+//
+// 数值字段使用 FlexInt64：真实客户端会把 PositionTicks / RunTimeTicks
+// 写成字符串，把 PlaySessionId 写成数字。严格绑定会让进度上报失败，
+// 直接后果是续播位置丢失。参考 emby_flexjson.go 的说明。
 type embyPlayingReq struct {
-	ItemId        string `json:"ItemId"`
-	MediaSourceId string `json:"MediaSourceId"`
-	PositionTicks int64  `json:"PositionTicks"`
-	RunTimeTicks  int64  `json:"RunTimeTicks"`
-	PlaySessionID string `json:"PlaySessionId"`
+	ItemId        string        `json:"ItemId"`
+	MediaSourceId string        `json:"MediaSourceId"`
+	PositionTicks model.FlexInt64 `json:"PositionTicks"`
+	RunTimeTicks  model.FlexInt64 `json:"RunTimeTicks"`
+	PlaySessionID string        `json:"PlaySessionId"`
 }
 
 func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
@@ -29,10 +34,10 @@ func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 		var req embyPlayingReq
-		if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid playback progress"})
-			return
-		}
+		// 进度上报只用于记录播放位置，不构成播放准入门槛。类型不匹配由
+		// FlexInt64 吸收；此处仅忽略结构性错误，绝不因请求体拒绝上报，
+		// 否则客户端每次播放都会从头开始。
+		_ = c.ShouldBindJSON(&req)
 		if req.ItemId == "" {
 			req.ItemId = c.Query("ItemId")
 		}
@@ -40,10 +45,14 @@ func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
 			req.MediaSourceId = firstQueryValue(c, "MediaSourceId", "MediaSourceID", "mediaSourceId", "media_source_id")
 		}
 		if req.PositionTicks == 0 {
-			req.PositionTicks, _ = strconv.ParseInt(c.Query("PositionTicks"), 10, 64)
+			if v, err := strconv.ParseInt(c.Query("PositionTicks"), 10, 64); err == nil {
+				req.PositionTicks = model.FlexInt64(v)
+			}
 		}
 		if req.RunTimeTicks == 0 {
-			req.RunTimeTicks, _ = strconv.ParseInt(c.Query("RunTimeTicks"), 10, 64)
+			if v, err := strconv.ParseInt(c.Query("RunTimeTicks"), 10, 64); err == nil {
+				req.RunTimeTicks = model.FlexInt64(v)
+			}
 		}
 		if req.ItemId == "" {
 			c.Status(http.StatusOK)
@@ -60,8 +69,8 @@ func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
 			uid,
 			req.ItemId,
 			req.MediaSourceId,
-			req.PositionTicks,
-			req.RunTimeTicks,
+			req.PositionTicks.Int64(),
+			req.RunTimeTicks.Int64(),
 		)
 		if err != nil {
 			if errors.Is(err, service.ErrCloudPlaybackNotResolved) {
@@ -100,8 +109,8 @@ func embyPlayingProgressHandler(svc *service.Container) gin.HandlerFunc {
 				clientInfo.Client,
 				c.ClientIP(),
 				req.ItemId,
-				req.PositionTicks,
-				req.RunTimeTicks,
+				req.PositionTicks.Int64(),
+				req.RunTimeTicks.Int64(),
 				stopped)
 		}
 		if svc.Device != nil && !stopped {

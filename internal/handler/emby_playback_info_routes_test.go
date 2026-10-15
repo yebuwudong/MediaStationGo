@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -97,7 +96,15 @@ func TestEmbyLowercasePlaybackInfoRouteReturnsJSON(t *testing.T) {
 	}
 }
 
-func TestEmbyPlaybackInfoParseDiagnosticsLogsTypeMismatch(t *testing.T) {
+// TestEmbyPlaybackInfoTypeMismatchDoesNotBlockPlayback 固定「宽容解析」契约。
+//
+// 依据：Emby 协议事实标准（Jellyfin）在 API 层全局开启
+// NumberHandling = AllowReadingFromString，并把任意类型按字符串读取，
+// 因此真实客户端会把 MinSegments、MaxAudioChannels 等写成字符串。这些字段
+// 只参与能力协商，不构成播放准入门槛。
+//
+// 历史行为是对类型不匹配返回 400，导致 CapyPlayer、Hills 完全无法播放。
+func TestEmbyPlaybackInfoTypeMismatchDoesNotBlockPlayback(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
@@ -122,72 +129,114 @@ func TestEmbyPlaybackInfoParseDiagnosticsLogsTypeMismatch(t *testing.T) {
 		t.Fatalf("create media: %v", err)
 	}
 
-	core, logs := observer.New(zapcore.WarnLevel)
-	const secret = "test-secret"
 	router := gin.New()
-	registerEmbyRoutes(router, secret, &service.Container{
+	registerEmbyRoutes(router, "test-secret", &service.Container{
+		Repo: repos,
+		Log:  zap.NewNop(),
+		Emby: service.NewEmbyService(&config.Config{}, zap.NewNop(), repos),
+	})
+	token := signedTestToken(t, "test-secret")
+
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{
+			name: "数字写成字符串",
+			body: `{"UserId":"user-1","MaxAudioChannels":"2","DeviceProfile":{"Name":"CapyPlayer","TranscodingProfiles":[{"Container":"ts","MinSegments":"1","MaxAudioChannels":"2"}]}}`,
+		},
+		{
+			name: "StartTimeTicks 写成字符串",
+			body: `{"UserId":"user-1","StartTimeTicks":"0","MaxStreamingBitrate":"42000000"}`,
+		},
+		{
+			name: "DeviceProfile 为数组",
+			body: `{"UserId":"user-1","DeviceProfile":[{"Name":"Hills"}]}`,
+		},
+		{
+			name: "布尔写成字符串",
+			body: `{"UserId":"user-1","IsPlayback":"true","EnableDirectPlay":"true"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/emby/Items/media-1/PlaybackInfo?IsPlayback=true", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Emby-Token", token)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d body=%s, want 200 (类型不匹配不得阻断播放)", w.Code, w.Body.String())
+			}
+			var payload struct {
+				MediaSources []map[string]any `json:"MediaSources"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if len(payload.MediaSources) == 0 {
+				t.Fatal("MediaSources is empty, want at least one playable source")
+			}
+		})
+	}
+}
+
+// TestEmbyPlaybackInfoNonJSONBodyDegradesGracefully 固定「结构错误不阻断」契约。
+func TestEmbyPlaybackInfoNonJSONBodyDegradesGracefully(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(model.AllModels()...); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repos := repository.New(db)
+	if err := repos.User.Create(t.Context(), &model.User{
+		Base: model.Base{ID: "user-1"}, Username: "tester", PasswordHash: "x", Role: "admin", Tier: "plus", IsActive: true,
+	}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	lib := model.Library{Name: "Movies", Path: t.TempDir(), Type: "movie", Enabled: true}
+	if err := repos.Library.Create(t.Context(), &lib); err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	if err := db.Create(&model.Media{
+		Base: model.Base{ID: "media-1"}, LibraryID: lib.ID, Title: "Degrade", Path: filepath.Join(lib.Path, "movie.mkv"), Container: "mkv",
+	}).Error; err != nil {
+		t.Fatalf("create media: %v", err)
+	}
+
+	core, logs := observer.New(zapcore.WarnLevel)
+	router := gin.New()
+	registerEmbyRoutes(router, "test-secret", &service.Container{
 		Repo: repos,
 		Log:  zap.New(core),
 		Emby: service.NewEmbyService(&config.Config{}, zap.NewNop(), repos),
 	})
+	token := signedTestToken(t, "test-secret")
 
-	validBody := `{"UserId":"user-1","MaxAudioChannels":2,"DeviceProfile":{"Name":"SenPlayer","TranscodingProfiles":[{"Container":"ts","MaxAudioChannels":"2"}],"ContainerProfiles":[{"Conditions":[{"Condition":"EqualsAny","Property":"VideoRange","Value":"SDR","IsRequired":true}]}]}}`
-	req := httptest.NewRequest(http.MethodPost, "/emby/Items/media-1/PlaybackInfo?IsPlayback=true", strings.NewReader(validBody))
+	req := httptest.NewRequest(http.MethodPost, "/emby/Items/media-1/PlaybackInfo?IsPlayback=true", strings.NewReader("not-json"))
 	req.Header.Set("Content-Type", "application/json")
-	token := signedTestToken(t, secret)
 	req.Header.Set("X-Emby-Token", token)
-	req.Header.Set("User-Agent", "SenPlayer/6.2.1")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("valid SenPlayer profile status = %d body=%s", w.Code, w.Body.String())
+		t.Fatalf("status = %d body=%s, want 200 (非 JSON body 不得阻断播放)", w.Code, w.Body.String())
 	}
-	if entries := logs.TakeAll(); len(entries) != 0 {
-		t.Fatalf("valid SenPlayer profile logs = %#v", entries)
+	// 诊断日志仍需记录该结构错误，便于排查客户端问题。
+	entries := logs.FilterMessage("emby PlaybackInfo request parse failed").All()
+	if len(entries) == 0 {
+		t.Fatal("structural parse failure should still be logged for diagnostics")
 	}
-
-	body := `{"UserId":"user-1","MaxAudioChannels":"2","DeviceProfile":{"Name":"SenPlayer","ContainerProfiles":[{"Conditions":[{"Condition":"EqualsAny","Property":"VideoRange","Value":"SDR","IsRequired":true}]}]}}`
-	req = httptest.NewRequest(http.MethodPost, "/emby/Items/media-1/PlaybackInfo?IsPlayback=true", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Emby-Token", token)
-	req.Header.Set("User-Agent", "SenPlayer/6.2.1")
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
-	}
-	entries := logs.TakeAll()
-	if len(entries) != 1 {
-		t.Fatalf("log entries = %#v", entries)
-	}
-	fields := entries[0].ContextMap()
-	if fields["event"] != "emby_playback_info_parse_failed" {
-		t.Fatalf("event = %#v", fields["event"])
-	}
-	if fields["error_type"] != "*json.UnmarshalTypeError" {
-		t.Fatalf("error_type = %#v", fields["error_type"])
-	}
-	if fields["json_field"] != "MaxAudioChannels" {
-		t.Fatalf("json_field = %#v", fields["json_field"])
-	}
-	if fields["expected_type"] != "int" || fields["actual_json_type"] != "string" {
-		t.Fatalf("type fields = expected=%#v actual=%#v", fields["expected_type"], fields["actual_json_type"])
-	}
-	profileShape, _ := fields["device_profile_shape"].(string)
-	if !strings.Contains(profileShape, "container_profiles=1") || !strings.Contains(profileShape, "container_conditions=object") {
-		t.Fatalf("device_profile_shape = %#v", fields["device_profile_shape"])
-	}
-	keys, ok := fields["top_level_keys"].([]any)
-	if !ok || !slices.Equal(keys, []any{"DeviceProfile", "MaxAudioChannels", "UserId"}) {
-		t.Fatalf("top_level_keys = %#v", fields["top_level_keys"])
-	}
+	// 诊断日志绝不能写入令牌。（响应体按 Emby 契约会在 DirectStreamUrl 中
+	// 附带 api_key，那是客户端的播放凭据，不属于日志泄漏。）
 	logJSON, err := json.Marshal(entries)
 	if err != nil {
 		t.Fatalf("encode logs: %v", err)
 	}
-	if strings.Contains(w.Body.String(), token) || strings.Contains(string(logJSON), token) {
+	if strings.Contains(string(logJSON), token) {
 		t.Fatal("diagnostics must not expose token")
 	}
 }

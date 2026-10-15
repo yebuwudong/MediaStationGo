@@ -93,9 +93,48 @@ func TestImageVariantA10FormatsCropAndValidation(t *testing.T) {
 	if r != 0 || g != 65535 {
 		t.Fatal("crop is not centered")
 	}
-	for _, query := range []string{"?width=0", "?width=4097", "?quality=101", "?fillWidth=20", "?format=avif", "?width=10&Width=20", "?width=10&width=10", "?quality=abc"} {
-		if options := imageVariantFromRequest(httptest.NewRequest("GET", "/"+query, nil)); options.err == nil {
-			t.Errorf("accepted %s", query)
+	// 归一化契约：渲染偏好类参数不再整体拒绝，而是夹取或忽略。
+	// 依据：这些参数只影响输出图的尺寸/格式，不构成访问准入条件。真实
+	// 客户端会带 width=0 表示「不指定」，也会同时发送 maxWidth 与 MaxWidth。
+	for _, tt := range []struct {
+		query          string
+		wantMaxWidth   int
+		wantQuality    int
+		wantHasQuality bool
+		wantFillWidth  int
+		wantFormat     string
+	}{
+		// 越界值夹取到上限。
+		{"?width=4097", 4096, 0, false, 0, ""},
+		{"?quality=101", 0, 100, true, 0, ""},
+		// 0 视为未指定。
+		{"?width=0", 0, 0, false, 0, ""},
+		// 只给一个 fill 参数时回退为不裁切。
+		{"?fillWidth=20", 0, 0, false, 0, ""},
+		// 不支持的格式按未指定处理，沿用默认输出格式。
+		{"?format=avif", 0, 0, false, 0, ""},
+		// 重复参数取首个有效值（含大小写变体）。
+		{"?width=10&Width=20", 10, 0, false, 0, ""},
+		{"?width=10&width=10", 10, 0, false, 0, ""},
+		// 非数字视为未指定。
+		{"?quality=abc", 0, 0, false, 0, ""},
+	} {
+		options := imageVariantFromRequest(httptest.NewRequest("GET", "/"+tt.query, nil))
+		if options.err != nil {
+			t.Errorf("%s: unexpected error %v", tt.query, options.err)
+			continue
+		}
+		if options.maxWidth != tt.wantMaxWidth {
+			t.Errorf("%s: maxWidth=%d, want %d", tt.query, options.maxWidth, tt.wantMaxWidth)
+		}
+		if options.quality != tt.wantQuality || options.hasQuality != tt.wantHasQuality {
+			t.Errorf("%s: quality=%d hasQuality=%v, want %d/%v", tt.query, options.quality, options.hasQuality, tt.wantQuality, tt.wantHasQuality)
+		}
+		if options.fillWidth != tt.wantFillWidth {
+			t.Errorf("%s: fillWidth=%d, want %d", tt.query, options.fillWidth, tt.wantFillWidth)
+		}
+		if options.format != tt.wantFormat {
+			t.Errorf("%s: format=%q, want %q", tt.query, options.format, tt.wantFormat)
 		}
 	}
 }
@@ -146,9 +185,11 @@ func TestImageVariantA10HTTPWebPCacheAndInvalidParameters(t *testing.T) {
 	if next := serve("/?fillWidth=24&fillHeight=24&format=webp", etag, http.MethodGet); next.Code != 200 || next.Header().Get("ETag") == etag {
 		t.Fatal("source update did not invalidate variant")
 	}
+	// 无效/越界的变体参数不再返回 400：渲染偏好类参数应被夹取或忽略，
+	// 客户端仍能拿到图片。历史行为（400）会让部分客户端的图片请求整体失败。
 	for _, target := range []string{"/?format=invalid", "/?fillWidth=20", "/?width=999999"} {
-		if result := serve(target, "", http.MethodGet); result.Code != 400 || result.Header().Get("Cache-Control") != "no-store" {
-			t.Fatalf("invalid status=%d", result.Code)
+		if result := serve(target, "", http.MethodGet); result.Code != 200 {
+			t.Fatalf("%s: status=%d, want 200", target, result.Code)
 		}
 	}
 }
